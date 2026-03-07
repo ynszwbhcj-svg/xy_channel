@@ -1,5 +1,5 @@
 {
-  "name": "@ynhcj/xiaoyiclaw",
+  "name": "@ynhcj/xiaoyi-channel",
   "version": "1.0.0",
   "description": "OpenClaw Xiaoyi Channel plugin - Xiaoyi A2A protocol integration",
   "type": "module",
@@ -33,11 +33,11 @@
       "./dist/index.js"
     ],
     "channel": {
-      "id": "xiaoyiclaw",
+      "id": "xiaoyi-channel",
       "label": "Xiaoyi Channel",
       "selectionLabel": "Xiaoyi Channel (Xiaoyi A2A)",
-      "docsPath": "/channels/xiaoyiclaw",
-      "docsLabel": "xiaoyiclaw",
+      "docsPath": "/channels/xiaoyi-channel",
+      "docsLabel": "xiaoyi-channel",
       "blurb": "Xiaoyi A2A protocol integration.",
       "aliases": [
         "xiaoyi"
@@ -45,7 +45,7 @@
       "order": 80
     },
     "install": {
-      "npmSpec": "xiaoyiclaw",
+      "npmSpec": "xiaoyi-channel",
       "localPath": ".",
       "defaultChoice": "npm"
     }

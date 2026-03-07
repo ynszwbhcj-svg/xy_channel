@@ -16,13 +16,13 @@ import { logger } from "./utils/logger.js";
  * Implements Xiaoyi A2A protocol with dual WebSocket connections.
  */
 export const xyPlugin: ChannelPlugin = {
-  id: "xiaoyiclaw",
+  id: "xiaoyi-channel",
 
   meta: {
-    id: "xiaoyiclaw",
+    id: "xiaoyi-channel",
     label: "Xiaoyi Channel",
     selectionLabel: "Xiaoyi Channel (小艺)",
-    docsPath: "/channels/xiaoyiclaw",
+    docsPath: "/channels/xiaoyi-channel",
     blurb: "小艺 A2A 协议支持，双 WebSocket 长连接",
     order: 85,
   },
@@ -74,7 +74,7 @@ export const xyPlugin: ChannelPlugin = {
   },
 
   reload: {
-    configPrefixes: ["channels.xiaoyiclaw"],
+    configPrefixes: ["channels.xiaoyi-channel"],
   },
 
   // Gateway adapter for receiving messages
