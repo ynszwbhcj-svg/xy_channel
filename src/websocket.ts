@@ -331,21 +331,28 @@ export class XYWebSocketManager extends EventEmitter {
       const messageStr = data.toString();
       const parsed = JSON.parse(messageStr);
 
+      // Log raw message
+      console.log(`[XY-${serverId}] Received message:`, JSON.stringify(parsed, null, 2));
+
       // Check if message is in direct A2A JSON-RPC format (server push)
       if (parsed.jsonrpc === "2.0") {
         // Direct A2A format
         const a2aRequest: A2AJsonRpcRequest = parsed;
+        console.log(`[XY-${serverId}] Message type: Direct A2A JSON-RPC, method: ${a2aRequest.method}`);
 
         // Extract sessionId from params
         const sessionId = a2aRequest.params?.sessionId;
         if (!sessionId) {
-          this.error(`Message missing sessionId from ${serverId}`);
+          console.error(`[XY-${serverId}] Message missing sessionId`);
           return;
         }
+
+        console.log(`[XY-${serverId}] Session ID: ${sessionId}`);
 
         // Bind session to this server if not already bound
         if (!sessionManager.isBound(sessionId)) {
           sessionManager.bind(sessionId, serverId);
+          console.log(`[XY-${serverId}] Bound session ${sessionId} to ${serverId}`);
         }
 
         // Emit message event
@@ -355,25 +362,31 @@ export class XYWebSocketManager extends EventEmitter {
 
       // Wrapped format (InboundWebSocketMessage)
       const inboundMsg: InboundWebSocketMessage = parsed;
+      console.log(`[XY-${serverId}] Message type: Wrapped, msgType: ${inboundMsg.msgType}`);
 
       // Skip heartbeat responses
       if (inboundMsg.msgType === "heartbeat" || inboundMsg.msgType === "data") {
+        console.log(`[XY-${serverId}] Skipping ${inboundMsg.msgType} message`);
         return;
       }
 
       // Parse msgDetail as A2AJsonRpcRequest
       const a2aRequest: A2AJsonRpcRequest = JSON.parse(inboundMsg.msgDetail);
+      console.log(`[XY-${serverId}] Parsed A2A request, method: ${a2aRequest.method}`);
 
       // Bind session to this server if not already bound
       const sessionId = inboundMsg.sessionId;
       if (!sessionManager.isBound(sessionId)) {
         sessionManager.bind(sessionId, serverId);
+        console.log(`[XY-${serverId}] Bound session ${sessionId} to ${serverId}`);
       }
+
+      console.log(`[XY-${serverId}] Session ID: ${sessionId}`);
 
       // Emit message event
       this.emit("message", a2aRequest, sessionId, serverId);
     } catch (error) {
-      this.error(`Failed to parse message from ${serverId}:`, error);
+      console.error(`[XY-${serverId}] Failed to parse message:`, error);
     }
   }
 

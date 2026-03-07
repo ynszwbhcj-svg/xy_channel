@@ -3,7 +3,6 @@
 import type { RuntimeEnv } from "openclaw/plugin-sdk";
 import { resolveXYConfig } from "./config.js";
 import { getXYWebSocketManager } from "./client.js";
-import { getXYRuntime } from "./runtime.js";
 import { handleXYMessage } from "./bot.js";
 
 export type MonitorXYOpts = {
@@ -42,10 +41,6 @@ export async function monitorXYProvider(opts: MonitorXYOpts = {}): Promise<void>
   if (!cfg) {
     throw new Error("Config is required for XY monitor");
   }
-
-  // Validate runtime early - fail fast if plugin not registered
-  // Following feishu/monitor.account.ts pattern
-  const core = getXYRuntime();
 
   const runtime = opts.runtime;
   const log = runtime?.log ?? console.log;
