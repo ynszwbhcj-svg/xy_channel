@@ -1,7 +1,7 @@
 {
-  "name": "xy",
+  "name": "xiaoyi-channel",
   "version": "1.0.0",
-  "description": "OpenClaw XY channel plugin - Xiaoyi A2A protocol integration",
+  "description": "OpenClaw Xiaoyi Channel plugin - Xiaoyi A2A protocol integration",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -33,11 +33,11 @@
       "./dist/index.js"
     ],
     "channel": {
-      "id": "xy",
-      "label": "XY",
-      "selectionLabel": "XY (Xiaoyi A2A)",
-      "docsPath": "/channels/xy",
-      "docsLabel": "xy",
+      "id": "xiaoyi-channel",
+      "label": "Xiaoyi Channel",
+      "selectionLabel": "Xiaoyi Channel (Xiaoyi A2A)",
+      "docsPath": "/channels/xiaoyi-channel",
+      "docsLabel": "xiaoyi-channel",
       "blurb": "Xiaoyi A2A protocol integration.",
       "aliases": [
         "xiaoyi"
@@ -45,7 +45,7 @@
       "order": 80
     },
     "install": {
-      "npmSpec": "xy",
+      "npmSpec": "xiaoyi-channel",
       "localPath": ".",
       "defaultChoice": "npm"
     }

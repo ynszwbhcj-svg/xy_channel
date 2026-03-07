@@ -1,6 +1,6 @@
 {
-  "id": "xy",
-  "channels": ["xy"],
+  "id": "xiaoyi-channel",
+  "channels": ["xiaoyi-channel"],
   "skills": [],
   "configSchema": {
     "type": "object",

@@ -3,14 +3,14 @@ import type { ClawdbotConfig } from "openclaw/plugin-sdk";
 import type { XYChannelConfig } from "./types.js";
 
 /**
- * Resolve and validate XY channel configuration from ClawdbotConfig.
+ * Resolve and validate Xiaoyi channel configuration from ClawdbotConfig.
  * Simplified version - only supports single account (no multi-account management).
  */
 export function resolveXYConfig(cfg: ClawdbotConfig): XYChannelConfig {
-  const xyConfig = cfg.channels?.xy;
+  const xyConfig = cfg.channels?.["xiaoyi-channel"];
 
   if (!xyConfig) {
-    throw new Error("XY channel configuration not found in openclaw.json");
+    throw new Error("Xiaoyi channel configuration not found in openclaw.json");
   }
 
   // Validate required fields

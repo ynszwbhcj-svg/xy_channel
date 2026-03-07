@@ -5,14 +5,14 @@ import { xyPlugin } from "./src/channel.js";
 import { setXYRuntime } from "./src/runtime.js";
 
 /**
- * XY Channel Plugin Entry Point.
+ * Xiaoyi Channel Plugin Entry Point.
  * Exports the plugin for OpenClaw to load.
  * Located at root level following feishu pattern for proper plugin registration.
  */
 const plugin = {
-  id: "xy",
-  name: "XY",
-  description: "XY channel plugin - Xiaoyi A2A protocol integration",
+  id: "xiaoyi-channel",
+  name: "Xiaoyi Channel",
+  description: "Xiaoyi channel plugin - Xiaoyi A2A protocol integration",
   configSchema: emptyPluginConfigSchema(),
   register(api: OpenClawPluginApi) {
     setXYRuntime(api.runtime);

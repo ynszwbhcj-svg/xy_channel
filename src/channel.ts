@@ -12,24 +12,24 @@ import { handleXYMessage } from "./bot.js";
 import { logger } from "./utils/logger.js";
 
 /**
- * XY Channel Plugin for OpenClaw.
+ * Xiaoyi Channel Plugin for OpenClaw.
  * Implements Xiaoyi A2A protocol with dual WebSocket connections.
  */
 export const xyPlugin: ChannelPlugin = {
-  id: "xy",
+  id: "xiaoyi-channel",
 
   meta: {
-    id: "xy",
-    label: "XY",
-    selectionLabel: "XY (小艺)",
-    docsPath: "/channels/xy",
+    id: "xiaoyi-channel",
+    label: "Xiaoyi Channel",
+    selectionLabel: "Xiaoyi Channel (小艺)",
+    docsPath: "/channels/xiaoyi-channel",
     blurb: "小艺 A2A 协议支持，双 WebSocket 长连接",
     order: 85,
   },
 
   agentPrompt: {
       messageToolHints: () => [
-        "- xy targeting: omit `target` to reply to the current conversation (auto-inferred). Explicit targets: `default`",
+        "- xiaoyi targeting: omit `target` to reply to the current conversation (auto-inferred). Explicit targets: `default`",
       ],
     },
 
@@ -74,7 +74,7 @@ export const xyPlugin: ChannelPlugin = {
   },
 
   reload: {
-    configPrefixes: ["channels.xy"],
+    configPrefixes: ["channels.xiaoyi-channel"],
   },
 
   // Gateway adapter for receiving messages
@@ -88,7 +88,7 @@ export const xyPlugin: ChannelPlugin = {
         wsUrl2: account.wsUrl2,
       });
       context.log?.info(
-        `[${context.accountId}] starting xy (wsUrl1: ${account.wsUrl1}, wsUrl2: ${account.wsUrl2})`,
+        `[${context.accountId}] starting xiaoyi channel (wsUrl1: ${account.wsUrl1}, wsUrl2: ${account.wsUrl2})`,
       );
       return monitorXYProvider({
         config: context.cfg,

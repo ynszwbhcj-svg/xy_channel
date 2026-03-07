@@ -4,7 +4,7 @@ import type { PluginRuntime } from "openclaw/plugin-sdk";
 let runtime: PluginRuntime | null = null;
 
 /**
- * Set the XY channel runtime instance.
+ * Set the Xiaoyi channel runtime instance.
  * This should be called once during plugin initialization.
  */
 export function setXYRuntime(next: PluginRuntime): void {
@@ -12,12 +12,12 @@ export function setXYRuntime(next: PluginRuntime): void {
 }
 
 /**
- * Get the current XY channel runtime instance.
+ * Get the current Xiaoyi channel runtime instance.
  * Throws an error if the runtime has not been initialized.
  */
 export function getXYRuntime(): PluginRuntime {
   if (!runtime) {
-    throw new Error("XY runtime not initialized. Call setXYRuntime() first.");
+    throw new Error("Xiaoyi runtime not initialized. Call setXYRuntime() first.");
   }
   return runtime;
 }
