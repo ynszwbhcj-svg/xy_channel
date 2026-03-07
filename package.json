@@ -1,5 +1,5 @@
 {
-  "name": "xiaoyi-channel",
+  "name": "@ynhcj/xiaoyi-channel",
   "version": "1.0.0",
   "description": "OpenClaw Xiaoyi Channel plugin - Xiaoyi A2A protocol integration",
   "type": "module",
