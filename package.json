@@ -64,7 +64,6 @@
     "node-fetch": "^2.7.0"
   },
   "devDependencies": {
-    "openclaw": ">=2026.3.1",
     "@types/ws": "^8.5.8",
     "@types/uuid": "^9.0.5",
     "@types/node": "^20.8.0",
