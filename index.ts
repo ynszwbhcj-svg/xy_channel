@@ -10,7 +10,7 @@ import { setXYRuntime } from "./src/runtime.js";
  * Located at root level following feishu pattern for proper plugin registration.
  */
 const plugin = {
-  id: "xiaoyi-channel",
+  id: "xiaoyiclaw",
   name: "Xiaoyi Channel",
   description: "Xiaoyi channel plugin - Xiaoyi A2A protocol integration",
   configSchema: emptyPluginConfigSchema(),

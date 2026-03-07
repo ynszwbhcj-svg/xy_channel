@@ -7,7 +7,7 @@ import type { XYChannelConfig } from "./types.js";
  * Simplified version - only supports single account (no multi-account management).
  */
 export function resolveXYConfig(cfg: ClawdbotConfig): XYChannelConfig {
-  const xyConfig = cfg.channels?.["xiaoyi-channel"];
+  const xyConfig = cfg.channels?.["xiaoyiclaw"];
 
   if (!xyConfig) {
     throw new Error("Xiaoyi channel configuration not found in openclaw.json");
