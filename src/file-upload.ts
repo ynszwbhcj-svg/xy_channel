@@ -26,7 +26,7 @@ export class XYFileUploadService {
    * Upload a file using the three-phase process.
    * Returns the objectId (as fileId) for use in A2A messages.
    */
-  async uploadFile(filePath: string, objectType: string = "COMMON_PUBLIC"): Promise<string> {
+  async uploadFile(filePath: string, objectType: string = "TEMPORARY_MATERIAL_DOC"): Promise<string> {
     console.log(`[XY File Upload] Starting file upload: ${filePath}`);
 
     try {
@@ -130,7 +130,7 @@ export class XYFileUploadService {
    */
   async uploadFiles(
     filePaths: string[],
-    objectType: string = "COMMON_PUBLIC"
+    objectType: string = "TEMPORARY_MATERIAL_DOC"
   ): Promise<Array<{ filePath: string; fileId: string; fileName: string }>> {
     const results: Array<{ filePath: string; fileId: string; fileName: string }> = [];
 
