@@ -1,0 +1,10 @@
+{
+  "id": "xy",
+  "channels": ["xy"],
+  "skills": [],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

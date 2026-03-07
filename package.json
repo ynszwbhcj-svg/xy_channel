@@ -1,0 +1,68 @@
+{
+  "name": "xy",
+  "version": "1.0.0",
+  "description": "OpenClaw XY channel plugin - Xiaoyi A2A protocol integration",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist",
+    "openclaw.plugin.json"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "clean": "rm -rf dist",
+    "prepublishOnly": "npm run clean && npm run build"
+  },
+  "keywords": [
+    "openclaw",
+    "channel",
+    "xiaoyi",
+    "a2a"
+  ],
+  "author": "",
+  "license": "MIT",
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "channel": {
+      "id": "xy",
+      "label": "XY",
+      "selectionLabel": "XY (Xiaoyi A2A)",
+      "docsPath": "/channels/xy",
+      "docsLabel": "xy",
+      "blurb": "Xiaoyi A2A protocol integration.",
+      "aliases": [
+        "xiaoyi"
+      ],
+      "order": 80
+    },
+    "install": {
+      "npmSpec": "xy",
+      "localPath": ".",
+      "defaultChoice": "npm"
+    }
+  },
+  "peerDependencies": {
+    "openclaw": "*"
+  },
+  "dependencies": {
+    "ws": "^8.14.2",
+    "uuid": "^9.0.0",
+    "node-fetch": "^2.7.0"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.5.8",
+    "@types/uuid": "^9.0.5",
+    "@types/node": "^20.8.0",
+    "@types/node-fetch": "^2.6.2",
+    "typescript": "^5.9.2"
+  }
+}
