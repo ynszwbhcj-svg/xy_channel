@@ -170,7 +170,7 @@ export async function sendCommand(params: SendCommandParams): Promise<void> {
   const log = runtime?.log ?? console.log;
   const error = runtime?.error ?? console.error;
 
-  // Build artifact update with command
+  // Build artifact update with command as data
   const artifact: A2ATaskArtifactUpdateEvent = {
     taskId,
     kind: "artifact-update",
@@ -181,8 +181,8 @@ export async function sendCommand(params: SendCommandParams): Promise<void> {
       artifactId: uuidv4(),
       parts: [
         {
-          kind: "command",
-          command,
+          kind: "data",
+          data: command,
         },
       ],
     },

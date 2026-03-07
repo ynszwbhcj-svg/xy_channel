@@ -12,6 +12,7 @@ import type {
   InboundWebSocketMessage,
   OutboundWebSocketMessage,
   A2AJsonRpcRequest,
+  A2ADataEvent,
 } from "./types.js";
 
 /**
@@ -20,6 +21,7 @@ import type {
  *
  * Events:
  * - 'message': (message: A2AJsonRpcRequest, sessionId: string, serverId: ServerIdentifier) => void
+ * - 'data-event': (event: A2ADataEvent) => void
  * - 'connected': (serverId: ServerIdentifier) => void
  * - 'disconnected': (serverId: ServerIdentifier) => void
  * - 'error': (error: Error, serverId: ServerIdentifier) => void
@@ -355,7 +357,36 @@ export class XYWebSocketManager extends EventEmitter {
           console.log(`[XY-${serverId}] Bound session ${sessionId} to ${serverId}`);
         }
 
-        // Emit message event
+        // Check if message contains only data parts (tool results)
+        const dataParts = a2aRequest.params?.message?.parts?.filter((p): p is { kind: "data"; data: any } => p.kind === "data");
+        const hasOnlyDataParts = dataParts && dataParts.length > 0 &&
+                                 dataParts.length === a2aRequest.params?.message?.parts?.length;
+
+        if (hasOnlyDataParts) {
+          // This is a data-only message (e.g., intent execution result)
+          // Only emit data-event, don't send to openclaw
+          console.log(`[XY-${serverId}] Message contains only data parts, processing as tool result`);
+          for (const dataPart of dataParts) {
+            const dataArray = dataPart.data;
+            if (Array.isArray(dataArray)) {
+              for (const item of dataArray) {
+                // Check if it's an UploadExeResult (intent execution result)
+                if (item.header?.name === "UploadExeResult" && item.payload?.intentName) {
+                  const dataEvent = {
+                    intentName: item.payload.intentName,
+                    outputs: item.payload.outputs || {},
+                    status: "success" as const,
+                  };
+                  console.log(`[XY-${serverId}] Emitting data-event:`, dataEvent);
+                  this.emit("data-event", dataEvent);
+                }
+              }
+            }
+          }
+          return; // Don't emit message event
+        }
+
+        // Emit message event for non-data-only messages
         this.emit("message", a2aRequest, sessionId, serverId);
         return;
       }
@@ -365,8 +396,40 @@ export class XYWebSocketManager extends EventEmitter {
       console.log(`[XY-${serverId}] Message type: Wrapped, msgType: ${inboundMsg.msgType}`);
 
       // Skip heartbeat responses
-      if (inboundMsg.msgType === "heartbeat" || inboundMsg.msgType === "data") {
+      if (inboundMsg.msgType === "heartbeat") {
         console.log(`[XY-${serverId}] Skipping ${inboundMsg.msgType} message`);
+        return;
+      }
+
+      // Handle data messages (e.g., intent execution results)
+      if (inboundMsg.msgType === "data") {
+        console.log(`[XY-${serverId}] Processing data message`);
+        try {
+          const a2aRequest: A2AJsonRpcRequest = JSON.parse(inboundMsg.msgDetail);
+          const dataParts = a2aRequest.params?.message?.parts?.filter((p): p is { kind: "data"; data: any } => p.kind === "data");
+
+          if (dataParts && dataParts.length > 0) {
+            for (const dataPart of dataParts) {
+              const dataArray = dataPart.data;
+              if (Array.isArray(dataArray)) {
+                for (const item of dataArray) {
+                  // Check if it's an UploadExeResult (intent execution result)
+                  if (item.header?.name === "UploadExeResult" && item.payload?.intentName) {
+                    const dataEvent = {
+                      intentName: item.payload.intentName,
+                      outputs: item.payload.outputs || {},
+                      status: "success" as const,
+                    };
+                    console.log(`[XY-${serverId}] Emitting data-event:`, dataEvent);
+                    this.emit("data-event", dataEvent);
+                  }
+                }
+              }
+            }
+          }
+        } catch (error) {
+          console.error(`[XY-${serverId}] Failed to process data message:`, error);
+        }
         return;
       }
 
