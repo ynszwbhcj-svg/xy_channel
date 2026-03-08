@@ -93,6 +93,11 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
     log(`xy: resolved route accountId=${route.accountId}, sessionKey=${route.sessionKey}`);
 
     // Register session context for tools
+    log(`[BOT] 📝 About to register session for tools...`);
+    log(`[BOT]   - sessionKey: ${route.sessionKey}`);
+    log(`[BOT]   - sessionId: ${parsed.sessionId}`);
+    log(`[BOT]   - taskId: ${parsed.taskId}`);
+
     registerSession(route.sessionKey, {
       config,
       sessionId: parsed.sessionId,
@@ -100,6 +105,8 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
       messageId: parsed.messageId,
       agentId: route.accountId,
     });
+
+    log(`[BOT] ✅ Session registered for tools`);
 
     // Extract text and files from parts
     const text = extractTextFromParts(parsed.parts);
@@ -186,12 +193,19 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
     log(`xy: dispatching to agent (session=${parsed.sessionId})`);
 
     // Dispatch to OpenClaw core using correct API (following feishu pattern)
+    log(`[BOT] 🚀 Starting dispatcher with session: ${route.sessionKey}`);
+
     await core.channel.reply.withReplyDispatcher({
       dispatcher,
       onSettled: () => {
+        log(`[BOT] 🏁 onSettled called for session: ${route.sessionKey}`);
+        log(`[BOT]   - About to unregister session...`);
+
         markDispatchIdle();
         // Unregister session context when done
         unregisterSession(route.sessionKey);
+
+        log(`[BOT] ✅ Session unregistered in onSettled`);
       },
       run: () =>
         core.channel.reply.dispatchReplyFromConfig({
@@ -202,10 +216,13 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
         }),
     });
 
+    log(`[BOT] ✅ Dispatcher completed for session: ${parsed.sessionId}`);
     log(`xy: dispatch complete (session=${parsed.sessionId})`);
   } catch (err) {
     error("Failed to handle XY message:", err);
     runtime.error?.(`xy: Failed to handle message: ${String(err)}`);
+
+    log(`[BOT] ❌ Error occurred, attempting cleanup...`);
 
     // Try to unregister session on error (if route was established)
     try {
@@ -213,6 +230,8 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
       const params = message.params as any;
       const sessionId = params?.sessionId;
       if (sessionId) {
+        log(`[BOT] 🧹 Cleaning up session after error: ${sessionId}`);
+
         const route = core.channel.routing.resolveAgentRoute({
           cfg,
           channel: "xy",
@@ -222,9 +241,13 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
             id: sessionId,  // ✅ Use sessionId for cleanup consistency
           },
         });
+
+        log(`[BOT]   - Unregistering session: ${route.sessionKey}`);
         unregisterSession(route.sessionKey);
+        log(`[BOT] ✅ Session unregistered after error`);
       }
-    } catch {
+    } catch (cleanupErr) {
+      log(`[BOT] ⚠️  Cleanup failed:`, cleanupErr);
       // Ignore cleanup errors
     }
 

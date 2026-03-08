@@ -1,6 +1,7 @@
 // Session manager for XY tool context
 // Stores active session contexts that tools can access
 import type { XYChannelConfig } from "../types.js";
+import { logger } from "../utils/logger.js";
 
 export interface SessionContext {
   config: XYChannelConfig;
@@ -18,7 +19,17 @@ const activeSessions = new Map<string, SessionContext>();
  * Should be called when starting to process a message.
  */
 export function registerSession(sessionKey: string, context: SessionContext): void {
+  logger.log(`[SESSION_MANAGER] 📝 Registering session: ${sessionKey}`);
+  logger.log(`[SESSION_MANAGER]   - sessionId: ${context.sessionId}`);
+  logger.log(`[SESSION_MANAGER]   - taskId: ${context.taskId}`);
+  logger.log(`[SESSION_MANAGER]   - messageId: ${context.messageId}`);
+  logger.log(`[SESSION_MANAGER]   - agentId: ${context.agentId}`);
+  logger.log(`[SESSION_MANAGER]   - Active sessions before: ${activeSessions.size}`);
+
   activeSessions.set(sessionKey, context);
+
+  logger.log(`[SESSION_MANAGER]   - Active sessions after: ${activeSessions.size}`);
+  logger.log(`[SESSION_MANAGER]   - All session keys: [${Array.from(activeSessions.keys()).join(", ")}]`);
 }
 
 /**
@@ -26,7 +37,15 @@ export function registerSession(sessionKey: string, context: SessionContext): vo
  * Should be called when message processing is complete.
  */
 export function unregisterSession(sessionKey: string): void {
-  activeSessions.delete(sessionKey);
+  logger.log(`[SESSION_MANAGER] 🗑️  Unregistering session: ${sessionKey}`);
+  logger.log(`[SESSION_MANAGER]   - Active sessions before: ${activeSessions.size}`);
+  logger.log(`[SESSION_MANAGER]   - Session existed: ${activeSessions.has(sessionKey)}`);
+
+  const existed = activeSessions.delete(sessionKey);
+
+  logger.log(`[SESSION_MANAGER]   - Deleted: ${existed}`);
+  logger.log(`[SESSION_MANAGER]   - Active sessions after: ${activeSessions.size}`);
+  logger.log(`[SESSION_MANAGER]   - Remaining session keys: [${Array.from(activeSessions.keys()).join(", ")}]`);
 }
 
 /**
@@ -34,7 +53,17 @@ export function unregisterSession(sessionKey: string): void {
  * Returns null if session not found.
  */
 export function getSessionContext(sessionKey: string): SessionContext | null {
-  return activeSessions.get(sessionKey) ?? null;
+  logger.log(`[SESSION_MANAGER] 🔍 Getting session by key: ${sessionKey}`);
+  logger.log(`[SESSION_MANAGER]   - Active sessions: ${activeSessions.size}`);
+
+  const context = activeSessions.get(sessionKey) ?? null;
+
+  logger.log(`[SESSION_MANAGER]   - Found: ${context !== null}`);
+  if (context) {
+    logger.log(`[SESSION_MANAGER]   - sessionId: ${context.sessionId}`);
+  }
+
+  return context;
 }
 
 /**
@@ -43,8 +72,23 @@ export function getSessionContext(sessionKey: string): SessionContext | null {
  * Returns null if no sessions are active.
  */
 export function getLatestSessionContext(): SessionContext | null {
-  if (activeSessions.size === 0) return null;
+  logger.log(`[SESSION_MANAGER] 🔍 Getting latest session context`);
+  logger.log(`[SESSION_MANAGER]   - Active sessions count: ${activeSessions.size}`);
+  logger.log(`[SESSION_MANAGER]   - Active session keys: [${Array.from(activeSessions.keys()).join(", ")}]`);
+
+  if (activeSessions.size === 0) {
+    logger.error(`[SESSION_MANAGER]   - ❌ No active sessions found!`);
+    return null;
+  }
+
   // Return the last added session
   const sessions = Array.from(activeSessions.values());
-  return sessions[sessions.length - 1];
+  const latestSession = sessions[sessions.length - 1];
+
+  logger.log(`[SESSION_MANAGER]   - ✅ Found latest session:`);
+  logger.log(`[SESSION_MANAGER]     - sessionId: ${latestSession.sessionId}`);
+  logger.log(`[SESSION_MANAGER]     - taskId: ${latestSession.taskId}`);
+  logger.log(`[SESSION_MANAGER]     - messageId: ${latestSession.messageId}`);
+
+  return latestSession;
 }
