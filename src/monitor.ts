@@ -59,30 +59,50 @@ export async function monitorXYProvider(opts: MonitorXYOpts = {}): Promise<void>
   // Track logged servers to avoid duplicate logs
   const loggedServers = new Set<string>();
 
+  // Track active message processing to detect duplicates
+  const activeMessages = new Set<string>();
+
   // Create session queue for ordered message processing
   const enqueue = createSessionQueue();
 
   return new Promise<void>((resolve, reject) => {
     // Event handlers (defined early so they can be referenced in cleanup)
     const messageHandler = (message: any, sessionId: string, serverId: string) => {
+      const messageKey = `${sessionId}::${message.id}`;
+
       log(`[MONITOR-HANDLER] ####### messageHandler triggered: serverId=${serverId}, sessionId=${sessionId}, messageId=${message.id} #######`);
+
+      // Check for duplicate message handling
+      if (activeMessages.has(messageKey)) {
+        error(`[MONITOR-HANDLER] ⚠️ WARNING: Duplicate message detected! messageKey=${messageKey}, this may cause duplicate dispatchers!`);
+      }
+
+      activeMessages.add(messageKey);
+      log(`[MONITOR-HANDLER] 📝 Active messages count: ${activeMessages.size}, messageKey: ${messageKey}`);
 
       const task = async () => {
         try {
+          log(`[MONITOR-HANDLER] 🚀 Starting handleXYMessage for messageKey=${messageKey}`);
           await handleXYMessage({
             cfg,
             runtime,
             message,
             accountId,  // ✅ Pass accountId ("default")
           });
+          log(`[MONITOR-HANDLER] ✅ Completed handleXYMessage for messageKey=${messageKey}`);
         } catch (err) {
           error(`XY gateway: error handling message from ${serverId}: ${String(err)}`);
           throw err;
+        } finally {
+          // Remove from active messages when done
+          activeMessages.delete(messageKey);
+          log(`[MONITOR-HANDLER] 🧹 Cleaned up messageKey=${messageKey}, remaining active: ${activeMessages.size}`);
         }
       };
       void enqueue(sessionId, task).catch((err) => {
         // Error already logged in task, this is for queue failures
         error(`XY gateway: queue processing failed for session ${sessionId}: ${String(err)}`);
+        activeMessages.delete(messageKey);
       });
     };
 
@@ -115,6 +135,8 @@ export async function monitorXYProvider(opts: MonitorXYOpts = {}): Promise<void>
       // wsManager.disconnect();
 
       loggedServers.clear();
+      activeMessages.clear();
+      log(`[MONITOR-HANDLER] 🧹 Cleanup complete, cleared active messages`);
     };
 
     const handleAbort = () => {

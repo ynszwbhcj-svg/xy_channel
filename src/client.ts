@@ -31,15 +31,16 @@ export function getXYWebSocketManager(config: XYChannelConfig): XYWebSocketManag
 
   if (cached && cached.isConfigMatch(config)) {
     const log = runtime?.log ?? console.log;
-    log(`[DEBUG] Reusing cached WebSocket manager: ${cacheKey}`);
+    log(`[WS-MANAGER-CACHE] ✅ Reusing cached WebSocket manager: ${cacheKey}, total managers: ${wsManagerCache.size}`);
     return cached;
   }
 
   // Create new manager
   const log = runtime?.log ?? console.log;
-  log(`Creating new WebSocket manager: ${cacheKey}`);
+  log(`[WS-MANAGER-CACHE] 🆕 Creating new WebSocket manager: ${cacheKey}, total managers before: ${wsManagerCache.size}`);
   cached = new XYWebSocketManager(config, runtime);
   wsManagerCache.set(cacheKey, cached);
+  log(`[WS-MANAGER-CACHE] 📊 Total managers after creation: ${wsManagerCache.size}`);
 
   return cached;
 }

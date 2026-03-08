@@ -179,6 +179,7 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
     });
 
     // Create reply dispatcher (following feishu pattern)
+    log(`[BOT-DISPATCHER] 🎯 Creating reply dispatcher for session=${parsed.sessionId}, taskId=${parsed.taskId}, messageId=${parsed.messageId}`);
     const { dispatcher, replyOptions, markDispatchIdle, startStatusInterval } = createXYReplyDispatcher({
       cfg,
       runtime,
@@ -187,6 +188,7 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
       messageId: parsed.messageId,
       accountId: route.accountId,  // ✅ Use route.accountId
     });
+    log(`[BOT-DISPATCHER] ✅ Reply dispatcher created successfully`);
 
     // Start status update interval (will send updates every 60 seconds)
     // Interval will be automatically stopped when onIdle/onCleanup is triggered
