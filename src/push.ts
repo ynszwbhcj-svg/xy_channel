@@ -60,23 +60,23 @@ export class XYPushService {
     const dynamicPushId = configManager.getPushId(sessionId);
     const pushId = dynamicPushId || this.config.pushId;
 
-    logger.log(`[PUSH] 📤 Preparing to send push message`);
-    logger.log(`[PUSH]   - Title: "${title}"`);
-    logger.log(`[PUSH]   - Content length: ${content.length} chars`);
-    logger.log(`[PUSH]   - Session ID: ${sessionId || 'none'}`);
-    logger.log(`[PUSH]   - Trace ID: ${traceId}`);
-    logger.log(`[PUSH]   - Push URL: ${pushUrl}`);
+    console.log(`[PUSH] 📤 Preparing to send push message`);
+    console.log(`[PUSH]   - Title: "${title}"`);
+    console.log(`[PUSH]   - Content length: ${content.length} chars`);
+    console.log(`[PUSH]   - Session ID: ${sessionId || 'none'}`);
+    console.log(`[PUSH]   - Trace ID: ${traceId}`);
+    console.log(`[PUSH]   - Push URL: ${pushUrl}`);
 
     if (dynamicPushId) {
-      logger.log(`[PUSH]   - Using dynamic pushId (from session): ${pushId.substring(0, 20)}...`);
-      logger.log(`[PUSH]   - Full dynamic pushId: ${pushId}`);
+      console.log(`[PUSH]   - Using dynamic pushId (from session): ${pushId.substring(0, 20)}...`);
+      console.log(`[PUSH]   - Full dynamic pushId: ${pushId}`);
     } else {
-      logger.log(`[PUSH]   - Using config pushId (fallback): ${pushId.substring(0, 20)}...`);
-      logger.log(`[PUSH]   - Full config pushId: ${pushId}`);
+      console.log(`[PUSH]   - Using config pushId (fallback): ${pushId.substring(0, 20)}...`);
+      console.log(`[PUSH]   - Full config pushId: ${pushId}`);
     }
 
-    logger.log(`[PUSH]   - API ID: ${this.config.apiId}`);
-    logger.log(`[PUSH]   - UID: ${this.config.uid}`);
+    console.log(`[PUSH]   - API ID: ${this.config.apiId}`);
+    console.log(`[PUSH]   - UID: ${this.config.uid}`);
 
     try {
       const requestBody: PushRequest = {
@@ -102,7 +102,7 @@ export class XYPushService {
         },
       };
 
-      logger.debug(`[PUSH] Full request body:`, JSON.stringify(requestBody, null, 2));
+      console.log(`[PUSH] Full request body:`, JSON.stringify(requestBody, null, 2));
 
       const response = await fetch(pushUrl, {
         method: "POST",
@@ -118,16 +118,16 @@ export class XYPushService {
       });
 
       // Log response status and headers
-      logger.log(`[PUSH] 📥 Response received`);
-      logger.log(`[PUSH]   - HTTP Status: ${response.status} ${response.statusText}`);
-      logger.log(`[PUSH]   - Content-Type: ${response.headers.get('content-type')}`);
-      logger.log(`[PUSH]   - Content-Length: ${response.headers.get('content-length')}`);
+      console.log(`[PUSH] 📥 Response received`);
+      console.log(`[PUSH]   - HTTP Status: ${response.status} ${response.statusText}`);
+      console.log(`[PUSH]   - Content-Type: ${response.headers.get('content-type')}`);
+      console.log(`[PUSH]   - Content-Length: ${response.headers.get('content-length')}`);
 
       if (!response.ok) {
         const errorText = await response.text();
-        logger.error(`[PUSH] ❌ Push request failed`);
-        logger.error(`[PUSH]   - HTTP Status: ${response.status}`);
-        logger.error(`[PUSH]   - Response body: ${errorText}`);
+        console.log(`[PUSH] ❌ Push request failed`);
+        console.log(`[PUSH]   - HTTP Status: ${response.status}`);
+        console.log(`[PUSH]   - Response body: ${errorText}`);
         throw new Error(`Push failed: HTTP ${response.status} - ${errorText}`);
       }
 
@@ -135,38 +135,38 @@ export class XYPushService {
       let result;
       try {
         const responseText = await response.text();
-        logger.log(`[PUSH] 📄 Response body length: ${responseText.length} chars`);
-        logger.log(`[PUSH] 📄 Response body preview: ${responseText.substring(0, 200)}`);
+        console.log(`[PUSH] 📄 Response body length: ${responseText.length} chars`);
+        console.log(`[PUSH] 📄 Response body preview: ${responseText.substring(0, 200)}`);
 
         if (!responseText || responseText.trim() === '') {
-          logger.warn(`[PUSH] ⚠️ Received empty response body`);
+          console.log(`[PUSH] ⚠️ Received empty response body`);
           result = {};
         } else {
           result = JSON.parse(responseText);
         }
       } catch (parseError) {
-        logger.error(`[PUSH] ❌ Failed to parse JSON response`);
-        logger.error(`[PUSH]   - Parse error: ${parseError instanceof Error ? parseError.message : String(parseError)}`);
+        console.log(`[PUSH] ❌ Failed to parse JSON response`);
+        console.log(`[PUSH]   - Parse error: ${parseError instanceof Error ? parseError.message : String(parseError)}`);
         throw new Error(`Invalid JSON response from push service: ${parseError instanceof Error ? parseError.message : String(parseError)}`);
       }
 
-      logger.log(`[PUSH] ✅ Push message sent successfully`);
-      logger.log(`[PUSH]   - Title: "${title}"`);
-      logger.log(`[PUSH]   - Trace ID: ${traceId}`);
-      logger.log(`[PUSH]   - Used pushId: ${pushId.substring(0, 20)}...`);
-      logger.debug(`[PUSH]   - Response:`, result);
+      console.log(`[PUSH] ✅ Push message sent successfully`);
+      console.log(`[PUSH]   - Title: "${title}"`);
+      console.log(`[PUSH]   - Trace ID: ${traceId}`);
+      console.log(`[PUSH]   - Used pushId: ${pushId.substring(0, 20)}...`);
+      console.log(`[PUSH]   - Response:`, result);
     } catch (error) {
-      logger.error(`[PUSH] ❌ Failed to send push message`);
-      logger.error(`[PUSH]   - Trace ID: ${traceId}`);
-      logger.error(`[PUSH]   - Target URL: ${pushUrl}`);
-      logger.error(`[PUSH]   - Push ID: ${pushId.substring(0, 20)}...`);
+      console.log(`[PUSH] ❌ Failed to send push message`);
+      console.log(`[PUSH]   - Trace ID: ${traceId}`);
+      console.log(`[PUSH]   - Target URL: ${pushUrl}`);
+      console.log(`[PUSH]   - Push ID: ${pushId.substring(0, 20)}...`);
 
       if (error instanceof Error) {
-        logger.error(`[PUSH]   - Error name: ${error.name}`);
-        logger.error(`[PUSH]   - Error message: ${error.message}`);
-        logger.error(`[PUSH]   - Error stack:`, error.stack);
+        console.log(`[PUSH]   - Error name: ${error.name}`);
+        console.log(`[PUSH]   - Error message: ${error.message}`);
+        console.log(`[PUSH]   - Error stack:`, error.stack);
       } else {
-        logger.error(`[PUSH]   - Error:`, error);
+        console.log(`[PUSH]   - Error:`, error);
       }
 
       throw error;
