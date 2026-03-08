@@ -5,6 +5,7 @@ import type { OutboundWebSocketMessage } from "./types.js";
 import { resolveXYConfig } from "./config.js";
 import { XYFileUploadService } from "./file-upload.js";
 import { XYPushService } from "./push.js";
+import { getLatestSessionContext } from "./tools/session-manager.js";
 
 // Special marker for default push delivery when no target is specified
 const DEFAULT_PUSH_MARKER = "default";
@@ -21,6 +22,9 @@ export const xyOutbound: ChannelOutboundAdapter = {
    * Resolve delivery target for XY channel.
    * When no target is specified (e.g., in cron jobs with announce mode),
    * returns a default marker that will be handled by sendText.
+   *
+   * For message tool calls, if only sessionId is provided, it will look up
+   * the active session context to construct the full "sessionId::taskId" format.
    */
   resolveTarget: ({ cfg, to, accountId, mode }) => {
     // If no target provided, use default marker for push delivery
@@ -32,11 +36,32 @@ export const xyOutbound: ChannelOutboundAdapter = {
       };
     }
 
-    // Otherwise, use the provided target
-    console.log(`[xyOutbound.resolveTarget] Using provided target:`, to);
+    const trimmedTo = to.trim();
+
+    // If the target doesn't contain "::", try to enhance it with taskId from session context
+    if (!trimmedTo.includes("::")) {
+      console.log(`[xyOutbound.resolveTarget] Target "${trimmedTo}" missing taskId, looking up session context`);
+
+      // Try to get the latest session context
+      const sessionContext = getLatestSessionContext();
+      if (sessionContext && sessionContext.sessionId === trimmedTo) {
+        const enhancedTarget = `${trimmedTo}::${sessionContext.taskId}`;
+        console.log(`[xyOutbound.resolveTarget] Enhanced target: ${enhancedTarget}`);
+        return {
+          ok: true,
+          to: enhancedTarget,
+        };
+      } else {
+        console.log(`[xyOutbound.resolveTarget] Could not find matching session context for "${trimmedTo}"`);
+        // Still return the original target, but it may fail in sendMedia
+      }
+    }
+
+    // Otherwise, use the provided target (either already in correct format or for sendText)
+    console.log(`[xyOutbound.resolveTarget] Using provided target:`, trimmedTo);
     return {
       ok: true,
-      to: to.trim(),
+      to: trimmedTo,
     };
   },
 
@@ -74,7 +99,7 @@ export const xyOutbound: ChannelOutboundAdapter = {
 
     // Return message info
     return {
-      channel: "xy",
+      channel: "xiaoyi-channel",
       messageId: Date.now().toString(),
       chatId: actualTo,
     };
@@ -167,7 +192,7 @@ export const xyOutbound: ChannelOutboundAdapter = {
 
     // Return message info
     return {
-      channel: "xy",
+      channel: "xiaoyi-channel",
       messageId: fileId,
       chatId: to,
     };

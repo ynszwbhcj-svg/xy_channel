@@ -84,7 +84,7 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
     // Use sessionId as peer.id to ensure all messages in the same session share context
     let route = core.channel.routing.resolveAgentRoute({
       cfg,
-      channel: "xy",
+      channel: "xiaoyi-channel",
       accountId,  // "default"
       peer: {
         kind: "direct" as const,
@@ -153,13 +153,13 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
       GroupSubject: undefined,
       SenderName: parsed.sessionId,
       SenderId: parsed.sessionId,
-      Provider: "xy" as const,
-      Surface: "xy" as const,
+      Provider: "xiaoyi-channel" as const,
+      Surface: "xiaoyi-channel" as const,
       MessageSid: parsed.messageId,
       Timestamp: Date.now(),
       WasMentioned: false,
       CommandAuthorized: true,
-      OriginatingChannel: "xy" as const,
+      OriginatingChannel: "xiaoyi-channel" as const,
       OriginatingTo: parsed.sessionId,  // Original message target
       ReplyToBody: undefined, // A2A protocol doesn't support reply/quote
       ...mediaPayload,
@@ -236,7 +236,7 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
 
         const route = core.channel.routing.resolveAgentRoute({
           cfg,
-          channel: "xy",
+          channel: "xiaoyi-channel",
           accountId,
           peer: {
             kind: "direct" as const,

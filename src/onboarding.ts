@@ -6,14 +6,14 @@ import type {
   WizardPrompter,
 } from "openclaw/plugin-sdk";
 
-const channel = "xy" as const;
+const channel = "xiaoyi-channel" as const;
 
 /**
  * Check if XY channel is properly configured with required fields
  */
 function isXYConfigured(cfg: ClawdbotConfig): boolean {
   try {
-    const xyConfig = cfg.channels?.xy;
+    const xyConfig = cfg.channels?.["xiaoyi-channel"];
     if (!xyConfig) {
       return false;
     }
@@ -43,7 +43,7 @@ async function getStatus({ cfg }: { cfg: ClawdbotConfig }): Promise<{
   quickstartScore?: number;
 }> {
   const configured = isXYConfigured(cfg);
-  const xyConfig = cfg.channels?.xy;
+  const xyConfig = cfg.channels?.["xiaoyi-channel"];
 
   const statusLines: string[] = [];
 
@@ -78,7 +78,7 @@ async function configure({
   accountId?: string;
 }> {
   // Note current configuration status
-  const currentConfig = cfg.channels?.xy;
+  const currentConfig = cfg.channels?.["xiaoyi-channel"];
   const isUpdate = Boolean(currentConfig);
 
   await prompter.note(
@@ -160,7 +160,7 @@ async function configure({
     ...cfg,
     channels: {
       ...cfg.channels,
-      xy: {
+      "xiaoyi-channel": {
         enabled: true,
         wsUrl1: wsUrl1.trim(),
         wsUrl2: wsUrl2.trim(),
@@ -215,8 +215,8 @@ export const xyOnboardingAdapter: ChannelOnboardingAdapter = {
     ...cfg,
     channels: {
       ...cfg.channels,
-      xy: {
-        ...(cfg.channels?.xy || {}),
+      "xiaoyi-channel": {
+        ...(cfg.channels?.["xiaoyi-channel"] || {}),
         enabled: false,
       },
     },
