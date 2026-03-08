@@ -55,7 +55,7 @@ export class XYFileUploadService {
             uid: this.uid,
             teamId: this.uid,
           },
-          useEdge: true,
+          useEdge: false,
         } as FileUploadPrepareRequest),
       });
 
