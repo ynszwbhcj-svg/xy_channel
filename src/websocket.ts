@@ -329,6 +329,8 @@ export class XYWebSocketManager extends EventEmitter {
    * Handle incoming message from server.
    */
   private handleMessage(serverId: ServerIdentifier, data: WebSocket.Data): void {
+    console.log(`[WEBSOCKET-HANDLE] >>>>>>> serverId: ${serverId}, receiving message... <<<<<<<`);
+
     try {
       const messageStr = data.toString();
       const parsed = JSON.parse(messageStr);
@@ -387,6 +389,7 @@ export class XYWebSocketManager extends EventEmitter {
         }
 
         // Emit message event for non-data-only messages
+        console.log(`[XY-${serverId}] *** EMITTING message event (Direct A2A path) ***`);
         this.emit("message", a2aRequest, sessionId, serverId);
         return;
       }
@@ -447,6 +450,7 @@ export class XYWebSocketManager extends EventEmitter {
       console.log(`[XY-${serverId}] Session ID: ${sessionId}`);
 
       // Emit message event
+      console.log(`[XY-${serverId}] *** EMITTING message event (Wrapped path) ***`);
       this.emit("message", a2aRequest, sessionId, serverId);
     } catch (error) {
       console.error(`[XY-${serverId}] Failed to parse message:`, error);

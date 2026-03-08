@@ -25,6 +25,13 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
   const log = runtime?.log ?? console.log;
   const error = runtime?.error ?? console.error;
 
+  log(`[DISPATCHER-CREATE] ******* Creating dispatcher for session=${sessionId}, taskId=${taskId}, messageId=${messageId} *******`);
+  log(`[DISPATCHER-CREATE] Stack trace:`, new Error().stack?.split('\n').slice(1, 4).join('\n'));
+
+  log(`[DISPATCHER-CREATE] ======== Creating reply dispatcher ========`);
+  log(`[DISPATCHER-CREATE] sessionId: ${sessionId}, taskId: ${taskId}, messageId: ${messageId}`);
+  log(`[DISPATCHER-CREATE] Stack trace:`, new Error().stack?.split('\n').slice(1, 4).join('\n'));
+
   // Get runtime (already validated in monitor.ts, but get reference for use)
   const core = getXYRuntime();
 
@@ -41,6 +48,8 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
   let hasSentResponse = false;
   // Track if we've sent the final empty message
   let finalSent = false;
+  // Accumulate all text from deliver calls
+  let accumulatedText = "";
 
   /**
    * Start the status update interval
@@ -104,19 +113,10 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
             return;
           }
 
-          // Send text with append=true (backend will accumulate)
-          log(`[DELIVER SEND] Sending text, length=${text.length}, kind=${info?.kind || "undefined"}`);
-          await sendA2AResponse({
-            config,
-            sessionId,
-            taskId,
-            messageId,
-            text: text,
-            append: true,
-            final: false,
-          });
+          // Accumulate text instead of sending immediately
+          accumulatedText += text;
           hasSentResponse = true;
-          log(`[DELIVER DONE] Sent text, hasSentResponse=${hasSentResponse}`);
+          log(`[DELIVER ACCUMULATE] Accumulated text, current length=${accumulatedText.length}`);
         } catch (deliverError) {
           error(`Failed to deliver message:`, deliverError);
         }
@@ -148,23 +148,23 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
       onIdle: async () => {
         log(`[ON_IDLE] Reply idle for session ${sessionId}, hasSentResponse=${hasSentResponse}, finalSent=${finalSent}`);
 
-        // Send final empty message to signal end if we haven't sent it yet
+        // Send accumulated text with append=false and final=true
         if (hasSentResponse && !finalSent) {
-          log(`[ON_IDLE] Sending final empty message`);
+          log(`[ON_IDLE] Sending accumulated text, length=${accumulatedText.length}`);
           try {
             await sendA2AResponse({
               config,
               sessionId,
               taskId,
               messageId,
-              text: "",
-              append: true,
+              text: accumulatedText,
+              append: false,
               final: true,
             });
             finalSent = true;
-            log(`[ON_IDLE] Sent final empty message`);
+            log(`[ON_IDLE] Sent accumulated text`);
           } catch (err) {
-            error(`[ON_IDLE] Failed to send final message:`, err);
+            error(`[ON_IDLE] Failed to send accumulated text:`, err);
           }
         } else {
           log(`[ON_IDLE] Skipping final message: hasSentResponse=${hasSentResponse}, finalSent=${finalSent}`);

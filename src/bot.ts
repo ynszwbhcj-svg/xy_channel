@@ -35,7 +35,9 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
   try {
     // Check for special messages BEFORE parsing (these have different param structures)
     const messageMethod = message.method;
-    log(`[DEBUG] Received message with method: ${messageMethod}, id: ${message.id}`);
+    log(`[BOT-ENTRY] <<<<<<< Received message with method: ${messageMethod}, id: ${message.id} >>>>>>>`);
+    log(`[BOT-ENTRY] Stack trace for debugging:`, new Error().stack?.split('\n').slice(1, 4).join('\n'));
+
 
     // Handle clearContext messages (params only has sessionId)
     if (messageMethod === "clearContext" || messageMethod === "clear_context") {

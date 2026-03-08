@@ -86,6 +86,8 @@ export async function monitorXYProvider(opts: MonitorXYOpts = {}): Promise<void>
 
     // Setup event handlers
     const messageHandler = (message: any, sessionId: string, serverId: string) => {
+      log(`[MONITOR-HANDLER] ####### messageHandler triggered: serverId=${serverId}, sessionId=${sessionId}, messageId=${message.id} #######`);
+
       const task = async () => {
         try {
           await handleXYMessage({
