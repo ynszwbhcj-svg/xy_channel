@@ -136,6 +136,8 @@ export class XYWebSocketManager extends EventEmitter {
    * Send a message to the appropriate server based on session binding.
    */
   async sendMessage(sessionId: string, message: OutboundWebSocketMessage): Promise<void> {
+    console.log(`[WEBSOCKET-SEND] <<<<<<< Preparing to send message for session: ${sessionId} <<<<<<<`);
+
     // Determine which server to use
     let server: ServerIdentifier | null = sessionManager.getBinding(sessionId);
 
@@ -148,6 +150,9 @@ export class XYWebSocketManager extends EventEmitter {
       } else {
         throw new Error("No ready WebSocket servers available");
       }
+      console.log(`[WEBSOCKET-SEND] No binding found, selected: ${server}`);
+    } else {
+      console.log(`[WEBSOCKET-SEND] Using bound server: ${server}`);
     }
 
     // Send to the selected server
@@ -159,7 +164,9 @@ export class XYWebSocketManager extends EventEmitter {
     }
 
     const messageStr = JSON.stringify(message);
+    console.log(`[WS-${server}-SEND] Sending message frame:`, JSON.stringify(message, null, 2));
     ws.send(messageStr);
+    console.log(`[WS-${server}-SEND] Message sent successfully, size: ${messageStr.length} bytes`);
   }
 
   /**
@@ -278,7 +285,10 @@ export class XYWebSocketManager extends EventEmitter {
       msgDetail: JSON.stringify({ agentId: this.config.agentId }),
     };
 
-    ws.send(JSON.stringify(initMessage));
+    const initMessageStr = JSON.stringify(initMessage);
+    console.log(`[WS-${serverId}-SEND] Sending init message frame:`, JSON.stringify(initMessage, null, 2));
+    ws.send(initMessageStr);
+    console.log(`[WS-${serverId}-SEND] Init message sent successfully, size: ${initMessageStr.length} bytes`);
 
     // Mark as ready after init
     const state = serverId === "server1" ? this.state1 : this.state2;
@@ -333,10 +343,12 @@ export class XYWebSocketManager extends EventEmitter {
 
     try {
       const messageStr = data.toString();
+      console.log(`[WS-${serverId}-RECV] Raw message frame, size: ${messageStr.length} bytes`);
+
       const parsed = JSON.parse(messageStr);
 
       // Log raw message
-      console.log(`[XY-${serverId}] Received message:`, JSON.stringify(parsed, null, 2));
+      console.log(`[WS-${serverId}-RECV] Parsed message:`, JSON.stringify(parsed, null, 2));
 
       // Check if message is in direct A2A JSON-RPC format (server push)
       if (parsed.jsonrpc === "2.0") {

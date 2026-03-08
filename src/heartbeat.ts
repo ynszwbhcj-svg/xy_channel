@@ -82,10 +82,13 @@ export class HeartbeatManager {
 
     try {
       // Send application-level heartbeat message
+      console.log(`[WS-${this.serverName}-SEND] Sending heartbeat frame:`, this.config.message);
       this.ws.send(this.config.message);
+      console.log(`[WS-${this.serverName}-SEND] Heartbeat message sent, size: ${this.config.message.length} bytes`);
 
       // Send protocol-level ping
       this.ws.ping();
+      console.log(`[WS-${this.serverName}-SEND] Protocol-level ping sent`);
 
       // Setup timeout timer
       this.timeoutTimer = setTimeout(() => {
