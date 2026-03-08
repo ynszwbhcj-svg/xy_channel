@@ -63,28 +63,7 @@ export async function monitorXYProvider(opts: MonitorXYOpts = {}): Promise<void>
   const enqueue = createSessionQueue();
 
   return new Promise<void>((resolve, reject) => {
-    const cleanup = () => {
-      log("XY gateway: cleaning up...");
-      wsManager.disconnect();
-      loggedServers.clear();
-    };
-
-    const handleAbort = () => {
-      log("XY gateway: abort signal received, stopping");
-      cleanup();
-      log("XY gateway stopped");
-      resolve();
-    };
-
-    if (opts.abortSignal?.aborted) {
-      cleanup();
-      resolve();
-      return;
-    }
-
-    opts.abortSignal?.addEventListener("abort", handleAbort, { once: true });
-
-    // Setup event handlers
+    // Event handlers (defined early so they can be referenced in cleanup)
     const messageHandler = (message: any, sessionId: string, serverId: string) => {
       log(`[MONITOR-HANDLER] ####### messageHandler triggered: serverId=${serverId}, sessionId=${sessionId}, messageId=${message.id} #######`);
 
@@ -123,7 +102,37 @@ export async function monitorXYProvider(opts: MonitorXYOpts = {}): Promise<void>
       error(`XY gateway: ${serverId} error: ${String(err)}`);
     };
 
-    // Register event handlers
+    const cleanup = () => {
+      log("XY gateway: cleaning up...");
+
+      // Remove event handlers to prevent duplicate calls on gateway restart
+      wsManager.off("message", messageHandler);
+      wsManager.off("connected", connectedHandler);
+      wsManager.off("disconnected", disconnectedHandler);
+      wsManager.off("error", errorHandler);
+
+      // Don't disconnect the shared wsManager as it may be used elsewhere
+      // wsManager.disconnect();
+
+      loggedServers.clear();
+    };
+
+    const handleAbort = () => {
+      log("XY gateway: abort signal received, stopping");
+      cleanup();
+      log("XY gateway stopped");
+      resolve();
+    };
+
+    if (opts.abortSignal?.aborted) {
+      cleanup();
+      resolve();
+      return;
+    }
+
+    opts.abortSignal?.addEventListener("abort", handleAbort, { once: true });
+
+    // Register event handlers (handlers are defined above in cleanup scope)
     wsManager.on("message", messageHandler);
     wsManager.on("connected", connectedHandler);
     wsManager.on("disconnected", disconnectedHandler);
