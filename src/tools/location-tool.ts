@@ -58,16 +58,26 @@ export const locationTool: any = {
         name: "Action",
       },
       payload: {
+        cardParam: {},
         executeParam: {
           achieveType: "INTENT",
           actionResponse: true,
           bundleName: "com.huawei.hmos.aidispatchservice",
+          dimension: "",
+          executeMode: "background",
           intentName: "GetCurrentLocation",
           intentParam: {},
           needUnlock: true,
+          permissionId: [],
           timeOut: 5,
         },
         needUploadResult: true,
+        pageControlRelated: false,
+        responses: [{
+          displayText: "",
+          resultCode: "",
+          ttsText: "",
+        }],
       },
     };
 

@@ -140,6 +140,16 @@ export const xyOutbound: ChannelOutboundAdapter = {
     // Upload file
     const fileId = await uploadService.uploadFile(mediaUrl);
 
+    // Check if fileId is empty
+    if (!fileId) {
+      console.log(`[xyOutbound.sendMedia] ⚠️ File upload failed: fileId is empty, aborting sendMedia`);
+      return {
+        channel: "xiaoyi-channel",
+        messageId: "",
+        chatId: to,
+      };
+    }
+
     console.log(`[xyOutbound.sendMedia] File uploaded:`, {
       fileId,
       sessionId,
@@ -149,7 +159,7 @@ export const xyOutbound: ChannelOutboundAdapter = {
     // Get filename and mime type from mediaUrl
     // mediaUrl may be a local file path or URL
     const fileName = mediaUrl.split("/").pop() || "unknown";
-    const mimeType = text?.match(/\[ MediaType: ([^\]]+)\]/)?.[1] || "application/octet-stream";
+    const mimeType = "text/plain";
 
     // Build agent_response message
     const agentResponse: OutboundWebSocketMessage = {

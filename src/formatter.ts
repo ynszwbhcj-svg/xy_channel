@@ -197,6 +197,7 @@ export async function sendCommand(params: SendCommandParams): Promise<void> {
   const error = runtime?.error ?? console.error;
 
   // Build artifact update with command as data
+  // Wrap command in commands array as per protocol requirement
   const artifact: A2ATaskArtifactUpdateEvent = {
     taskId,
     kind: "artifact-update",
@@ -208,7 +209,9 @@ export async function sendCommand(params: SendCommandParams): Promise<void> {
       parts: [
         {
           kind: "data",
-          data: command,
+          data: {
+            commands: [command],
+          },
         },
       ],
     },
