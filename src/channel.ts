@@ -9,6 +9,7 @@ import { xyOnboardingAdapter } from "./onboarding.js";
 import { locationTool } from "./tools/location-tool.js";
 import { noteTool } from "./tools/note-tool.js";
 import { searchNoteTool } from "./tools/search-note-tool.js";
+import { calendarTool } from "./tools/calendar-tool.js";
 import { getXYWebSocketManager } from "./client.js";
 import { handleXYMessage } from "./bot.js";
 import { logger } from "./utils/logger.js";
@@ -57,7 +58,7 @@ export const xyPlugin: ChannelPlugin = {
 
   outbound: xyOutbound,
   onboarding: xyOnboardingAdapter,
-  agentTools: [locationTool, noteTool, searchNoteTool],
+  agentTools: [locationTool, noteTool, searchNoteTool, calendarTool],
 
   messaging: {
     normalizeTarget: (raw) => {

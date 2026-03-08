@@ -2,11 +2,12 @@
 import type { ClawdbotConfig, RuntimeEnv, ReplyPayload } from "openclaw/plugin-sdk";
 import { getXYRuntime } from "./runtime.js";
 import { createXYReplyDispatcher } from "./reply-dispatcher.js";
-import { parseA2AMessage, extractTextFromParts, extractFileParts, isClearContextMessage, isTasksCancelMessage } from "./parser.js";
+import { parseA2AMessage, extractTextFromParts, extractFileParts, extractPushId, isClearContextMessage, isTasksCancelMessage } from "./parser.js";
 import { downloadFilesFromParts } from "./file-download.js";
 import { resolveXYConfig } from "./config.js";
 import { sendStatusUpdate, sendClearContextResponse, sendTasksCancelResponse } from "./formatter.js";
 import { registerSession, unregisterSession } from "./tools/session-manager.js";
+import { configManager } from "./utils/config-manager.js";
 import type { A2AJsonRpcRequest } from "./types.js";
 
 /**
@@ -76,6 +77,18 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
     // Parse the A2A message (for regular messages)
     const parsed = parseA2AMessage(message);
 
+    // Extract and update push_id if present
+    const pushId = extractPushId(parsed.parts);
+    if (pushId) {
+      log(`[BOT] 📌 Extracted push_id from user message`);
+      log(`[BOT]   - Session ID: ${parsed.sessionId}`);
+      log(`[BOT]   - Push ID preview: ${pushId.substring(0, 20)}...`);
+      log(`[BOT]   - Full push_id: ${pushId}`);
+      configManager.updatePushId(parsed.sessionId, pushId);
+    } else {
+      log(`[BOT] ℹ️  No push_id found in message, will use config default`);
+    }
+
     // Resolve configuration (needed for status updates)
     const config = resolveXYConfig(cfg);
 
@@ -132,7 +145,7 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
 
     // Format agent envelope (following feishu pattern)
     const body = core.channel.reply.formatAgentEnvelope({
-      channel: "XY",
+      channel: "xiaoyi-channel",
       from: speaker,
       timestamp: new Date(),
       envelope: envelopeOptions,

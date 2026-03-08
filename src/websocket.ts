@@ -381,19 +381,24 @@ export class XYWebSocketManager extends EventEmitter {
           // Only emit data-event, don't send to openclaw
           console.log(`[XY-${serverId}] Message contains only data parts, processing as tool result`);
           for (const dataPart of dataParts) {
-            const dataArray = dataPart.data;
-            if (Array.isArray(dataArray)) {
-              for (const item of dataArray) {
-                // Check if it's an UploadExeResult (intent execution result)
-                if (item.header?.name === "UploadExeResult" && item.payload?.intentName) {
-                  const dataEvent = {
-                    intentName: item.payload.intentName,
-                    outputs: item.payload.outputs || {},
-                    status: "success" as const,
-                  };
-                  console.log(`[XY-${serverId}] Emitting data-event:`, dataEvent);
-                  this.emit("data-event", dataEvent);
-                }
+            // Data format: {events: [{header, payload}, ...]}
+            const events = dataPart.data?.events;
+            if (!Array.isArray(events)) {
+              console.warn(`[XY-${serverId}] dataPart.data.events is not an array, skipping`);
+              continue;
+            }
+
+            console.log(`[XY-${serverId}] Processing ${events.length} events from data.events`);
+            for (const item of events) {
+              // Check if it's an UploadExeResult (intent execution result)
+              if (item.header?.name === "UploadExeResult" && item.payload?.intentName) {
+                const dataEvent = {
+                  intentName: item.payload.intentName,
+                  outputs: item.payload.outputs || {},
+                  status: "success" as const,
+                };
+                console.log(`[XY-${serverId}] Emitting data-event:`, dataEvent);
+                this.emit("data-event", dataEvent);
               }
             }
           }
@@ -425,19 +430,24 @@ export class XYWebSocketManager extends EventEmitter {
 
           if (dataParts && dataParts.length > 0) {
             for (const dataPart of dataParts) {
-              const dataArray = dataPart.data;
-              if (Array.isArray(dataArray)) {
-                for (const item of dataArray) {
-                  // Check if it's an UploadExeResult (intent execution result)
-                  if (item.header?.name === "UploadExeResult" && item.payload?.intentName) {
-                    const dataEvent = {
-                      intentName: item.payload.intentName,
-                      outputs: item.payload.outputs || {},
-                      status: "success" as const,
-                    };
-                    console.log(`[XY-${serverId}] Emitting data-event:`, dataEvent);
-                    this.emit("data-event", dataEvent);
-                  }
+              // Data format: {events: [{header, payload}, ...]}
+              const events = dataPart.data?.events;
+              if (!Array.isArray(events)) {
+                console.warn(`[XY-${serverId}] dataPart.data.events is not an array, skipping`);
+                continue;
+              }
+
+              console.log(`[XY-${serverId}] Processing ${events.length} events from data.events`);
+              for (const item of events) {
+                // Check if it's an UploadExeResult (intent execution result)
+                if (item.header?.name === "UploadExeResult" && item.payload?.intentName) {
+                  const dataEvent = {
+                    intentName: item.payload.intentName,
+                    outputs: item.payload.outputs || {},
+                    status: "success" as const,
+                  };
+                  console.log(`[XY-${serverId}] Emitting data-event:`, dataEvent);
+                  this.emit("data-event", dataEvent);
                 }
               }
             }

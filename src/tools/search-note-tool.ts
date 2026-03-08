@@ -83,7 +83,7 @@ export const searchNoteTool: any = {
       const timeout = setTimeout(() => {
         wsManager.off("data-event", handler);
         reject(new Error("搜索备忘录超时（5秒）"));
-      }, 5000);
+      }, 10000);
 
       // Listen for data events from WebSocket
       const handler = (event: A2ADataEvent) => {

@@ -210,19 +210,6 @@ export interface FileUploadCompleteResponse {
 }
 
 // ============================================================================
-// Push Message Types
-// ============================================================================
-
-export interface PushMessageRequest {
-  apiKey: string;
-  apiId: string;
-  pushId: string;
-  sessionId: string;
-  title: string;
-  content: string;
-}
-
-// ============================================================================
 // Session Management
 // ============================================================================
 

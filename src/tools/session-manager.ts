@@ -2,6 +2,7 @@
 // Stores active session contexts that tools can access
 import type { XYChannelConfig } from "../types.js";
 import { logger } from "../utils/logger.js";
+import { configManager } from "../utils/config-manager.js";
 
 export interface SessionContext {
   config: XYChannelConfig;
@@ -41,7 +42,14 @@ export function unregisterSession(sessionKey: string): void {
   logger.log(`[SESSION_MANAGER]   - Active sessions before: ${activeSessions.size}`);
   logger.log(`[SESSION_MANAGER]   - Session existed: ${activeSessions.has(sessionKey)}`);
 
+  // Get session context before deleting to clear associated pushId
+  const context = activeSessions.get(sessionKey);
   const existed = activeSessions.delete(sessionKey);
+
+  // Clear cached pushId for this session
+  if (context) {
+    configManager.clearSession(context.sessionId);
+  }
 
   logger.log(`[SESSION_MANAGER]   - Deleted: ${existed}`);
   logger.log(`[SESSION_MANAGER]   - Active sessions after: ${activeSessions.size}`);

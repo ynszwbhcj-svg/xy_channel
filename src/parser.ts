@@ -86,6 +86,22 @@ export function isTasksCancelMessage(method: string): boolean {
 }
 
 /**
+ * Extract push_id from message parts.
+ * Looks for push_id in data parts under variables.systemVariables.push_id
+ */
+export function extractPushId(parts: A2AMessagePart[]): string | null {
+  for (const part of parts) {
+    if (part.kind === "data" && part.data) {
+      const pushId = part.data.variables?.systemVariables?.push_id;
+      if (pushId && typeof pushId === "string") {
+        return pushId;
+      }
+    }
+  }
+  return null;
+}
+
+/**
  * Validate A2A request structure.
  */
 export function validateA2ARequest(request: any): request is A2AJsonRpcRequest {
