@@ -82,8 +82,8 @@ export const searchNoteTool: any = {
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
         wsManager.off("data-event", handler);
-        reject(new Error("搜索备忘录超时（5秒）"));
-      }, 10000);
+        reject(new Error("搜索备忘录超时（15秒）"));
+      }, 15000);
 
       // Listen for data events from WebSocket
       const handler = (event: A2ADataEvent) => {

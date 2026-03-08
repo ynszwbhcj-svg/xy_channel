@@ -130,8 +130,8 @@ export const calendarTool: any = {
       const timeout = setTimeout(() => {
         logger.error(`[CALENDAR_TOOL] ⏰ Timeout: No response received within 5 seconds`);
         wsManager.off("data-event", handler);
-        reject(new Error("创建日程超时（5秒）"));
-      }, 10000);
+        reject(new Error("创建日程超时（15秒）"));
+      }, 15000);
 
       // Listen for data events from WebSocket
       const handler = (event: A2ADataEvent) => {

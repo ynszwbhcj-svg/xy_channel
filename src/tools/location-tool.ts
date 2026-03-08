@@ -89,7 +89,7 @@ export const locationTool: any = {
       const timeout = setTimeout(() => {
         logger.error(`[LOCATION_TOOL] ⏰ Timeout: No response received within 5 seconds`);
         wsManager.off("data-event", handler);
-        reject(new Error("获取位置超时（5秒）"));
+        reject(new Error("获取位置超时（10秒）"));
       }, 10000);
 
       // Listen for data events from WebSocket
