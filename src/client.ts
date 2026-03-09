@@ -69,17 +69,15 @@ export function getCachedManagerCount(): number {
  * Helps identify connection issues and orphan connections.
  */
 export function diagnoseAllManagers(): void {
-  const log = runtime?.log ?? console.log;
-
-  log("========================================");
-  log("📊 WebSocket Manager Global Diagnostics");
-  log("========================================");
-  log(`Total cached managers: ${wsManagerCache.size}`);
-  log("");
+  console.log("========================================");
+  console.log("📊 WebSocket Manager Global Diagnostics");
+  console.log("========================================");
+  console.log(`Total cached managers: ${wsManagerCache.size}`);
+  console.log("");
 
   if (wsManagerCache.size === 0) {
-    log("ℹ️  No managers in cache");
-    log("========================================");
+    console.log("ℹ️  No managers in cache");
+    console.log("========================================");
     return;
   }
 
@@ -88,49 +86,49 @@ export function diagnoseAllManagers(): void {
   wsManagerCache.forEach((manager, key) => {
     const diag = manager.getConnectionDiagnostics();
 
-    log(`📌 Manager: ${key}`);
-    log(`   Shutting down: ${diag.isShuttingDown}`);
-    log(`   Total event listeners on manager: ${diag.totalEventListeners}`);
+    console.log(`📌 Manager: ${key}`);
+    console.log(`   Shutting down: ${diag.isShuttingDown}`);
+    console.log(`   Total event listeners on manager: ${diag.totalEventListeners}`);
 
     // Server 1
-    log(`   🔌 Server1:`);
-    log(`      - Exists: ${diag.server1.exists}`);
-    log(`      - ReadyState: ${diag.server1.readyState}`);
-    log(`      - State connected/ready: ${diag.server1.stateConnected}/${diag.server1.stateReady}`);
-    log(`      - Reconnect attempts: ${diag.server1.reconnectAttempts}`);
-    log(`      - Listeners on WebSocket: ${diag.server1.listenerCount}`);
-    log(`      - Heartbeat active: ${diag.server1.heartbeatActive}`);
-    log(`      - Has reconnect timer: ${diag.server1.hasReconnectTimer}`);
+    console.log(`   🔌 Server1:`);
+    console.log(`      - Exists: ${diag.server1.exists}`);
+    console.log(`      - ReadyState: ${diag.server1.readyState}`);
+    console.log(`      - State connected/ready: ${diag.server1.stateConnected}/${diag.server1.stateReady}`);
+    console.log(`      - Reconnect attempts: ${diag.server1.reconnectAttempts}`);
+    console.log(`      - Listeners on WebSocket: ${diag.server1.listenerCount}`);
+    console.log(`      - Heartbeat active: ${diag.server1.heartbeatActive}`);
+    console.log(`      - Has reconnect timer: ${diag.server1.hasReconnectTimer}`);
     if (diag.server1.isOrphan) {
-      log(`      ⚠️  ORPHAN CONNECTION DETECTED!`);
+      console.log(`      ⚠️  ORPHAN CONNECTION DETECTED!`);
       orphanCount++;
     }
 
     // Server 2
-    log(`   🔌 Server2:`);
-    log(`      - Exists: ${diag.server2.exists}`);
-    log(`      - ReadyState: ${diag.server2.readyState}`);
-    log(`      - State connected/ready: ${diag.server2.stateConnected}/${diag.server2.stateReady}`);
-    log(`      - Reconnect attempts: ${diag.server2.reconnectAttempts}`);
-    log(`      - Listeners on WebSocket: ${diag.server2.listenerCount}`);
-    log(`      - Heartbeat active: ${diag.server2.heartbeatActive}`);
-    log(`      - Has reconnect timer: ${diag.server2.hasReconnectTimer}`);
+    console.log(`   🔌 Server2:`);
+    console.log(`      - Exists: ${diag.server2.exists}`);
+    console.log(`      - ReadyState: ${diag.server2.readyState}`);
+    console.log(`      - State connected/ready: ${diag.server2.stateConnected}/${diag.server2.stateReady}`);
+    console.log(`      - Reconnect attempts: ${diag.server2.reconnectAttempts}`);
+    console.log(`      - Listeners on WebSocket: ${diag.server2.listenerCount}`);
+    console.log(`      - Heartbeat active: ${diag.server2.heartbeatActive}`);
+    console.log(`      - Has reconnect timer: ${diag.server2.hasReconnectTimer}`);
     if (diag.server2.isOrphan) {
-      log(`      ⚠️  ORPHAN CONNECTION DETECTED!`);
+      console.log(`      ⚠️  ORPHAN CONNECTION DETECTED!`);
       orphanCount++;
     }
 
-    log("");
+    console.log("");
   });
 
   if (orphanCount > 0) {
-    log(`⚠️  Total orphan connections found: ${orphanCount}`);
-    log(`💡 Suggestion: These connections should be cleaned up`);
+    console.log(`⚠️  Total orphan connections found: ${orphanCount}`);
+    console.log(`💡 Suggestion: These connections should be cleaned up`);
   } else {
-    log(`✅ No orphan connections found`);
+    console.log(`✅ No orphan connections found`);
   }
 
-  log("========================================");
+  console.log("========================================");
 }
 
 /**
@@ -138,21 +136,20 @@ export function diagnoseAllManagers(): void {
  * Returns the number of managers that had orphan connections.
  */
 export function cleanupOrphanConnections(): number {
-  const log = runtime?.log ?? console.log;
   let cleanedCount = 0;
 
   wsManagerCache.forEach((manager, key) => {
     const diag = manager.getConnectionDiagnostics();
 
     if (diag.server1.isOrphan || diag.server2.isOrphan) {
-      log(`🧹 Cleaning up orphan connections in manager: ${key}`);
+      console.log(`🧹 Cleaning up orphan connections in manager: ${key}`);
       manager.disconnect();
       cleanedCount++;
     }
   });
 
   if (cleanedCount > 0) {
-    log(`🧹 Cleaned up ${cleanedCount} manager(s) with orphan connections`);
+    console.log(`🧹 Cleaned up ${cleanedCount} manager(s) with orphan connections`);
   }
 
   return cleanedCount;

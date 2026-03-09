@@ -54,7 +54,7 @@ export async function monitorXYProvider(opts: MonitorXYOpts = {}): Promise<void>
   const accountId = opts.accountId ?? "default";
 
   // 🔍 Diagnose WebSocket managers before gateway start
-  log("🔍 [DIAGNOSTICS] Checking WebSocket managers before gateway start...");
+  console.log("🔍 [DIAGNOSTICS] Checking WebSocket managers before gateway start...");
   diagnoseAllManagers();
 
   // Get WebSocket manager (cached)
@@ -133,14 +133,14 @@ export async function monitorXYProvider(opts: MonitorXYOpts = {}): Promise<void>
       log("XY gateway: cleaning up...");
 
       // 🔍 Diagnose before cleanup
-      log("🔍 [DIAGNOSTICS] Checking WebSocket managers before cleanup...");
+      console.log("🔍 [DIAGNOSTICS] Checking WebSocket managers before cleanup...");
       diagnoseAllManagers();
 
       // Stop health check interval
       if (healthCheckInterval) {
         clearInterval(healthCheckInterval);
         healthCheckInterval = null;
-        log("⏸️  Stopped periodic health check");
+        console.log("⏸️  Stopped periodic health check");
       }
 
       // Remove event handlers to prevent duplicate calls on gateway restart
@@ -158,7 +158,7 @@ export async function monitorXYProvider(opts: MonitorXYOpts = {}): Promise<void>
       log(`[MONITOR-HANDLER] 🧹 Cleanup complete, cleared active messages`);
 
       // 🔍 Diagnose after cleanup
-      log("🔍 [DIAGNOSTICS] Checking WebSocket managers after cleanup...");
+      console.log("🔍 [DIAGNOSTICS] Checking WebSocket managers after cleanup...");
       diagnoseAllManagers();
     };
 
@@ -184,15 +184,15 @@ export async function monitorXYProvider(opts: MonitorXYOpts = {}): Promise<void>
     wsManager.on("error", errorHandler);
 
     // Start periodic health check (every 5 minutes)
-    log("🏥 Starting periodic health check (every 5 minutes)...");
+    console.log("🏥 Starting periodic health check (every 5 minutes)...");
     healthCheckInterval = setInterval(() => {
-      log("🏥 [HEALTH CHECK] Periodic WebSocket diagnostics...");
+      console.log("🏥 [HEALTH CHECK] Periodic WebSocket diagnostics...");
       diagnoseAllManagers();
 
       // Auto-cleanup orphan connections
       const cleaned = cleanupOrphanConnections();
       if (cleaned > 0) {
-        log(`🧹 [HEALTH CHECK] Auto-cleaned ${cleaned} manager(s) with orphan connections`);
+        console.log(`🧹 [HEALTH CHECK] Auto-cleaned ${cleaned} manager(s) with orphan connections`);
       }
     }, 5 * 60 * 1000); // 5 minutes
 
