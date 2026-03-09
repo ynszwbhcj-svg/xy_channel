@@ -2,7 +2,7 @@
 // Follows feishu/monitor.account.ts and feishu/monitor.transport.ts pattern
 import type { RuntimeEnv } from "openclaw/plugin-sdk";
 import { resolveXYConfig } from "./config.js";
-import { getXYWebSocketManager } from "./client.js";
+import { getXYWebSocketManager, diagnoseAllManagers, cleanupOrphanConnections } from "./client.js";
 import { handleXYMessage } from "./bot.js";
 
 export type MonitorXYOpts = {
@@ -53,6 +53,10 @@ export async function monitorXYProvider(opts: MonitorXYOpts = {}): Promise<void>
 
   const accountId = opts.accountId ?? "default";
 
+  // 🔍 Diagnose WebSocket managers before gateway start
+  log("🔍 [DIAGNOSTICS] Checking WebSocket managers before gateway start...");
+  diagnoseAllManagers();
+
   // Get WebSocket manager (cached)
   const wsManager = getXYWebSocketManager(account);
 
@@ -64,6 +68,9 @@ export async function monitorXYProvider(opts: MonitorXYOpts = {}): Promise<void>
 
   // Create session queue for ordered message processing
   const enqueue = createSessionQueue();
+
+  // Health check interval
+  let healthCheckInterval: NodeJS.Timeout | null = null;
 
   return new Promise<void>((resolve, reject) => {
     // Event handlers (defined early so they can be referenced in cleanup)
@@ -91,8 +98,8 @@ export async function monitorXYProvider(opts: MonitorXYOpts = {}): Promise<void>
           });
           log(`[MONITOR-HANDLER] ✅ Completed handleXYMessage for messageKey=${messageKey}`);
         } catch (err) {
+          // ✅ Only log error, don't re-throw to prevent gateway restart
           error(`XY gateway: error handling message from ${serverId}: ${String(err)}`);
-          throw err;
         } finally {
           // Remove from active messages when done
           activeMessages.delete(messageKey);
@@ -125,18 +132,34 @@ export async function monitorXYProvider(opts: MonitorXYOpts = {}): Promise<void>
     const cleanup = () => {
       log("XY gateway: cleaning up...");
 
+      // 🔍 Diagnose before cleanup
+      log("🔍 [DIAGNOSTICS] Checking WebSocket managers before cleanup...");
+      diagnoseAllManagers();
+
+      // Stop health check interval
+      if (healthCheckInterval) {
+        clearInterval(healthCheckInterval);
+        healthCheckInterval = null;
+        log("⏸️  Stopped periodic health check");
+      }
+
       // Remove event handlers to prevent duplicate calls on gateway restart
       wsManager.off("message", messageHandler);
       wsManager.off("connected", connectedHandler);
       wsManager.off("disconnected", disconnectedHandler);
       wsManager.off("error", errorHandler);
 
-      // Don't disconnect the shared wsManager as it may be used elsewhere
-      // wsManager.disconnect();
+      // ✅ Disconnect the wsManager to prevent connection leaks
+      // This is safe because each gateway lifecycle should have clean connections
+      wsManager.disconnect();
 
       loggedServers.clear();
       activeMessages.clear();
       log(`[MONITOR-HANDLER] 🧹 Cleanup complete, cleared active messages`);
+
+      // 🔍 Diagnose after cleanup
+      log("🔍 [DIAGNOSTICS] Checking WebSocket managers after cleanup...");
+      diagnoseAllManagers();
     };
 
     const handleAbort = () => {
@@ -159,6 +182,19 @@ export async function monitorXYProvider(opts: MonitorXYOpts = {}): Promise<void>
     wsManager.on("connected", connectedHandler);
     wsManager.on("disconnected", disconnectedHandler);
     wsManager.on("error", errorHandler);
+
+    // Start periodic health check (every 5 minutes)
+    log("🏥 Starting periodic health check (every 5 minutes)...");
+    healthCheckInterval = setInterval(() => {
+      log("🏥 [HEALTH CHECK] Periodic WebSocket diagnostics...");
+      diagnoseAllManagers();
+
+      // Auto-cleanup orphan connections
+      const cleaned = cleanupOrphanConnections();
+      if (cleaned > 0) {
+        log(`🧹 [HEALTH CHECK] Auto-cleaned ${cleaned} manager(s) with orphan connections`);
+      }
+    }, 5 * 60 * 1000); // 5 minutes
 
     // Connect to WebSocket servers
     wsManager.connect()

@@ -236,6 +236,7 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
     log(`[BOT] ✅ Dispatcher completed for session: ${parsed.sessionId}`);
     log(`xy: dispatch complete (session=${parsed.sessionId})`);
   } catch (err) {
+    // ✅ Only log error, don't re-throw to prevent gateway restart
     error("Failed to handle XY message:", err);
     runtime.error?.(`xy: Failed to handle message: ${String(err)}`);
 
@@ -268,7 +269,7 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
       // Ignore cleanup errors
     }
 
-    throw err;
+    // ❌ Don't re-throw: message processing error should not affect gateway stability
   }
 }
 

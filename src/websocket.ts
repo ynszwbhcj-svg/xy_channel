@@ -16,6 +16,33 @@ import type {
 } from "./types.js";
 
 /**
+ * Diagnostics for a single WebSocket connection
+ */
+export interface ConnectionDiagnostic {
+  exists: boolean;
+  readyState: string; // 'CONNECTING' | 'OPEN' | 'CLOSING' | 'CLOSED' | 'NULL'
+  stateConnected: boolean;
+  stateReady: boolean;
+  reconnectAttempts: number;
+  lastHeartbeat: number;
+  heartbeatActive: boolean;
+  hasReconnectTimer: boolean;
+  listenerCount: number; // Event listener count
+  isOrphan: boolean; // Connection exists but has no listeners = orphan
+}
+
+/**
+ * Full diagnostics for WebSocket manager
+ */
+export interface ManagerDiagnostics {
+  cacheKey: string;
+  server1: ConnectionDiagnostic;
+  server2: ConnectionDiagnostic;
+  isShuttingDown: boolean;
+  totalEventListeners: number;
+}
+
+/**
  * Manages dual WebSocket connections to XY servers.
  * Implements session-to-server binding for message routing.
  *
@@ -174,6 +201,90 @@ export class XYWebSocketManager extends EventEmitter {
    */
   isReady(): boolean {
     return this.state1.ready || this.state2.ready;
+  }
+
+  /**
+   * Get detailed connection diagnostics for monitoring and debugging.
+   * Helps identify orphan connections and connection leaks.
+   */
+  getConnectionDiagnostics(): ManagerDiagnostics {
+    const cacheKey = `${this.config.apiKey}-${this.config.agentId}`;
+
+    const server1Diag = this.getServerDiagnostic("server1", this.ws1, this.state1, this.heartbeat1, this.reconnectTimer1);
+    const server2Diag = this.getServerDiagnostic("server2", this.ws2, this.state2, this.heartbeat2, this.reconnectTimer2);
+
+    // Count total event listeners on the manager
+    const totalEventListeners = this.listenerCount('message') +
+                                 this.listenerCount('connected') +
+                                 this.listenerCount('disconnected') +
+                                 this.listenerCount('error') +
+                                 this.listenerCount('ready') +
+                                 this.listenerCount('data-event');
+
+    return {
+      cacheKey,
+      server1: server1Diag,
+      server2: server2Diag,
+      isShuttingDown: this.isShuttingDown,
+      totalEventListeners,
+    };
+  }
+
+  /**
+   * Get diagnostic info for a single server connection.
+   */
+  private getServerDiagnostic(
+    serverId: ServerIdentifier,
+    ws: WebSocket | null,
+    state: ServerConnectionState,
+    heartbeat: HeartbeatManager | null,
+    reconnectTimer: NodeJS.Timeout | null
+  ): ConnectionDiagnostic {
+    const exists = ws !== null;
+    let readyState = 'NULL';
+    let listenerCount = 0;
+
+    if (ws) {
+      switch (ws.readyState) {
+        case WebSocket.CONNECTING:
+          readyState = 'CONNECTING';
+          break;
+        case WebSocket.OPEN:
+          readyState = 'OPEN';
+          break;
+        case WebSocket.CLOSING:
+          readyState = 'CLOSING';
+          break;
+        case WebSocket.CLOSED:
+          readyState = 'CLOSED';
+          break;
+      }
+
+      // Count event listeners on the WebSocket
+      listenerCount = ws.listenerCount('message') +
+                      ws.listenerCount('close') +
+                      ws.listenerCount('error') +
+                      ws.listenerCount('open') +
+                      ws.listenerCount('pong');
+    }
+
+    // Orphan detection: connection is OPEN but has no message listeners
+    const isOrphan = exists &&
+                     ws!.readyState === WebSocket.OPEN &&
+                     ws!.listenerCount('message') === 0;
+
+    return {
+      exists,
+      readyState,
+      stateConnected: state.connected,
+      stateReady: state.ready,
+      reconnectAttempts: state.reconnectAttempts,
+      lastHeartbeat: state.lastHeartbeat,
+      heartbeatActive: heartbeat !== null,
+      hasReconnectTimer: reconnectTimer !== null,
+      listenerCount,
+      isOrphan,
+    };
   }
 
   /**
