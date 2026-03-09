@@ -302,14 +302,26 @@ export class XYWebSocketManager extends EventEmitter {
    */
   private async connectServer(serverId: ServerIdentifier, url: string): Promise<void> {
     return new Promise((resolve, reject) => {
-      const ws = new WebSocket(url, {
+      // Check if URL is wss with IP address to bypass certificate validation
+      const urlObj = new URL(url);
+      const isWssWithIP = urlObj.protocol === 'wss:' && /^(\d{1,3}\.){3}\d{1,3}$/.test(urlObj.hostname);
+
+      const wsOptions: any = {
         headers: {
           "x-uid": this.config.uid,
           "x-api-key": this.config.apiKey,
           "x-agent-id": this.config.agentId,
           "x-request-from": "openclaw",
         },
-      });
+      };
+
+      // Bypass certificate validation for wss with IP address
+      if (isWssWithIP) {
+        this.log(`${serverId}: Bypassing certificate validation for IP address: ${urlObj.hostname}`);
+        wsOptions.rejectUnauthorized = false;
+      }
+
+      const ws = new WebSocket(url, wsOptions);
       const state = serverId === "server1" ? this.state1 : this.state2;
 
       // Set the WebSocket instance
@@ -537,9 +549,12 @@ export class XYWebSocketManager extends EventEmitter {
       const inboundMsg: InboundWebSocketMessage = parsed;
       console.log(`[XY-${serverId}] Message type: Wrapped, msgType: ${inboundMsg.msgType}`);
 
-      // Skip heartbeat responses
+      // Handle heartbeat responses
       if (inboundMsg.msgType === "heartbeat") {
-        console.log(`[XY-${serverId}] Skipping ${inboundMsg.msgType} message`);
+        console.log(`[XY-${serverId}] Received heartbeat response`);
+        // ✅ Report health: application-level heartbeat received
+        // This prevents openclaw health-monitor from marking connection as stale
+        this.onHealthEvent?.();
         return;
       }
 
