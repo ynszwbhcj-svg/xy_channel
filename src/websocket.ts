@@ -79,6 +79,9 @@ export class XYWebSocketManager extends EventEmitter {
   private log: (msg: string, ...args: any[]) => void;
   private error: (msg: string, ...args: any[]) => void;
 
+  // Health event callback
+  private onHealthEvent?: () => void;
+
   constructor(
     private config: XYChannelConfig,
     private runtime?: RuntimeEnv
@@ -86,6 +89,13 @@ export class XYWebSocketManager extends EventEmitter {
     super();
     this.log = runtime?.log ?? console.log;
     this.error = runtime?.error ?? console.error;
+  }
+
+  /**
+   * Set health event callback to report activity to OpenClaw framework.
+   */
+  setHealthEventCallback(callback: () => void): void {
+    this.onHealthEvent = callback;
   }
 
   /**
@@ -434,7 +444,8 @@ export class XYWebSocketManager extends EventEmitter {
       },
       serverId,
       this.log,
-      this.error
+      this.error,
+      this.onHealthEvent  // ✅ Pass health event callback
     );
 
     heartbeat.start();

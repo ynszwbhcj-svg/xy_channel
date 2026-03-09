@@ -26,7 +26,8 @@ export class HeartbeatManager {
     private onTimeout: () => void,
     private serverName: string = "unknown",
     logFn?: (msg: string, ...args: any[]) => void,
-    errorFn?: (msg: string, ...args: any[]) => void
+    errorFn?: (msg: string, ...args: any[]) => void,
+    private onHeartbeatSuccess?: () => void  // ✅ 新增：心跳成功回调
   ) {
     this.log = logFn ?? console.log;
     this.error = errorFn ?? console.error;
@@ -46,6 +47,8 @@ export class HeartbeatManager {
         clearTimeout(this.timeoutTimer);
         this.timeoutTimer = null;
       }
+      // ✅ Report health: heartbeat successful
+      this.onHeartbeatSuccess?.();
     });
 
     // Start interval timer

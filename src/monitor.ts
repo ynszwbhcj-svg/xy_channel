@@ -10,6 +10,7 @@ export type MonitorXYOpts = {
   runtime?: RuntimeEnv;
   abortSignal?: AbortSignal;
   accountId?: string;
+  setStatus?: (status: { lastEventAt?: number; lastInboundAt?: number; connected?: boolean }) => void;
 };
 
 /**
@@ -53,12 +54,24 @@ export async function monitorXYProvider(opts: MonitorXYOpts = {}): Promise<void>
 
   const accountId = opts.accountId ?? "default";
 
+  // Create trackEvent function to report health to OpenClaw framework
+  const trackEvent = opts.setStatus
+    ? () => {
+        opts.setStatus!({ lastEventAt: Date.now(), lastInboundAt: Date.now() });
+      }
+    : undefined;
+
   // 🔍 Diagnose WebSocket managers before gateway start
   console.log("🔍 [DIAGNOSTICS] Checking WebSocket managers before gateway start...");
   diagnoseAllManagers();
 
   // Get WebSocket manager (cached)
   const wsManager = getXYWebSocketManager(account);
+
+  // ✅ Set health event callback for heartbeat reporting
+  if (trackEvent) {
+    wsManager.setHealthEventCallback(trackEvent);
+  }
 
   // Track logged servers to avoid duplicate logs
   const loggedServers = new Set<string>();
@@ -78,6 +91,9 @@ export async function monitorXYProvider(opts: MonitorXYOpts = {}): Promise<void>
       const messageKey = `${sessionId}::${message.id}`;
 
       log(`[MONITOR-HANDLER] ####### messageHandler triggered: serverId=${serverId}, sessionId=${sessionId}, messageId=${message.id} #######`);
+
+      // ✅ Report health: received a message
+      trackEvent?.();
 
       // Check for duplicate message handling
       if (activeMessages.has(messageKey)) {
@@ -118,11 +134,18 @@ export async function monitorXYProvider(opts: MonitorXYOpts = {}): Promise<void>
         log(`XY gateway: ${serverId} connected`);
         loggedServers.add(serverId);
       }
+      // ✅ Report health: connection established
+      trackEvent?.();
+      opts.setStatus?.({ connected: true });
     };
 
     const disconnectedHandler = (serverId: string) => {
       console.warn(`XY gateway: ${serverId} disconnected`);
       loggedServers.delete(serverId);
+      // ✅ Report disconnection status (only if all servers disconnected)
+      if (loggedServers.size === 0) {
+        opts.setStatus?.({ connected: false });
+      }
     };
 
     const errorHandler = (err: Error, serverId: string) => {
