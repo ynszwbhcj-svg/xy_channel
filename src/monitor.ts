@@ -2,7 +2,7 @@
 // Follows feishu/monitor.account.ts and feishu/monitor.transport.ts pattern
 import type { RuntimeEnv } from "openclaw/plugin-sdk";
 import { resolveXYConfig } from "./config.js";
-import { getXYWebSocketManager, diagnoseAllManagers, cleanupOrphanConnections } from "./client.js";
+import { getXYWebSocketManager, diagnoseAllManagers, cleanupOrphanConnections, removeXYWebSocketManager } from "./client.js";
 import { handleXYMessage } from "./bot.js";
 
 export type MonitorXYOpts = {
@@ -152,6 +152,9 @@ export async function monitorXYProvider(opts: MonitorXYOpts = {}): Promise<void>
       // ✅ Disconnect the wsManager to prevent connection leaks
       // This is safe because each gateway lifecycle should have clean connections
       wsManager.disconnect();
+
+      // ✅ Remove manager from cache to prevent reusing dirty state
+      removeXYWebSocketManager(account);
 
       loggedServers.clear();
       activeMessages.clear();

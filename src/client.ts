@@ -46,6 +46,24 @@ export function getXYWebSocketManager(config: XYChannelConfig): XYWebSocketManag
 }
 
 /**
+ * Remove a specific WebSocket manager from cache.
+ * Disconnects the manager and removes it from the cache.
+ */
+export function removeXYWebSocketManager(config: XYChannelConfig): void {
+  const cacheKey = `${config.apiKey}-${config.agentId}`;
+  const manager = wsManagerCache.get(cacheKey);
+
+  if (manager) {
+    console.log(`🗑️  [WS-MANAGER-CACHE] Removing manager from cache: ${cacheKey}`);
+    manager.disconnect();
+    wsManagerCache.delete(cacheKey);
+    console.log(`🗑️  [WS-MANAGER-CACHE] Manager removed, remaining managers: ${wsManagerCache.size}`);
+  } else {
+    console.log(`⚠️  [WS-MANAGER-CACHE] Manager not found in cache: ${cacheKey}`);
+  }
+}
+
+/**
  * Clear all cached WebSocket managers.
  */
 export function clearXYWebSocketManagers(): void {
