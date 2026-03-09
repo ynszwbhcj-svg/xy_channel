@@ -99,6 +99,7 @@ export const xyPlugin: ChannelPlugin = {
         runtime: context.runtime,
         abortSignal: context.abortSignal,
         accountId: context.accountId,
+        setStatus: context.setStatus,
       });
     },
   },
