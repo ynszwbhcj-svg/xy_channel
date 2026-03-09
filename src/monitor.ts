@@ -190,13 +190,13 @@ export async function monitorXYProvider(opts: MonitorXYOpts = {}): Promise<void>
 
     const handleAbort = () => {
       log("XY gateway: abort signal received, stopping");
-      cleanup();
-      log("XY gateway stopped");
+      // cleanup();
+      // log("XY gateway stopped");
       resolve();
     };
 
     if (opts.abortSignal?.aborted) {
-      cleanup();
+      // cleanup();
       resolve();
       return;
     }

@@ -33,6 +33,7 @@ export const xyPlugin: ChannelPlugin = {
   agentPrompt: {
       messageToolHints: () => [
         "- xiaoyi targeting: omit `target` to reply to the current conversation (auto-inferred). Explicit targets: `default`",
+        "- sendMedia requires a text reply"
       ],
     },
 
