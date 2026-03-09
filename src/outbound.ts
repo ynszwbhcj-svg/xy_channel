@@ -10,6 +10,41 @@ import { getLatestSessionContext } from "./tools/session-manager.js";
 // Special marker for default push delivery when no target is specified
 const DEFAULT_PUSH_MARKER = "default";
 
+// File extension to MIME type mapping
+const FILE_TYPE_TO_MIME_TYPE: Record<string, string> = {
+  txt: "text/plain",
+  html: "text/html",
+  css: "text/css",
+  js: "application/javascript",
+  json: "application/json",
+  png: "image/png",
+  jpeg: "image/jpeg",
+  jpg: "image/jpeg",
+  gif: "image/gif",
+  svg: "image/svg+xml",
+  pdf: "application/pdf",
+  zip: "application/zip",
+  doc: "application/msword",
+  docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  xls: "application/vnd.ms-excel",
+  xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  ppt: "application/vnd.ms-powerpoint",
+  pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  mp3: "audio/mpeg",
+  mp4: "video/mp4",
+};
+
+/**
+ * Get MIME type from file extension
+ */
+function getMimeTypeFromFilename(filename: string): string {
+  const extension = filename.split(".").pop()?.toLowerCase();
+  if (extension && FILE_TYPE_TO_MIME_TYPE[extension]) {
+    return FILE_TYPE_TO_MIME_TYPE[extension];
+  }
+  return "text/plain"; // Default fallback
+}
+
 /**
  * Outbound adapter for sending messages from OpenClaw to XY.
  * Uses Push service for direct message delivery.
@@ -159,7 +194,7 @@ export const xyOutbound: ChannelOutboundAdapter = {
     // Get filename and mime type from mediaUrl
     // mediaUrl may be a local file path or URL
     const fileName = mediaUrl.split("/").pop() || "unknown";
-    const mimeType = "text/plain";
+    const mimeType = getMimeTypeFromFilename(fileName);
 
     // Build agent_response message
     const agentResponse: OutboundWebSocketMessage = {
