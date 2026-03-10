@@ -20,8 +20,8 @@ interface PushRequest {
     artifacts: Array<{
       artifactId: string;
       parts: Array<{
-        kind: "data";
-        data: Record<string, any>;
+        kind: "text";
+        text: string;
       }>;
     }>;
   };
@@ -93,8 +93,8 @@ export class XYPushService {
               artifactId: randomUUID(),
               parts: [
                 {
-                  kind: "data",
-                  data: data || { content },
+                  kind: "text",
+                  text: content,
                 },
               ],
             },

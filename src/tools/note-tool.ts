@@ -13,7 +13,7 @@ import type { A2ADataEvent } from "../types.js";
 export const noteTool: any = {
   name: "create_note",
   label: "Create Note",
-  description: "在用户设备上创建备忘录。需要提供备忘录标题和内容。",
+  description: "在用户设备上创建备忘录。需要提供备忘录标题和内容。注意:操作超时时间为60秒,请勿重复调用此工具,如果超时或失败,最多重试一次。",
   parameters: {
     type: "object",
     properties: {
@@ -83,12 +83,12 @@ export const noteTool: any = {
       },
     };
 
-    // Send command and wait for response (5 second timeout)
+    // Send command and wait for response (60 second timeout)
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
         wsManager.off("data-event", handler);
-        reject(new Error("创建备忘录超时（10秒）"));
-      }, 10000);
+        reject(new Error("创建备忘录超时（60秒）"));
+      }, 60000);
 
       // Listen for data events from WebSocket
       const handler = (event: A2ADataEvent) => {

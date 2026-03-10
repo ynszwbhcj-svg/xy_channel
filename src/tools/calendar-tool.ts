@@ -14,7 +14,7 @@ import type { A2ADataEvent } from "../types.js";
 export const calendarTool: any = {
   name: "create_calendar_event",
   label: "Create Calendar Event",
-  description: "在用户设备上创建日程。需要提供日程标题、开始时间和结束时间。时间格式必须为：yyyy-mm-dd hh:mm:ss（例如：2024-01-15 14:30:00）",
+  description: "在用户设备上创建日程。需要提供日程标题、开始时间和结束时间。时间格式必须为：yyyy-mm-dd hh:mm:ss（例如：2024-01-15 14:30:00）。注意：该工具执行时间较长（最多60秒），请勿重复调用，超时或失败时最多重试一次。",
   parameters: {
     type: "object",
     properties: {
@@ -90,7 +90,7 @@ export const calendarTool: any = {
     const command = {
       header: {
         namespace: "Common",
-        name: "Action",
+        name: "ActionAndResult",
       },
       payload: {
         cardParam: {},
@@ -122,16 +122,16 @@ export const calendarTool: any = {
       },
     };
 
-    // Send command and wait for response (5 second timeout)
+    // Send command and wait for response (60 second timeout)
     logger.log(`[CALENDAR_TOOL] ⏳ Setting up promise to wait for calendar event response...`);
-    logger.log(`[CALENDAR_TOOL]   - Timeout: 5 seconds`);
+    logger.log(`[CALENDAR_TOOL]   - Timeout: 60 seconds`);
 
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
-        logger.error(`[CALENDAR_TOOL] ⏰ Timeout: No response received within 5 seconds`);
+        logger.error(`[CALENDAR_TOOL] ⏰ Timeout: No response received within 60 seconds`);
         wsManager.off("data-event", handler);
-        reject(new Error("创建日程超时（15秒）"));
-      }, 15000);
+        reject(new Error("创建日程超时（60秒）"));
+      }, 60000);
 
       // Listen for data events from WebSocket
       const handler = (event: A2ADataEvent) => {

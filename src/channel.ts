@@ -33,7 +33,7 @@ export const xyPlugin: ChannelPlugin = {
   agentPrompt: {
       messageToolHints: () => [
         "- xiaoyi targeting: omit `target` to reply to the current conversation (auto-inferred). Explicit targets: `default`",
-        "- sendMedia requires a text reply"
+        "- If the user requests a file, you can call the message tool with the xiaoyi-channel channel to return it. Note: sendMedia requires a text reply."
       ],
     },
 
