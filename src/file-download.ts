@@ -10,8 +10,11 @@ import { logger } from "./utils/logger.js";
 export async function downloadFile(url: string, destPath: string): Promise<void> {
   logger.debug(`Downloading file from ${url} to ${destPath}`);
 
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 30000); // 30 seconds timeout
+
   try {
-    const response = await fetch(url);
+    const response = await fetch(url, { signal: controller.signal });
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}: ${response.statusText}`);
     }
@@ -22,8 +25,14 @@ export async function downloadFile(url: string, destPath: string): Promise<void>
 
     logger.debug(`File downloaded successfully: ${destPath}`);
   } catch (error) {
+    if (error.name === 'AbortError') {
+      logger.error(`Download timeout (30s) for ${url}`);
+      throw new Error(`Download timeout after 30 seconds`);
+    }
     logger.error(`Failed to download file from ${url}:`, error);
     throw error;
+  } finally {
+    clearTimeout(timeout);
   }
 }
 
