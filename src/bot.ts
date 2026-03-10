@@ -123,6 +123,19 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
 
     log(`[BOT] ✅ Session registered for tools`);
 
+    // Send initial status update immediately after parsing message
+    log(`[STATUS] Sending initial status update for session ${parsed.sessionId}`);
+    void sendStatusUpdate({
+      config,
+      sessionId: parsed.sessionId,
+      taskId: parsed.taskId,
+      messageId: parsed.messageId,
+      text: "任务正在处理中，请稍后~",
+      state: "working",
+    }).catch((err) => {
+      error(`Failed to send initial status update:`, err);
+    });
+
     // Extract text and files from parts
     const text = extractTextFromParts(parsed.parts);
     const fileParts = extractFileParts(parsed.parts);

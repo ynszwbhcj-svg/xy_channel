@@ -70,7 +70,7 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
       }).catch((err) => {
         error(`Failed to send status update:`, err);
       });
-    }, 60000); // 60 seconds
+    }, 30000); // 30 seconds
   };
 
   /**
