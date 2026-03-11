@@ -101,6 +101,68 @@ export async function sendA2AResponse(params: SendA2AResponseParams): Promise<vo
 }
 
 /**
+ * Parameters for sending a reasoning text update (intermediate, streamed).
+ */
+export interface SendReasoningTextUpdateParams {
+  config: XYChannelConfig;
+  sessionId: string;
+  taskId: string;
+  messageId: string;
+  text: string;
+}
+
+/**
+ * Send an A2A artifact-update with reasoningText part.
+ * Used for onToolStart, onToolResult, onReasoningStream, onReasoningEnd, onPartialReply.
+ * append=true, final=false, lastChunk=true, text is suffixed with newline for markdown rendering.
+ */
+export async function sendReasoningTextUpdate(params: SendReasoningTextUpdateParams): Promise<void> {
+  const { config, sessionId, taskId, messageId, text } = params;
+
+  const runtime = getXYRuntime() as any;
+  const log = runtime?.log ?? console.log;
+  const error = runtime?.error ?? console.error;
+
+  const artifact: A2ATaskArtifactUpdateEvent = {
+    taskId,
+    kind: "artifact-update",
+    append: true,
+    lastChunk: true,
+    final: false,
+    artifact: {
+      artifactId: uuidv4(),
+      parts: [
+        {
+          kind: "reasoningText",
+          reasoningText: text + "\n",
+        },
+      ],
+    },
+  };
+
+  const jsonRpcResponse = {
+    jsonrpc: "2.0",
+    id: messageId,
+    result: artifact,
+  };
+
+  const wsManager = getXYWebSocketManager(config);
+  const outboundMessage: OutboundWebSocketMessage = {
+    msgType: "agent_response",
+    agentId: config.agentId,
+    sessionId,
+    taskId,
+    msgDetail: JSON.stringify(jsonRpcResponse),
+  };
+
+  log(`[REASONING_TEXT] 📤 Sending reasoningText update: sessionId=${sessionId}, taskId=${taskId}, text.length=${text.length}`);
+  log(JSON.stringify(outboundMessage, null, 2));
+
+  await wsManager.sendMessage(sessionId, outboundMessage);
+  log(`[REASONING_TEXT] ✅ Sent successfully`);
+}
+
+/**
  * Parameters for sending a status update.
  */
 export interface SendStatusUpdateParams {

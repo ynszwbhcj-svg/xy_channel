@@ -106,7 +106,12 @@ export interface A2AArtifact {
   parts: A2AArtifactPart[];
 }
 
-export type A2AArtifactPart = A2ATextPart | A2ADataPart | A2ACommandPart;
+export interface A2AReasoningTextPart {
+  kind: "reasoningText";
+  reasoningText: string;
+}
+
+export type A2AArtifactPart = A2ATextPart | A2ADataPart | A2ACommandPart | A2AReasoningTextPart;
 
 export interface A2ACommandPart {
   kind: "command";

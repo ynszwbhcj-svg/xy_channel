@@ -2,7 +2,7 @@
 import type { ClawdbotConfig, RuntimeEnv, ReplyPayload } from "openclaw/plugin-sdk";
 import { createReplyPrefixContext } from "openclaw/plugin-sdk";
 import { getXYRuntime } from "./runtime.js";
-import { sendA2AResponse, sendStatusUpdate } from "./formatter.js";
+import { sendA2AResponse, sendStatusUpdate, sendReasoningTextUpdate } from "./formatter.js";
 import { resolveXYConfig } from "./config.js";
 import type { XYChannelConfig } from "./types.js";
 
@@ -117,6 +117,16 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
           accumulatedText += text;
           hasSentResponse = true;
           log(`[DELIVER ACCUMULATE] Accumulated text, current length=${accumulatedText.length}`);
+
+          // Also stream text as reasoningText for real-time display
+          await sendReasoningTextUpdate({
+            config,
+            sessionId,
+            taskId,
+            messageId,
+            text,
+          });
+          log(`[DELIVER] ✅ Sent deliver text as reasoningText update`);
         } catch (deliverError) {
           error(`Failed to deliver message:`, deliverError);
         }
@@ -192,21 +202,19 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
       onToolStart: async ({ name, phase }) => {
         log(`[TOOL START] 🔧 Tool execution started/updated: name=${name}, phase=${phase}, session=${sessionId}, taskId=${taskId}`);
 
-        // Send status update when tool starts executing
         if (phase === "start") {
           const toolName = name || "unknown";
           try {
-            await sendStatusUpdate({
+            await sendReasoningTextUpdate({
               config,
               sessionId,
               taskId,
               messageId,
               text: `正在使用工具: ${toolName}...`,
-              state: "working",
             });
-            log(`[TOOL START] ✅ Sent status update for tool start: ${toolName}`);
+            log(`[TOOL START] ✅ Sent reasoningText update for tool start: ${toolName}`);
           } catch (err) {
-            error(`[TOOL START] ❌ Failed to send tool start status:`, err);
+            error(`[TOOL START] ❌ Failed to send tool start reasoningText:`, err);
           }
         }
       },
@@ -225,25 +233,20 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
         }
 
         try {
-          // Send tool result as a status update (non-final)
           if (text.length > 0 || hasMedia) {
             const resultText = text.length > 0 ? text : "工具执行完成";
 
-            await sendStatusUpdate({
+            await sendReasoningTextUpdate({
               config,
               sessionId,
               taskId,
               messageId,
               text: resultText,
-              state: "working",
             });
-            log(`[TOOL RESULT] ✅ Sent tool result status update`);
+            log(`[TOOL RESULT] ✅ Sent tool result as reasoningText update`);
           }
-
-          // Note: Tool results will also be accumulated and sent as part of the final response
-          // via the deliver callback's accumulatedText mechanism
         } catch (err) {
-          error(`[TOOL RESULT] ❌ Failed to send tool result:`, err);
+          error(`[TOOL RESULT] ❌ Failed to send tool result reasoningText:`, err);
         }
       },
 
@@ -258,40 +261,18 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
         }
 
         try {
-          // Send reasoning chunk as a status update (non-final)
-          // This provides real-time feedback to the user during thinking
           if (text.length > 0) {
-            await sendStatusUpdate({
+            await sendReasoningTextUpdate({
               config,
               sessionId,
               taskId,
               messageId,
-              text: `思考中: ${text.slice(0, 100)}${text.length > 100 ? "..." : ""}`,
-              state: "working",
+              text,
             });
-            log(`[REASONING STREAM] ✅ Sent reasoning chunk status update`);
+            log(`[REASONING STREAM] ✅ Sent reasoning chunk as reasoningText update`);
           }
         } catch (err) {
-          error(`[REASONING STREAM] ❌ Failed to send reasoning chunk:`, err);
-        }
-      },
-
-      // 🏁 Reasoning/thinking end callback
-      onReasoningEnd: async () => {
-        log(`[REASONING END] 🏁 Reasoning/thinking block ended: session=${sessionId}, taskId=${taskId}`);
-
-        try {
-          await sendStatusUpdate({
-            config,
-            sessionId,
-            taskId,
-            messageId,
-            text: "思考完成，正在努力工作中...",
-            state: "working",
-          });
-          log(`[REASONING END] ✅ Sent reasoning end status update`);
-        } catch (err) {
-          error(`[REASONING END] ❌ Failed to send reasoning end status:`, err);
+          error(`[REASONING STREAM] ❌ Failed to send reasoning chunk reasoningText:`, err);
         }
       },
 
@@ -308,25 +289,18 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
         }
 
         try {
-          // Send partial reply chunk as a status update for real-time preview
-          // This provides "typing" effect feedback to the user
           if (text.length > 0) {
-            // Truncate to reasonable length for status update (avoid overwhelming the UI)
-            const previewText = text.slice(0, 150);
-            const isTruncated = text.length > 150;
-
-            await sendStatusUpdate({
+            await sendReasoningTextUpdate({
               config,
               sessionId,
               taskId,
               messageId,
-              text: isTruncated ? `生成中: ${previewText}...` : `生成中: ${previewText}`,
-              state: "working",
+              text,
             });
-            log(`[PARTIAL REPLY] ✅ Sent partial reply status update (truncated=${isTruncated})`);
+            log(`[PARTIAL REPLY] ✅ Sent partial reply as reasoningText update`);
           }
         } catch (err) {
-          error(`[PARTIAL REPLY] ❌ Failed to send partial reply:`, err);
+          error(`[PARTIAL REPLY] ❌ Failed to send partial reply reasoningText:`, err);
         }
       },
     },
