@@ -162,6 +162,17 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
         if (hasSentResponse && !finalSent) {
           log(`[ON_IDLE] Sending accumulated text, length=${accumulatedText.length}`);
           try {
+            // Send status update before final message
+            await sendStatusUpdate({
+              config,
+              sessionId,
+              taskId,
+              messageId,
+              text: "任务处理已完成~",
+              state: "completed",
+            });
+            log(`[ON_IDLE] ✅ Sent completion status update`);
+
             await sendA2AResponse({
               config,
               sessionId,
