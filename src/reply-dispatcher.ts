@@ -205,16 +205,17 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
         if (phase === "start") {
           const toolName = name || "unknown";
           try {
-            await sendReasoningTextUpdate({
+            await sendStatusUpdate({
               config,
               sessionId,
               taskId,
               messageId,
               text: `正在使用工具: ${toolName}...`,
+              state: "working",
             });
-            log(`[TOOL START] ✅ Sent reasoningText update for tool start: ${toolName}`);
+            log(`[TOOL START] ✅ Sent status update for tool start: ${toolName}`);
           } catch (err) {
-            error(`[TOOL START] ❌ Failed to send tool start reasoningText:`, err);
+            error(`[TOOL START] ❌ Failed to send tool start status:`, err);
           }
         }
       },
@@ -236,17 +237,18 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
           if (text.length > 0 || hasMedia) {
             const resultText = text.length > 0 ? text : "工具执行完成";
 
-            await sendReasoningTextUpdate({
+            await sendStatusUpdate({
               config,
               sessionId,
               taskId,
               messageId,
               text: resultText,
+              state: "working",
             });
-            log(`[TOOL RESULT] ✅ Sent tool result as reasoningText update`);
+            log(`[TOOL RESULT] ✅ Sent tool result as status update`);
           }
         } catch (err) {
-          error(`[TOOL RESULT] ❌ Failed to send tool result reasoningText:`, err);
+          error(`[TOOL RESULT] ❌ Failed to send tool result status:`, err);
         }
       },
 
@@ -260,20 +262,20 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
           log(`[REASONING STREAM]   - text preview: "${text.slice(0, 200)}"`);
         }
 
-        try {
-          if (text.length > 0) {
-            await sendReasoningTextUpdate({
-              config,
-              sessionId,
-              taskId,
-              messageId,
-              text,
-            });
-            log(`[REASONING STREAM] ✅ Sent reasoning chunk as reasoningText update`);
-          }
-        } catch (err) {
-          error(`[REASONING STREAM] ❌ Failed to send reasoning chunk reasoningText:`, err);
-        }
+        // try {
+        //   if (text.length > 0) {
+        //     await sendReasoningTextUpdate({
+        //       config,
+        //       sessionId,
+        //       taskId,
+        //       messageId,
+        //       text,
+        //     });
+        //     log(`[REASONING STREAM] ✅ Sent reasoning chunk as reasoningText update`);
+        //   }
+        // } catch (err) {
+        //   error(`[REASONING STREAM] ❌ Failed to send reasoning chunk reasoningText:`, err);
+        // }
       },
 
       // 📝 Partial reply streaming callback (real-time preview)
@@ -296,8 +298,9 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
               taskId,
               messageId,
               text,
+              append: false,
             });
-            log(`[PARTIAL REPLY] ✅ Sent partial reply as reasoningText update`);
+            log(`[PARTIAL REPLY] ✅ Sent partial reply as reasoningText update (append=false)`);
           }
         } catch (err) {
           error(`[PARTIAL REPLY] ❌ Failed to send partial reply reasoningText:`, err);

@@ -109,6 +109,7 @@ export interface SendReasoningTextUpdateParams {
   taskId: string;
   messageId: string;
   text: string;
+  append?: boolean; // defaults to true
 }
 
 /**
@@ -117,7 +118,7 @@ export interface SendReasoningTextUpdateParams {
  * append=true, final=false, lastChunk=true, text is suffixed with newline for markdown rendering.
  */
 export async function sendReasoningTextUpdate(params: SendReasoningTextUpdateParams): Promise<void> {
-  const { config, sessionId, taskId, messageId, text } = params;
+  const { config, sessionId, taskId, messageId, text, append = true } = params;
 
   const runtime = getXYRuntime() as any;
   const log = runtime?.log ?? console.log;
@@ -126,7 +127,7 @@ export async function sendReasoningTextUpdate(params: SendReasoningTextUpdatePar
   const artifact: A2ATaskArtifactUpdateEvent = {
     taskId,
     kind: "artifact-update",
-    append: true,
+    append,
     lastChunk: true,
     final: false,
     artifact: {
@@ -134,7 +135,7 @@ export async function sendReasoningTextUpdate(params: SendReasoningTextUpdatePar
       parts: [
         {
           kind: "reasoningText",
-          reasoningText: text + "\n",
+          reasoningText: text,
         },
       ],
     },
