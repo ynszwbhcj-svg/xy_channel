@@ -157,7 +157,6 @@ export async function sendReasoningTextUpdate(params: SendReasoningTextUpdatePar
   };
 
   log(`[REASONING_TEXT] 📤 Sending reasoningText update: sessionId=${sessionId}, taskId=${taskId}, text.length=${text.length}`);
-  log(JSON.stringify(outboundMessage, null, 2));
 
   await wsManager.sendMessage(sessionId, outboundMessage);
   log(`[REASONING_TEXT] ✅ Sent successfully`);
