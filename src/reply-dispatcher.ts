@@ -189,6 +189,33 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
           }
         } else {
           log(`[ON_IDLE] Skipping final message: hasSentResponse=${hasSentResponse}, finalSent=${finalSent}`);
+
+          // Task was interrupted - send failure status and error response
+          try {
+            await sendStatusUpdate({
+              config,
+              sessionId,
+              taskId,
+              messageId,
+              text: "任务处理中断了~",
+              state: "failed",
+            });
+            log(`[ON_IDLE] ✅ Sent failure status update`);
+
+            await sendA2AResponse({
+              config,
+              sessionId,
+              taskId,
+              messageId,
+              text: "任务执行异常，请重试~",
+              append: false,
+              final: true,
+            });
+            finalSent = true;
+            log(`[ON_IDLE] ✅ Sent error response`);
+          } catch (err) {
+            error(`[ON_IDLE] Failed to send failure status and error response:`, err);
+          }
         }
 
         // Stop status updates
@@ -197,9 +224,6 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
 
       onCleanup: () => {
         log(`[ON_CLEANUP] Reply cleanup for session ${sessionId}, hasSentResponse=${hasSentResponse}, finalSent=${finalSent}`);
-
-        // Stop status updates
-        stopStatusInterval();
       },
     });
 
