@@ -205,17 +205,31 @@ export const searchCalendarTool: any = {
           wsManager.off("data-event", handler);
 
           if (event.status === "success" && event.outputs) {
-            logger.log(`[SEARCH_CALENDAR_TOOL] ✅ Calendar events retrieved successfully`);
+            logger.log(`[SEARCH_CALENDAR_TOOL] ✅ Calendar events response received`);
             logger.log(`[SEARCH_CALENDAR_TOOL]   - outputs:`, JSON.stringify(event.outputs));
+
+            // Check for error code in outputs
+            if (event.outputs.retErrCode && event.outputs.retErrCode !== "0") {
+              logger.error(`[SEARCH_CALENDAR_TOOL] ❌ Device returned error`);
+              logger.error(`[SEARCH_CALENDAR_TOOL]   - retErrCode: ${event.outputs.retErrCode}`);
+              logger.error(`[SEARCH_CALENDAR_TOOL]   - errMsg: ${event.outputs.errMsg || "Unknown error"}`);
+              reject(new Error(`检索日程失败: ${event.outputs.errMsg || "未知错误"} (错误代码: ${event.outputs.retErrCode})`));
+              return;
+            }
 
             // Return the result directly as requested
             const result = event.outputs.result;
+
+            // Ensure result is not undefined
+            if (result === undefined) {
+              logger.warn(`[SEARCH_CALENDAR_TOOL] ⚠️ Result is undefined, returning empty result`);
+            }
 
             resolve({
               content: [
                 {
                   type: "text",
-                  text: JSON.stringify(result),
+                  text: result !== undefined ? JSON.stringify(result) : "[]",
                 },
               ],
             });
