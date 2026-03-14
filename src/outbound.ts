@@ -127,8 +127,11 @@ export const xyOutbound: ChannelOutboundAdapter = {
     // Extract title (first 57 chars or first line)
     const title = text.split("\n")[0].slice(0, 57);
 
+    // Truncate push content to max length 1000
+    const pushText = text.length > 1000 ? text.slice(0, 1000) : text;
+
     // Send push message (content, title, data, sessionId)
-    await pushService.sendPush(text, title, undefined, actualTo);
+    await pushService.sendPush(pushText, title, undefined, actualTo);
 
     console.log(`[xyOutbound.sendText] Completed successfully`);
 
