@@ -319,11 +319,6 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
         const hasMedia = Boolean(payload.mediaUrl || (payload.mediaUrls?.length ?? 0) > 0);
 
         log(`[PARTIAL REPLY] 📝 Partial reply chunk received: session=${sessionId}, taskId=${taskId}`);
-        log(`[PARTIAL REPLY]   - text.length=${text.length}`);
-        log(`[PARTIAL REPLY]   - hasMedia=${hasMedia}`);
-        if (text.length > 0) {
-          log(`[PARTIAL REPLY]   - text preview: "${text.slice(0, 200)}"`);
-        }
 
         try {
           if (text.length > 0) {
