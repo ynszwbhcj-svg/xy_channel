@@ -89,6 +89,7 @@ function formatSkillData(rawSkills: RawSkill[], installedSkills: string[]): Form
       skillDesc: skill.skillDesc,
       downloadPath: skill.packUrl,
       status: isInstalled ? "已安装" : "未安装",
+      rrfScore: skill.rrfScore,
     });
   }
 
@@ -186,8 +187,21 @@ export async function searchTools(options: SearchToolsOptions): Promise<ToolSear
         return null;
       }
 
-      let filteredTools = topTools.filter((tool) => tool.status === "未安装");
-      console.log(`${PLUGIN_LOG_PREFIX} [DEBUG] After filtering uninstalled: ${filteredTools.length}, ids: ${filteredTools.map((t: FormattedSkill) => t.skillId).join(", ")}`);
+      const hasInstalledWithHighScore = topTools.some(
+        (tool) => tool.status === "已安装" && (tool.rrfScore ?? 0) >= 0.016
+      );
+      if (hasInstalledWithHighScore) {
+        console.log(`${PLUGIN_LOG_PREFIX} [DEBUG] Top 2 has installed skill with rrfScore >= 0.016, returning null`);
+        return null;
+      }
+
+      let filteredTools = topTools.filter((tool) => tool.status === "未安装" && (tool.rrfScore ?? 0) >= 0.016);
+      console.log(`${PLUGIN_LOG_PREFIX} [DEBUG] After filtering uninstalled with rrfScore >= 0.016: ${filteredTools.length}, details: ${filteredTools.map((t: FormattedSkill) => `${t.skillId}(rrfScore=${t.rrfScore})`).join(", ")}`);
+
+      if (filteredTools.length === 0) {
+        console.log(`${PLUGIN_LOG_PREFIX} [DEBUG] No uninstalled skills with rrfScore >= 0.016, returning null`);
+        return null;
+      }
 
       return {
         tools: filteredTools,
