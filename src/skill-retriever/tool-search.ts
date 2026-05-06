@@ -19,6 +19,10 @@ export function extractUserQuery(fullPrompt: string): string {
     return "";
   }
 
+  if (fullPrompt.toLowerCase().includes("cron")) {
+    return "";
+  }
+
   return afterLastNewline;
 }
 
