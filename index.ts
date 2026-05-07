@@ -19,33 +19,9 @@ import {
 } from "./src/cspl/utils.js";
 import { setXYRuntime } from "./src/runtime.js";
 import { tryInjectSteer } from "./src/steer-injector.js";
-import { selfEvolutionManager } from "./src/utils/self-evolution-manager.js";
-import {
-  TOOL_CALL_NUDGE_THRESHOLD,
-  toolCallNudgeManager,
-} from "./src/utils/tool-call-nudge-manager.js";
+import { registerSelfEvolutionToolResultNudge } from "./src/self-evolution-tool-result-nudge.js";
 import { createBeforePromptBuildHandler } from "./src/skill-retriever/hooks.js";
 import { normalizeToolRetrieverConfig } from "./src/skill-retriever/config.js";
-
-
-const SELF_EVOLUTION_NUDGE_MESSAGE =
-  "[系统消息，非用户发言，无需主动告知用户] 当前任务已经调用了较多次数的工具。请先完成用户主要任务。完成后，如果这些工具调用暴露出稳定、通用、可复用的流程、排错经验或踩坑点，再考虑阅读 xiaoyi-self-evolution 技能进行评估；如果没有高价值候选经验，请忽略本提醒。";
-
-function shouldCountToolCall(toolName: string): boolean {
-  if (toolName === "save_self_evolution_skill") {
-    return false;
-  }
-
-  if (toolName === "call_device_tool") {
-    return false;
-  }
-
-  if (toolName.endsWith("_tool_schema")) {
-    return false;
-  }
-
-  return true;
-}
 
 const plugin = {
   id: "xiaoyi-channel",
@@ -68,27 +44,9 @@ const plugin = {
     });
     const beforePromptBuildHandler = createBeforePromptBuildHandler(skillRetrieverConfig);
     api.on("before_prompt_build", beforePromptBuildHandler);
+    registerSelfEvolutionToolResultNudge(api);
 
     api.on("after_tool_call", async (event, ctx) => {
-      const selfEvolutionEnabled = await selfEvolutionManager.isEnabled();
-      if (ctx.sessionKey && selfEvolutionEnabled && shouldCountToolCall(event.toolName)) {
-        try {
-          const { count, shouldNudge } = toolCallNudgeManager.recordToolCall(ctx.sessionKey);
-          api.logger.debug?.(
-            `[SELF_EVOLUTION] Tool call counted: tool=${event.toolName}, count=${count}, threshold=${TOOL_CALL_NUDGE_THRESHOLD}, sessionKey=${ctx.sessionKey}`,
-          );
-
-          if (shouldNudge) {
-            api.logger.info?.(
-              `[SELF_EVOLUTION] Tool call threshold reached, injecting nudge: count=${count}, sessionKey=${ctx.sessionKey}`,
-            );
-            await tryInjectSteer(ctx.sessionKey, SELF_EVOLUTION_NUDGE_MESSAGE);
-          }
-        } catch (err) {
-          api.logger.error(`[SELF_EVOLUTION] after_tool_call nudge error: ${err}`);
-        }
-      }
-
       if (!ALLOWED_TOOLS.includes(event.toolName)) {
         return;
       }
