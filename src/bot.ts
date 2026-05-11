@@ -305,7 +305,7 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
       SenderId: parsed.sessionId,
       Provider: "xiaoyi-channel" as const,
       Surface: "xiaoyi-channel" as const,
-      MessageSid: parsed.messageId,
+      MessageSid: `${parsed.taskId}_${deviceType}`,
       Timestamp: Date.now(),
       WasMentioned: false,
       CommandAuthorized: true,

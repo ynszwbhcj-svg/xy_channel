@@ -423,6 +423,20 @@ function trimUserMetadata(text: string): string {
   return text.replace(/\n{3,}/g, "\n\n");
 }
 
+/**
+ * Extract A2A taskId and deviceType from Conversation info JSON.
+ * bot.ts stores them as MessageSid = "taskId_deviceType".
+ */
+function extractA2AFromConversationInfo(text: string): { taskId: string; deviceType: string } | null {
+  const match = text.match(/Conversation info \(untrusted metadata\):\n```json\n([\s\S]*?)\n```/);
+  if (!match) return null;
+  const msgIdMatch = match[1].match(/"message_id"\s*:\s*"([^"]+)"/);
+  if (!msgIdMatch) return null;
+  const parts = msgIdMatch[1].split("_");
+  if (parts.length < 2) return null;
+  return { taskId: parts[0], deviceType: parts[1] };
+}
+
 export const xiaoyiProvider: ProviderPlugin = {
   id: "xiaoyiprovider",
   label: "Xiaoyi Provider",
@@ -484,6 +498,30 @@ export const xiaoyiProvider: ProviderPlugin = {
     return async (model, context, options) => {
       const dynamicHeaders: Record<string, string> = {};
 
+      // ── Extract A2A taskId/deviceType from Conversation info ──
+      // bot.ts stores taskId_deviceType as MessageSid, which the framework
+      // renders as message_id in the Conversation info JSON block.
+      let extractedTaskId: string | null = null;
+      let extractedDeviceType: string | null = null;
+      if (context.messages) {
+        for (let i = context.messages.length - 1; i >= 0; i--) {
+          const msg = context.messages[i];
+          if (msg.role !== "user") continue;
+          const text = typeof msg.content === "string"
+            ? msg.content
+            : Array.isArray(msg.content)
+              ? msg.content.find((b: any) => b.type === "text")?.text ?? ""
+              : "";
+          if (!text) continue;
+          const extracted = extractA2AFromConversationInfo(text);
+          if (extracted) {
+            extractedTaskId = extracted.taskId;
+            extractedDeviceType = extracted.deviceType;
+            break;
+          }
+        }
+      }
+
       // ── Build dynamic headers ────────────────────────────
       if (ctx.extraParams) {
         const fallbackPrefix = ctx.extraParams[FALLBACK_PREFIX_KEY];
@@ -500,8 +538,23 @@ export const xiaoyiProvider: ProviderPlugin = {
             if (cronTitle) dynamicHeaders["x-cron-title"] = encodeURIComponent(cronTitle);
             if (context.messages?.length === 1) dynamicHeaders["x-cron-flag"] = "begin";
           }
+        } else if (extractedTaskId) {
+          // Session mode: taskId extracted from Conversation info
+          const traceId = extractedTaskId;
+          const sessionId = traceId.split("&")[0];
+          const interactionId = traceId.split("&")[1] ?? "";
+
+          const isCron = isCronTriggered(context.messages);
+          dynamicHeaders[HEADER_TRACE_ID] = isCron ? `cron_${traceId}_${Date.now()}` : traceId;
+          if (isCron) {
+            const cronTitle = extractCronTitle(context.messages);
+            if (cronTitle) dynamicHeaders["x-cron-title"] = encodeURIComponent(cronTitle);
+            if (context.messages?.length === 1) dynamicHeaders["x-cron-flag"] = "begin";
+          }
+          dynamicHeaders[HEADER_SESSION_ID] = sessionId;
+          dynamicHeaders[HEADER_INTERACTION_ID] = interactionId;
         } else {
-          // Session mode: use extraParams cached values
+          // Fallback: use extraParams cached values
           const traceId = ctx.extraParams[HEADER_TRACE_ID];
           const sessionId = ctx.extraParams[HEADER_SESSION_ID];
           const interactionId = ctx.extraParams[HEADER_INTERACTION_ID];
@@ -516,13 +569,11 @@ export const xiaoyiProvider: ProviderPlugin = {
       if (context.systemPrompt) {
         console.log(`[xiaoyiprovider] system prompt length: ${context.systemPrompt.length}`);
       }
-      // Prefer deviceType from extraParams (set by prepareExtraParams).
-      // Fall back to getCurrentSessionContext() because OpenClaw caches
-      // resolvePreparedExtraParams by provider/modelId – the cache key does
-      // not include session-specific data, so deviceType may be missing
-      // from the cached extraParams even when a session is active.
+      // deviceType: prefer value extracted from Conversation info,
+      // then extraParams, then ALS fallback.
       const extraParamsDeviceType = (ctx.extraParams?.[DEVICE_TYPE_KEY] as string) || undefined;
-      const deviceType = extraParamsDeviceType ?? getCurrentSessionContext()?.deviceType;
+      const deviceType = extractedDeviceType || extraParamsDeviceType
+        ?? getCurrentSessionContext()?.deviceType;
 
       // 在发送给模型前，优化 systemPrompt 结构
       if (context.systemPrompt) {
