@@ -29,7 +29,7 @@ import { requireSession } from "./session-helper.js";
  * call_device_tool - 通用端工具调度器。
  * LLM 必须先通过 get_xxx_tool_schema 获取具体工具 schema，再用本工具执行。
  */
-export function createCallDeviceTool(sessionKey: string): any {
+export function createCallDeviceTool(sessionKey: string | undefined): any {
 
   const noteTool = createNoteTool(sessionKey);
   const modifyNoteTool = createModifyNoteTool(sessionKey);

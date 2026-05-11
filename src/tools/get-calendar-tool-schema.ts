@@ -3,7 +3,7 @@ import { createCalendarTool } from "./calendar-tool.js";
 import { createSearchCalendarTool } from "./search-calendar-tool.js";
 import { requireSession } from "./session-helper.js";
 
-export function createGetCalendarToolSchemaTool(sessionKey: string) {
+export function createGetCalendarToolSchemaTool(sessionKey: string | undefined) {
   const calendarTool = createCalendarTool(sessionKey);
   const searchCalendarTool = createSearchCalendarTool(sessionKey);
   return createSchemaTool({

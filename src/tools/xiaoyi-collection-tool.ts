@@ -23,7 +23,7 @@ class ToolInputError extends Error {
  * XY collection tool - retrieves user's collection data from XiaoYi.
  * Returns personalized knowledge data saved in user's collection.
  */
-export function createXiaoyiCollectionTool(sessionKey: string): any {
+export function createXiaoyiCollectionTool(sessionKey: string | undefined): any {
   
   return {
   name: "query_collection",

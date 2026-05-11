@@ -10,7 +10,7 @@ import type { A2ADataEvent } from "../types.js";
  * XY location tool - gets user's current location.
  * Returns WGS84 coordinates (latitude, longitude).
  */
-export function createLocationTool(sessionKey: string): any {
+export function createLocationTool(sessionKey: string | undefined): any {
   return {
   name: "get_user_location",
   label: "Get User Location",

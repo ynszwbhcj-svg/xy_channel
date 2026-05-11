@@ -10,7 +10,7 @@ import type { A2ADataEvent } from "../types.js";
  * XY search contact tool - searches contacts on user's device.
  * Returns matching contact information based on name.
  */
-export function createSearchContactTool(sessionKey: string): any {
+export function createSearchContactTool(sessionKey: string | undefined): any {
   
   return {
   name: "search_contact",

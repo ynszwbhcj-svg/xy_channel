@@ -13,7 +13,7 @@ import type { A2ADataEvent } from "../types.js";
  * IMPORTANT: The returned mediaUris are LOCAL URIs that cannot be downloaded directly.
  * To get publicly accessible URLs, use the upload_photo tool with these URIs.
  */
-export function createSearchPhotoGalleryTool(sessionKey: string): any {
+export function createSearchPhotoGalleryTool(sessionKey: string | undefined): any {
   
   return {
   name: "search_photo_gallery",

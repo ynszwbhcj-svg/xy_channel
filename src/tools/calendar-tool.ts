@@ -11,7 +11,7 @@ import type { A2ADataEvent } from "../types.js";
  * Requires title, dtStart (start time), and dtEnd (end time) parameters.
  * Time format must be: yyyy-mm-dd hh:mm:ss
  */
-export function createCalendarTool(sessionKey: string): any {
+export function createCalendarTool(sessionKey: string | undefined): any {
   
   return {
   name: "create_calendar_event",

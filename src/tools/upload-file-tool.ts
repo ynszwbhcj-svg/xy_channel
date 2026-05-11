@@ -18,7 +18,7 @@ import type { A2ADataEvent } from "../types.js";
  * - After getting public URLs, if further processing is needed, download the file first
  * - URLs returned are publicly accessible
  */
-export function createUploadFileTool(sessionKey: string): any {
+export function createUploadFileTool(sessionKey: string | undefined): any {
   
   return {
   name: "upload_file",

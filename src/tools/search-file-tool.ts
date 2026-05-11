@@ -10,7 +10,7 @@ import type { A2ADataEvent } from "../types.js";
  * XY search file tool - searches files on user's device file system.
  * Returns matching files based on keyword search in file name or content.
  */
-export function createSearchFileTool(sessionKey: string): any {
+export function createSearchFileTool(sessionKey: string | undefined): any {
   
   return {
   name: "search_file",

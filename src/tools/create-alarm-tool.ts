@@ -19,7 +19,7 @@ const DAYS_OF_WEEK_VALUES = ["Mon", "Tues", "Wed", "Thur", "Fri", "Sat", "Sun"];
  *
  * Time format: YYYYMMDD hhmmss (e.g., 20240315 143000)
  */
-export function makeAlarmTool(sessionKey: string): any {
+export function makeAlarmTool(sessionKey: string | undefined): any {
   
   return {
   name: "create_alarm",

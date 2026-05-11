@@ -10,7 +10,7 @@ import type { A2ADataEvent } from "../types.js";
  * XY search message tool - searches SMS messages on user's device.
  * Returns matching messages based on content keyword search.
  */
-export function createSearchMessageTool(sessionKey: string): any {
+export function createSearchMessageTool(sessionKey: string | undefined): any {
   
   return {
   name: "search_message",

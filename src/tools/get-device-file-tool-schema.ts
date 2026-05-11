@@ -4,7 +4,7 @@ import { createUploadFileTool } from "./upload-file-tool.js";
 import { createSaveFileToPhoneTool } from "./save-file-to-phone-tool.js";
 import { requireSession } from "./session-helper.js";
 
-export function createGetDeviceFileToolSchemaTool(sessionKey: string) {
+export function createGetDeviceFileToolSchemaTool(sessionKey: string | undefined) {
   const searchFileTool = createSearchFileTool(sessionKey);
   const saveFileToPhoneTool = createSaveFileToPhoneTool(sessionKey);
   return createSchemaTool({

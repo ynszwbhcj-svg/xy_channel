@@ -16,7 +16,7 @@ import type { A2ADataEvent } from "../types.js";
  *
  * Supports deleting single or multiple alarms in one call.
  */
-export function createDeleteAlarmTool(sessionKey: string): any {
+export function createDeleteAlarmTool(sessionKey: string | undefined): any {
   
   return {
   name: "delete_alarm",

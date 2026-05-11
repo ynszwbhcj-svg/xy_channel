@@ -21,7 +21,7 @@ const DAYS_OF_WEEK_VALUES = ["Mon", "Tues", "Wed", "Thur", "Fri", "Sat", "Sun"];
  * 1. Call search_alarm or create_alarm tool first to get entityId
  * 2. Use the entityId to identify which alarm to modify
  */
-export function createModifyAlarmTool(sessionKey: string): any {
+export function createModifyAlarmTool(sessionKey: string | undefined): any {
   return {
   name: "modify_alarm",
   label: "Modify Alarm",

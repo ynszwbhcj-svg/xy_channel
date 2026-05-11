@@ -18,7 +18,7 @@ const DAYS_OF_WAKE_TYPE_VALUES = [0, 1, 2, 3, 4];
  * At least one search criterion must be provided.
  * Multiple criteria can be combined.
  */
-export function createSearchAlarmTool(sessionKey: string): any {
+export function createSearchAlarmTool(sessionKey: string | undefined): any {
   
   return {
   name: "search_alarm",

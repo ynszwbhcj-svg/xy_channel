@@ -111,7 +111,7 @@ async function downloadRemoteFile(url: string): Promise<string> {
  * XY send file to user tool - sends local files or remote files to user's device.
  * Supports both local file paths and remote URLs.
  */
-export function createSendFileToUserTool(sessionKey: string): any {
+export function createSendFileToUserTool(sessionKey: string | undefined): any {
   return {
   name: "send_file_to_user",
   label: "Send File to User",

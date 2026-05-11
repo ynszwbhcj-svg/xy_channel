@@ -8,7 +8,7 @@ import type { A2ADataEvent } from "../types.js";
  * XY search email tool - searches emails on user's device (花瓣邮箱).
  * Returns matching emails based on query text and search type.
  */
-export function createSearchEmailTool(sessionKey: string): any {
+export function createSearchEmailTool(sessionKey: string | undefined): any {
   
   return {
   name: "search_email",

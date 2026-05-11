@@ -14,7 +14,7 @@ import type { A2ADataEvent } from "../types.js";
  * 1. Call search_photo_gallery tool first to get mediaUris of photos
  * 2. Use the mediaUris (maximum 5 at a time) to get public URLs
  */
-export function createUploadPhotoTool(sessionKey: string): any {
+export function createUploadPhotoTool(sessionKey: string | undefined): any {
   
   return {
   name: "upload_photo",

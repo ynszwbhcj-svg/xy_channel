@@ -23,7 +23,7 @@ class ToolInputError extends Error {
  * XY note tool - creates a note on user's device.
  * Requires title and content parameters.
  */
-export function createNoteTool(sessionKey: string): any {
+export function createNoteTool(sessionKey: string | undefined): any {
   
   return {
   name: "create_note",

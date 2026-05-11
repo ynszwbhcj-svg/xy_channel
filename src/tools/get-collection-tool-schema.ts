@@ -4,7 +4,7 @@ import { createXiaoyiCollectionTool } from "./xiaoyi-collection-tool.js";
 import { createXiaoyiDeleteCollectionTool } from "./xiaoyi-delete-collection-tool.js";
 import { requireSession } from "./session-helper.js";
 
-export function createGetCollectionToolSchemaTool(sessionKey: string) {
+export function createGetCollectionToolSchemaTool(sessionKey: string | undefined) {
   return createSchemaTool({
     name: "get_collection_tool_schema",
     label: "Get Collection Tool Schema",

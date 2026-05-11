@@ -15,7 +15,7 @@ class ToolInputError extends Error {
 /**
  * XY send email tool - sends an email via 花瓣邮箱 on user's device.
  */
-export function createSendEmailTool(sessionKey: string): any {
+export function createSendEmailTool(sessionKey: string | undefined): any {
   
   return {
   name: "send_email",

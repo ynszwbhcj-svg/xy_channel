@@ -15,7 +15,7 @@ class ToolInputError extends Error {
 /**
  * 获取指定时间范围内的全局待办任务列表。
  */
-export function createQueryTodoTaskTool(sessionKey: string): any {
+export function createQueryTodoTaskTool(sessionKey: string | undefined): any {
   
   return {
   name: "query_todo_task",

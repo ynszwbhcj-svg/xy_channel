@@ -9,7 +9,7 @@ import { logger } from "../utils/logger.js";
  * Simulates user interactions on phone screen (click, swipe, input, navigation, etc.)
  * to complete tasks that cannot be done through internet APIs.
  */
-export function createXiaoyiGuiTool(sessionKey: string): any {
+export function createXiaoyiGuiTool(sessionKey: string | undefined): any {
   return {
   name: "xiaoyi_gui_agent",
   label: "XiaoYi GUI Agent",

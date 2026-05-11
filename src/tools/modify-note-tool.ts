@@ -14,7 +14,7 @@ import type { A2ADataEvent } from "../types.js";
  * 1. Call search_notes tool first to get the entityId of target note
  * 2. Use the entityId to append content to that note
  */
-export function createModifyNoteTool(sessionKey: string): any {
+export function createModifyNoteTool(sessionKey: string | undefined): any {
   
   return {
   name: "modify_note",

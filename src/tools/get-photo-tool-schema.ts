@@ -4,7 +4,7 @@ import { createUploadPhotoTool } from "./upload-photo-tool.js";
 import { createSaveMediaToGalleryTool } from "./save-media-to-gallery-tool.js";
 import { requireSession } from "./session-helper.js";
 
-export function createGetPhotoToolSchemaTool(sessionKey: string) {
+export function createGetPhotoToolSchemaTool(sessionKey: string | undefined) {
   const saveMediaToGalleryTool = createSaveMediaToGalleryTool(sessionKey);
   return createSchemaTool({
     name: "get_photo_tool_schema",

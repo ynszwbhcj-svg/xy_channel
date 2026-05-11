@@ -22,7 +22,7 @@ class ToolInputError extends Error {
 /**
  * XY delete collection tool - deletes data from user's XiaoYi collection.
  */
-export function createXiaoyiDeleteCollectionTool(sessionKey: string): any {
+export function createXiaoyiDeleteCollectionTool(sessionKey: string | undefined): any {
   
   return {
   name: "delete_collection",

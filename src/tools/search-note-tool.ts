@@ -10,7 +10,7 @@ import type { A2ADataEvent } from "../types.js";
  * XY search note tool - searches notes on user's device.
  * Returns matching notes based on query string.
  */
-export function createSearchNoteTool(sessionKey: string): any {
+export function createSearchNoteTool(sessionKey: string | undefined): any {
   
   return {
   name: "search_notes",

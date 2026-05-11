@@ -24,7 +24,7 @@ class ToolInputError extends Error {
  * XY save file to phone tool - saves files to user's device file manager.
  * Supports local file paths (auto-uploaded to get public URL) and public URLs.
  */
-export function createSaveFileToPhoneTool(sessionKey: string): any {
+export function createSaveFileToPhoneTool(sessionKey: string | undefined): any {
   
   return {
   name: "save_file_to_file_manager",

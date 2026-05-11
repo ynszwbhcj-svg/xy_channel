@@ -3,7 +3,7 @@ import { createSendEmailTool } from "./send-email-tool.js";
 import { createSearchEmailTool } from "./search-email-tool.js";
 import { requireSession } from "./session-helper.js";
 
-export function createGetEmailToolSchemaTool(sessionKey: string) {
+export function createGetEmailToolSchemaTool(sessionKey: string | undefined) {
   const searchEmailTool = createSearchEmailTool(sessionKey);
   return createSchemaTool({
     name: "get_email_tool_schema",

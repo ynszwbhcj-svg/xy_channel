@@ -17,7 +17,7 @@ import type { A2ADataEvent } from "../types.js";
  * - For evening: 18:00:00 to 24:00:00
  * - For a specific time: use ±1 hour range (e.g., for 3PM, use 14:00:00 to 16:00:00)
  */
-export function createSearchCalendarTool(sessionKey: string): any {
+export function createSearchCalendarTool(sessionKey: string | undefined): any {
   
   return {
   name: "search_calendar_event",

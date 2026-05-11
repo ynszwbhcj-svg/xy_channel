@@ -31,7 +31,7 @@ import { logger } from "../utils/logger.js";
  * @param sessionKey - The OpenClaw session key for the current turn.
  *   Tools will look up the live session context at execute time.
  */
-export function createAllTools(sessionKey: string): ChannelAgentTool[] {
+export function createAllTools(sessionKey: string | undefined): ChannelAgentTool[] {
   logger.log(`[CREATE-ALL-TOOLS] creating tools for sessionKey=${sessionKey}`);
 
   return [

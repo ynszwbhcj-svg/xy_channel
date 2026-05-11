@@ -5,7 +5,7 @@ import { createSearchMessageTool } from "./search-message-tool.js";
 import { createSendMessageTool } from "./send-message-tool.js";
 import { requireSession } from "./session-helper.js";
 
-export function createGetContactToolSchemaTool(sessionKey: string) {
+export function createGetContactToolSchemaTool(sessionKey: string | undefined) {
   const callPhoneTool = createCallPhoneTool(sessionKey);
   const searchMessageTool = createSearchMessageTool(sessionKey);
   const sendMessageTool = createSendMessageTool(sessionKey);

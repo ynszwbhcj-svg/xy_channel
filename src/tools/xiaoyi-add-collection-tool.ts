@@ -23,7 +23,7 @@ class ToolInputError extends Error {
 /**
  * XY add collection tool - adds data to user's XiaoYi collection.
  */
-export function createXiaoyiAddCollectionTool(sessionKey: string): any {
+export function createXiaoyiAddCollectionTool(sessionKey: string | undefined): any {
   
   return {
   name: "add_collection",

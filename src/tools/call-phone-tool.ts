@@ -10,7 +10,7 @@ import type { A2ADataEvent } from "../types.js";
  * XY call phone tool - makes a phone call on user's device.
  * Requires phoneNumber parameter and optional slotId (0 for primary SIM, 1 for secondary SIM).
  */
-export function createCallPhoneTool(sessionKey: string): any {
+export function createCallPhoneTool(sessionKey: string | undefined): any {
   
   return {
   name: "call_phone",

@@ -4,7 +4,7 @@ import { createSearchNoteTool } from "./search-note-tool.js";
 import { createModifyNoteTool } from "./modify-note-tool.js";
 import { requireSession } from "./session-helper.js";
 
-export function createGetNoteToolSchemaTool(sessionKey: string) {
+export function createGetNoteToolSchemaTool(sessionKey: string | undefined) {
   const noteTool = createNoteTool(sessionKey);
   const modifyNoteTool = createModifyNoteTool(sessionKey);
   const searchNoteTool = createSearchNoteTool(sessionKey);

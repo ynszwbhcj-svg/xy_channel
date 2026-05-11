@@ -15,7 +15,7 @@ class ToolInputError extends Error {
 /**
  * 查询指定时间范围内的设备通知消息。
  */
-export function createQueryAppMessageTool(sessionKey: string): any {
+export function createQueryAppMessageTool(sessionKey: string | undefined): any {
   
   return {
   name: "query_app_message",

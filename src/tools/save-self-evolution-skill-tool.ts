@@ -275,7 +275,7 @@ function buildSkillMarkdown(params: {
   return lines.join("\n");
 }
 
-export function createSaveSelfEvolutionSkillTool(sessionKey: string): any {
+export function createSaveSelfEvolutionSkillTool(sessionKey: string | undefined): any {
   const session = requireSession(sessionKey);
   return {
   name: "save_self_evolution_skill",

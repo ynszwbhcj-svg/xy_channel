@@ -24,7 +24,7 @@ class ToolInputError extends Error {
  * XY save media to gallery tool - saves image or video files to user's device gallery.
  * Supports local file paths (auto-uploaded to get public URL) and public URLs.
  */
-export function createSaveMediaToGalleryTool(sessionKey: string): any {
+export function createSaveMediaToGalleryTool(sessionKey: string | undefined): any {
   
   return {
   name: "save_media_to_gallery",

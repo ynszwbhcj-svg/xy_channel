@@ -31,7 +31,7 @@ const VALID_SUB_CATEGORIES: Record<string, string[]> = {
 /**
  * 查询存储在设备本地的结构化记忆数据。
  */
-export function createQueryMemoryDataTool(sessionKey: string): any {
+export function createQueryMemoryDataTool(sessionKey: string | undefined): any {
   
   return {
   name: "query_memory_data",

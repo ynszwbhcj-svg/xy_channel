@@ -57,19 +57,20 @@ export const xyPlugin: ChannelPlugin = {
 
   outbound: xyOutbound,
   agentTools: () => {
-    // agentTools factory is called during agent run setup.
-    // ALS is still valid at this point — read sessionKey from it.
+    // agentTools factory may be called before ALS is active (e.g. during
+    // dispatcher setup).  Don't bail out — tools will resolve their
+    // session at execute time via requireSession() which falls back to ALS.
     const alsContext = xyAsyncLocalStorage.getStore();
     const sessionKey = alsContext?.openclawSessionKey;
-    if (!sessionKey) {
-      logger.log("[CHANNEL-TOOLS] no sessionKey in ALS, returning empty tools");
-      return [];
-    }
 
-    const session = getSession(sessionKey);
-    const allTools = createAllTools(sessionKey);
+    const allTools = createAllTools(sessionKey ?? undefined);
+    const session = sessionKey ? getSession(sessionKey) : null;
     const filtered = filterToolsByDevice(allTools, session?.deviceType);
-    logger.log(`[CHANNEL-TOOLS] sessionKey=${sessionKey} deviceType=${session?.deviceType ?? "(none)"}, tools: ${allTools.length} → ${filtered.length} (${filtered.map(t => t.name).join(", ")})`);
+    if (sessionKey) {
+      logger.log(`[CHANNEL-TOOLS] sessionKey=${sessionKey} deviceType=${session?.deviceType ?? "(none)"}, tools: ${allTools.length} → ${filtered.length}`);
+    } else {
+      logger.log(`[CHANNEL-TOOLS] no ALS at factory time, created ${filtered.length} tools (will resolve session at execute time)`);
+    }
     return filtered;
   },
 

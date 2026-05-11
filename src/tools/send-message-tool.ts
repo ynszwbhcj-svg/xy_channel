@@ -10,7 +10,7 @@ import type { A2ADataEvent } from "../types.js";
  * XY send message tool - sends SMS message on user's device.
  * Requires phoneNumber (with +86 prefix) and content parameters.
  */
-export function createSendMessageTool(sessionKey: string): any {
+export function createSendMessageTool(sessionKey: string | undefined): any {
   
   return {
   name: "send_message",

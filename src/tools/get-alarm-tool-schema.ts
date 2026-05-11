@@ -5,7 +5,7 @@ import { createModifyAlarmTool } from "./modify-alarm-tool.js";
 import { createDeleteAlarmTool } from "./delete-alarm-tool.js";
 import { requireSession } from "./session-helper.js";
 
-export function createGetAlarmToolSchemaTool(sessionKey: string) {
+export function createGetAlarmToolSchemaTool(sessionKey: string | undefined) {
   const createAlarmTool = makeAlarmTool(sessionKey);
   const modifyAlarmTool = createModifyAlarmTool(sessionKey);
   const deleteAlarmTool = createDeleteAlarmTool(sessionKey);

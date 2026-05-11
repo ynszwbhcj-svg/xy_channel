@@ -194,7 +194,7 @@ async function callImageUnderstandingAPI(
  * XY Image Reading tool - performs image understanding using local or remote image URLs.
  * Supports both local file paths and remote URLs, up to 10 images at once.
  */
-export function createImageReadingTool(sessionKey: string): any {
+export function createImageReadingTool(sessionKey: string | undefined): any {
   return {
     name: "image_reading",
     label: "Image Reading",
