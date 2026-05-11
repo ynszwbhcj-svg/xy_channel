@@ -494,6 +494,15 @@ export const xiaoyiProvider: ProviderPlugin = {
       let resolvedDeviceType: string | null = null;
 
       if (context.messages) {
+        console.log(`[xiaoyiprovider] user messages BEFORE strip (count=${context.messages.filter(m => m.role === "user").length}):`);
+        for (const msg of context.messages) {
+          if (msg.role !== "user") continue;
+          const preview = typeof msg.content === "string"
+            ? msg.content.slice(0, 200)
+            : JSON.stringify(msg.content).slice(0, 200);
+          console.log(`[xiaoyiprovider]   user: ${preview}`);
+        }
+
         for (let i = context.messages.length - 1; i >= 0; i--) {
           const msg = context.messages[i];
           if (msg.role !== "user" || !msg.content) continue;
