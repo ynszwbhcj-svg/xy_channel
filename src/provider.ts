@@ -10,6 +10,7 @@
 import { createHash } from "crypto";
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 import { getCurrentSessionContext } from "./tools/session-manager.js";
+import { getCurrentTaskId } from "./task-manager.js";
 import { selfEvolutionManager } from "./utils/self-evolution-manager.js";
 
 // ── Retry config ──────────────────────────────────────────────
@@ -481,6 +482,15 @@ export const xiaoyiProvider: ProviderPlugin = {
     const underlying = ctx.streamFn;
     if (!underlying) return underlying;
 
+    // Capture A2A sessionId at agent setup time for multi-session isolation.
+    // openclaw calls wrapStreamFn per-agent (per session), so this runs inside
+    // the correct runWithSessionContext() ALS scope.  When multiple sessions are
+    // active concurrently, getCurrentSessionContext() may later return the WRONG
+    // session (lastRegisteredKey fallback).  The captured sessionId lets us
+    // bypass that fallback and look up the correct taskId directly from
+    // task-manager.
+    const capturedA2ASessionId = getCurrentSessionContext()?.sessionId ?? null;
+
     return async (model, context, options) => {
       // 每次请求时从 ctx.extraParams 动态读取 header
       const dynamicHeaders: Record<string, string> = {};
@@ -501,17 +511,27 @@ export const xiaoyiProvider: ProviderPlugin = {
             if (context.messages?.length === 1) dynamicHeaders["x-cron-flag"] = "begin";
           }
         } else {
-          // Session mode: get session context at request time via ALS.
-          // OpenClaw caches prepareExtraParams by provider/modelId, so
-          // ctx.extraParams holds the first session's values. We must
-          // call getCurrentSessionContext() here to get the correct
-          // sessionId/interactionId for the current concurrent request.
-          const sessionCtx = getCurrentSessionContext();
+          // Session mode: resolve taskId for the correct session.
+          //
+          // Priority:
+          //   1. capturedA2ASessionId → getCurrentTaskId()  (most reliable,
+          //      bypasses lastRegisteredKey fallback)
+          //   2. getCurrentSessionContext()?.taskId           (works when ALS
+          //      is intact)
+          //   3. ctx.extraParams cached values                (last resort,
+          //      may be stale / from wrong session)
+          let resolvedTaskId: string | null = null;
+          if (capturedA2ASessionId) {
+            resolvedTaskId = getCurrentTaskId(capturedA2ASessionId);
+          }
+          if (!resolvedTaskId) {
+            resolvedTaskId = getCurrentSessionContext()?.taskId ?? null;
+          }
 
-          const traceId = sessionCtx?.taskId ?? ctx.extraParams[HEADER_TRACE_ID];
-          const sessionId = sessionCtx?.taskId?.split("&")[0]
+          const traceId = resolvedTaskId ?? ctx.extraParams[HEADER_TRACE_ID];
+          const sessionId = resolvedTaskId?.split("&")[0]
             ?? ctx.extraParams[HEADER_SESSION_ID];
-          const interactionId = sessionCtx?.taskId?.split("&")[1]
+          const interactionId = resolvedTaskId?.split("&")[1]
             ?? ctx.extraParams[HEADER_INTERACTION_ID]
             ?? "";
 
