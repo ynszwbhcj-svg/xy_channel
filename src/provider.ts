@@ -510,7 +510,7 @@ export const xiaoyiProvider: ProviderPlugin = {
           const text = typeof msg.content === "string"
             ? msg.content
             : Array.isArray(msg.content)
-              ? msg.content.find((b: any) => b.type === "text")?.text ?? ""
+              ? (msg.content.find((b: any) => b.type === "text") as any)?.text ?? ""
               : "";
           if (!text) continue;
           const extracted = extractA2AFromConversationInfo(text);
@@ -572,7 +572,7 @@ export const xiaoyiProvider: ProviderPlugin = {
       // deviceType: prefer value extracted from Conversation info,
       // then extraParams, then ALS fallback.
       const extraParamsDeviceType = (ctx.extraParams?.[DEVICE_TYPE_KEY] as string) || undefined;
-      const deviceType = extractedDeviceType || extraParamsDeviceType
+      const deviceType = (extractedDeviceType || extraParamsDeviceType)
         ?? getCurrentSessionContext()?.deviceType;
 
       // 在发送给模型前，优化 systemPrompt 结构
