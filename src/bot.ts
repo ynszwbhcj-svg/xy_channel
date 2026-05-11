@@ -276,11 +276,6 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
     // Build message body with speaker prefix (following feishu pattern)
     let messageBody = textForAgent;
 
-    // Embed A2A taskId marker before the user query so the provider can
-    // extract it from messages without relying on AsyncLocalStorage.
-    // The provider strips this marker before sending to the model.
-    messageBody = `xiaoyiA2A info[taskId:${parsed.taskId},deviceType:${deviceType}] ${messageBody}`;
-
     // Add speaker prefix for clarity
     const speaker = parsed.sessionId;
     messageBody = `${speaker}: ${messageBody}`;

@@ -481,55 +481,8 @@ export const xiaoyiProvider: ProviderPlugin = {
     const underlying = ctx.streamFn;
     if (!underlying) return underlying;
 
-    // ── Regex to extract A2A taskId/deviceType from user messages ──
-    // bot.ts embeds: xiaoyiA2A info[taskId:<id>,deviceType:<type>]
-    const A2A_MARKER_RE = /xiaoyiA2A info\[taskId:([^\],]+)(?:,deviceType:([^\]]+))?\]\s*/;
-
     return async (model, context, options) => {
       const dynamicHeaders: Record<string, string> = {};
-
-      // ── Extract A2A taskId/deviceType from user messages ──
-      // Scan from last user message backwards; strip the marker from all.
-      let resolvedTaskId: string | null = null;
-      let resolvedDeviceType: string | null = null;
-
-      if (context.messages) {
-        console.log(`[xiaoyiprovider] user messages BEFORE strip (count=${context.messages.filter(m => m.role === "user").length}):`);
-        for (const msg of context.messages) {
-          if (msg.role !== "user") continue;
-          const preview = typeof msg.content === "string"
-            ? msg.content.slice(0, 200)
-            : JSON.stringify(msg.content).slice(0, 200);
-          console.log(`[xiaoyiprovider]   user: ${preview}`);
-        }
-
-        for (let i = context.messages.length - 1; i >= 0; i--) {
-          const msg = context.messages[i];
-          if (msg.role !== "user" || !msg.content) continue;
-
-          const extract = (text: string): string | null => {
-            const match = text.match(A2A_MARKER_RE);
-            if (match) {
-              if (!resolvedTaskId) resolvedTaskId = match[1] ?? null;
-              if (!resolvedDeviceType) resolvedDeviceType = match[2] ?? null;
-              return text.replace(A2A_MARKER_RE, "");
-            }
-            return null;
-          };
-
-          if (typeof msg.content === "string") {
-            const stripped = extract(msg.content);
-            if (stripped !== null) msg.content = stripped;
-          } else if (Array.isArray(msg.content)) {
-            for (const block of msg.content) {
-              if (block.type === "text" && typeof block.text === "string") {
-                const stripped = extract(block.text);
-                if (stripped !== null) block.text = stripped;
-              }
-            }
-          }
-        }
-      }
 
       // ── Build dynamic headers ────────────────────────────
       if (ctx.extraParams) {
@@ -547,23 +500,8 @@ export const xiaoyiProvider: ProviderPlugin = {
             if (cronTitle) dynamicHeaders["x-cron-title"] = encodeURIComponent(cronTitle);
             if (context.messages?.length === 1) dynamicHeaders["x-cron-flag"] = "begin";
           }
-        } else if (resolvedTaskId) {
-          // Session mode: taskId extracted from user message marker
-          const traceId = resolvedTaskId;
-          const sessionId = traceId.split("&")[0];
-          const interactionId = traceId.split("&")[1] ?? "";
-
-          const isCron = isCronTriggered(context.messages);
-          dynamicHeaders[HEADER_TRACE_ID] = isCron ? `cron_${traceId}_${Date.now()}` : traceId;
-          if (isCron) {
-            const cronTitle = extractCronTitle(context.messages);
-            if (cronTitle) dynamicHeaders["x-cron-title"] = encodeURIComponent(cronTitle);
-            if (context.messages?.length === 1) dynamicHeaders["x-cron-flag"] = "begin";
-          }
-          if (typeof sessionId === "string") dynamicHeaders[HEADER_SESSION_ID] = sessionId;
-          if (typeof interactionId === "string") dynamicHeaders[HEADER_INTERACTION_ID] = interactionId;
         } else {
-          // No marker found – fall back to extraParams cached values
+          // Session mode: use extraParams cached values
           const traceId = ctx.extraParams[HEADER_TRACE_ID];
           const sessionId = ctx.extraParams[HEADER_SESSION_ID];
           const interactionId = ctx.extraParams[HEADER_INTERACTION_ID];
@@ -578,9 +516,13 @@ export const xiaoyiProvider: ProviderPlugin = {
       if (context.systemPrompt) {
         console.log(`[xiaoyiprovider] system prompt length: ${context.systemPrompt.length}`);
       }
-      // deviceType: prefer marker-extracted value, fall back to extraParams
+      // Prefer deviceType from extraParams (set by prepareExtraParams).
+      // Fall back to getCurrentSessionContext() because OpenClaw caches
+      // resolvePreparedExtraParams by provider/modelId – the cache key does
+      // not include session-specific data, so deviceType may be missing
+      // from the cached extraParams even when a session is active.
       const extraParamsDeviceType = (ctx.extraParams?.[DEVICE_TYPE_KEY] as string) || undefined;
-      const deviceType = resolvedDeviceType || extraParamsDeviceType || undefined;
+      const deviceType = extraParamsDeviceType ?? getCurrentSessionContext()?.deviceType;
 
       // 在发送给模型前，优化 systemPrompt 结构
       if (context.systemPrompt) {
