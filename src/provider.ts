@@ -494,10 +494,34 @@ export const xiaoyiProvider: ProviderPlugin = {
       : null;
 
     return async (model, context, options) => {
-      // 每次请求时从 ctx.extraParams 动态读取 header
       const dynamicHeaders: Record<string, string> = {};
 
-      if (ctx.extraParams) {
+      // Priority: session store lookup (captured a2aSessionId) → prepareExtraParams cache → uid fallback
+      // We check capturedA2ASessionId FIRST because OpenClaw caches prepareExtraParams
+      // by provider/modelId (not per-session). A previous call without ALS may have
+      // populated the cache with FALLBACK_PREFIX_KEY, which would shadow the session
+      // lookup if we checked it first.
+      let resolvedTaskId: string | null = null;
+      if (capturedA2ASessionId) {
+        resolvedTaskId = getSessionByA2AId(capturedA2ASessionId)?.taskId ?? null;
+      }
+
+      if (resolvedTaskId) {
+        // Session mode: use taskId from store (supports steer).
+        const sessionId = resolvedTaskId.split("&")[0];
+        const interactionId = resolvedTaskId.split("&")[1] || "";
+
+        const isCron = isCronTriggered(context.messages);
+        dynamicHeaders[HEADER_TRACE_ID] = isCron ? `cron_${resolvedTaskId}_${Date.now()}` : resolvedTaskId;
+        dynamicHeaders[HEADER_SESSION_ID] = sessionId;
+        dynamicHeaders[HEADER_INTERACTION_ID] = interactionId;
+        if (isCron) {
+          const cronTitle = extractCronTitle(context.messages);
+          if (cronTitle) dynamicHeaders["x-cron-title"] = encodeURIComponent(cronTitle);
+          if (context.messages?.length === 1) dynamicHeaders["x-cron-flag"] = "begin";
+        }
+      } else if (ctx.extraParams) {
+        // No active session — try extraParams (may contain cached prepareExtraParams result).
         const fallbackPrefix = ctx.extraParams[FALLBACK_PREFIX_KEY];
 
         if (typeof fallbackPrefix === "string") {
@@ -513,19 +537,10 @@ export const xiaoyiProvider: ProviderPlugin = {
             if (context.messages?.length === 1) dynamicHeaders["x-cron-flag"] = "begin";
           }
         } else {
-          // Session mode: resolve taskId from store using captured a2aSessionId.
-          // This always returns the latest taskId (supports steer).
-          let resolvedTaskId: string | null = null;
-          if (capturedA2ASessionId) {
-            resolvedTaskId = getSessionByA2AId(capturedA2ASessionId)?.taskId ?? null;
-          }
-
-          const traceId = resolvedTaskId ?? ctx.extraParams[HEADER_TRACE_ID] as string;
-          const sessionId = resolvedTaskId?.split("&")[0]
-            ?? ctx.extraParams[HEADER_SESSION_ID] as string;
-          const interactionId = resolvedTaskId?.split("&")[1]
-            ?? ctx.extraParams[HEADER_INTERACTION_ID] as string
-            ?? "";
+          // No captured session, no fallback — use whatever is in prepareExtraParams cache.
+          const traceId = ctx.extraParams[HEADER_TRACE_ID] as string;
+          const sessionId = ctx.extraParams[HEADER_SESSION_ID] as string;
+          const interactionId = ctx.extraParams[HEADER_INTERACTION_ID] as string;
 
           if (typeof traceId === "string") {
             const isCron = isCronTriggered(context.messages);

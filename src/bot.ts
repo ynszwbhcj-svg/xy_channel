@@ -316,19 +316,20 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
 
     log(`[BOT-DISPATCH] ⏳ withReplyDispatcher starting, sessionKey=${route.sessionKey}`);
 
-    await core.channel.reply.withReplyDispatcher({
-      dispatcher,
-      onSettled: () => {
-        log(`[BOT] 🏁 onSettled called for session: ${route.sessionKey}`);
+    // 🔐 Set ALS BEFORE withReplyDispatcher so agentTools factory can read it
+    // during dispatcher setup (which happens before run() is called).
+    await xyAsyncLocalStorage.run({ openclawSessionKey: route.sessionKey }, () =>
+      core.channel.reply.withReplyDispatcher({
+        dispatcher,
+        onSettled: () => {
+          log(`[BOT] 🏁 onSettled called for session: ${route.sessionKey}`);
 
-        // Cleanup session from store
-        unregisterSession(route.sessionKey);
+          // Cleanup session from store
+          unregisterSession(route.sessionKey);
 
-        log(`[BOT] ✅ Cleanup completed`);
-      },
-      run: () =>
-        // 🔐 Run inside ALS with openclawSessionKey so agentTools factory can read it
-        xyAsyncLocalStorage.run({ openclawSessionKey: route.sessionKey }, async () => {
+          log(`[BOT] ✅ Cleanup completed`);
+        },
+        run: async () => {
           log(`[BOT-DISPATCH] ⏳ dispatchReplyFromConfig starting...`);
           log(`[BOT-DISPATCH]   - sessionKey: ${ctxPayload.SessionKey}`);
           log(`[BOT-DISPATCH]   - provider: ${ctxPayload.Provider}`);
@@ -352,8 +353,9 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
             error(`[BOT-DISPATCH]   - error stack: ${dispatchErr instanceof Error ? dispatchErr.stack?.slice(0, 500) : "N/A"}`);
             throw dispatchErr;
           }
-        }),
-    });
+        },
+      }),
+    );
 
     log(`[BOT] ✅ Dispatcher completed for session: ${parsed.sessionId}`);
     log(`xy: dispatch complete (session=${parsed.sessionId})`);
