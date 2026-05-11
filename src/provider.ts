@@ -508,7 +508,7 @@ export const xiaoyiProvider: ProviderPlugin = {
           // sessionId/interactionId for the current concurrent request.
           const sessionCtx = getCurrentSessionContext();
 
-          const traceId = ctx.extraParams[HEADER_TRACE_ID];
+          const traceId = sessionCtx?.taskId ?? ctx.extraParams[HEADER_TRACE_ID];
           const sessionId = sessionCtx?.taskId?.split("&")[0]
             ?? ctx.extraParams[HEADER_SESSION_ID];
           const interactionId = sessionCtx?.taskId?.split("&")[1]
