@@ -650,4 +650,22 @@ export const xiaoyiProvider: ProviderPlugin = {
       return createRetryingStream(makeStream, cronJob);
     };
   },
+
+  /**
+   * Diagnostic-only: log ctx.sessionId format on every transport turn.
+   * Goal: confirm whether sessionId = sessionKey (so we can use it to
+   * look up A2A context directly from activeSessions, bypassing ALS).
+   */
+  resolveTransportTurnState: (ctx) => {
+    console.log(
+      `[xiaoyiprovider] resolveTransportTurnState — ` +
+      `sessionId=${ctx.sessionId ?? "null"}, ` +
+      `turnId=${ctx.turnId}, ` +
+      `transport=${ctx.transport}, ` +
+      `attempt=${ctx.attempt}, ` +
+      `provider=${ctx.provider}, ` +
+      `modelId=${ctx.modelId}`,
+    );
+    return null;
+  },
 };
