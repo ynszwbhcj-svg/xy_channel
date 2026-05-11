@@ -6,7 +6,7 @@ import { xyConfigSchema } from "./config-schema.js";
 import { xyOutbound } from "./outbound.js";
 import { xyOnboardingAdapter } from "./onboarding.js";
 import { filterToolsByDevice } from "./tools/device-tool-map.js";
-import { getCurrentSessionContext } from "./tools/session-manager.js";
+import { getSession, xyAsyncLocalStorage } from "./xy-session-store.js";
 import { createAllTools } from "./tools/create-all-tools.js";
 import { getXYWebSocketManager } from "./client.js";
 import { handleXYMessage } from "./bot.js";
@@ -57,10 +57,19 @@ export const xyPlugin: ChannelPlugin = {
 
   outbound: xyOutbound,
   agentTools: () => {
-    const ctx = getCurrentSessionContext();
-    const allTools = createAllTools(ctx);
-    const filtered = filterToolsByDevice(allTools, ctx?.deviceType);
-    logger.log(`[DEVICE-FILTER] deviceType=${ctx?.deviceType ?? "(none)"}, tools: ${allTools.length} → ${filtered.length} (${filtered.map(t => t.name).join(", ")})`);
+    // agentTools factory is called during agent run setup.
+    // ALS is still valid at this point — read sessionKey from it.
+    const alsContext = xyAsyncLocalStorage.getStore();
+    const sessionKey = alsContext?.openclawSessionKey;
+    if (!sessionKey) {
+      logger.log("[CHANNEL-TOOLS] no sessionKey in ALS, returning empty tools");
+      return [];
+    }
+
+    const session = getSession(sessionKey);
+    const allTools = createAllTools(sessionKey);
+    const filtered = filterToolsByDevice(allTools, session?.deviceType);
+    logger.log(`[CHANNEL-TOOLS] sessionKey=${sessionKey} deviceType=${session?.deviceType ?? "(none)"}, tools: ${allTools.length} → ${filtered.length} (${filtered.map(t => t.name).join(", ")})`);
     return filtered;
   },
 

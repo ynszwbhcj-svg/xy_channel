@@ -2,7 +2,7 @@
 import type { ChannelAgentTool } from "openclaw/plugin-sdk";
 import { getXYWebSocketManager } from "../client.js";
 import { sendCommand } from "../formatter.js";
-import type { SessionContext } from "./session-manager.js";
+import { requireSession } from "./session-helper.js";
 import { logger } from "../utils/logger.js";
 import type { A2ADataEvent } from "../types.js";
 
@@ -16,8 +16,8 @@ import type { A2ADataEvent } from "../types.js";
  *
  * Supports deleting single or multiple alarms in one call.
  */
-export function createDeleteAlarmTool(ctx: SessionContext): any {
-  const { config, sessionId, taskId, messageId } = ctx;
+export function createDeleteAlarmTool(sessionKey: string): any {
+  
   return {
   name: "delete_alarm",
   label: "Delete Alarm",
@@ -47,6 +47,7 @@ export function createDeleteAlarmTool(ctx: SessionContext): any {
 
   async execute(toolCallId: string, params: any) {
 
+    const session = requireSession(sessionKey);
     // ===== 参数规范化：兼容数组和 JSON 字符串 =====
     let items: Array<{ entityId: string }> | null = null;
 
@@ -95,7 +96,7 @@ export function createDeleteAlarmTool(ctx: SessionContext): any {
 
 
     // Get WebSocket manager
-    const wsManager = getXYWebSocketManager(config);
+    const wsManager = getXYWebSocketManager(session.config);
 
     // Build DeleteAlarm command
     const command = {
@@ -170,10 +171,10 @@ export function createDeleteAlarmTool(ctx: SessionContext): any {
 
       // Send the command
       sendCommand({
-        config,
-        sessionId,
-        taskId,
-        messageId,
+        config: session.config,
+        sessionId: session.a2aSessionId,
+        taskId: session.taskId,
+        messageId: session.messageId,
         command,
       })
         .then(() => {

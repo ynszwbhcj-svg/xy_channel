@@ -1,7 +1,7 @@
 // QueryTodoTask tool implementation
 import { getXYWebSocketManager } from "../client.js";
 import { sendCommand } from "../formatter.js";
-import type { SessionContext } from "./session-manager.js";
+import { requireSession } from "./session-helper.js";
 import type { A2ADataEvent } from "../types.js";
 
 class ToolInputError extends Error {
@@ -15,8 +15,8 @@ class ToolInputError extends Error {
 /**
  * 获取指定时间范围内的全局待办任务列表。
  */
-export function createQueryTodoTaskTool(ctx: SessionContext): any {
-  const { config, sessionId, taskId, messageId } = ctx;
+export function createQueryTodoTaskTool(sessionKey: string): any {
+  
   return {
   name: "query_todo_task",
   label: "Query Todo Task",
@@ -48,13 +48,14 @@ d. 当只传入 startTime 时，返回该时间点之后的所有任务；当只
   },
 
   async execute(_toolCallId: string, params: any) {
+    const session = requireSession(sessionKey);
     const { status } = params;
 
     if (status && !["all", "completed", "pending"].includes(status)) {
       throw new ToolInputError('status 参数只能为 "all"、"completed" 或 "pending"');
     }
 
-    const wsManager = getXYWebSocketManager(config);
+    const wsManager = getXYWebSocketManager(session.config);
 
     const intentParam: Record<string, any> = {};
     if (params.startTime !== undefined) intentParam.startTime = params.startTime;
@@ -122,10 +123,10 @@ d. 当只传入 startTime 时，返回该时间点之后的所有任务；当只
       wsManager.on("data-event", handler);
 
       sendCommand({
-        config,
-        sessionId,
-        taskId,
-        messageId,
+        config: session.config,
+        sessionId: session.a2aSessionId,
+        taskId: session.taskId,
+        messageId: session.messageId,
         command,
       })
         .then(() => {})

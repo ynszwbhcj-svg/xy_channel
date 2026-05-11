@@ -1,12 +1,11 @@
 /**
  * create-all-tools: Centralized tool factory.
  *
- * Creates all XY channel tools scoped to the given SessionContext.
- * This ensures tools are created per-turn with the correct session context,
- * even in concurrent multi-session scenarios.
+ * Creates all XY channel tools scoped to the given sessionKey.
+ * Each tool captures only the sessionKey string and looks up the live
+ * session context at execute time via XYSessionStore.
  */
 import type { ChannelAgentTool } from "openclaw/plugin-sdk";
-import type { SessionContext } from "./session-manager.js";
 import { createLocationTool } from "./location-tool.js";
 import { createXiaoyiGuiTool } from "./xiaoyi-gui-tool.js";
 import { createSendFileToUserTool } from "./send-file-to-user-tool.js";
@@ -27,36 +26,31 @@ import { createLoginTokenTool } from "./login-token-tool.js";
 import { logger } from "../utils/logger.js";
 
 /**
- * Create all XY channel tools for the given session context.
+ * Create all XY channel tools for the given sessionKey.
  *
- * @param ctx - The session context for the current turn.
- *   If null/undefined, returns an empty array (no tools available outside an active session).
+ * @param sessionKey - The OpenClaw session key for the current turn.
+ *   Tools will look up the live session context at execute time.
  */
-export function createAllTools(ctx: SessionContext | null): ChannelAgentTool[] {
-  if (!ctx) {
-    logger.log("[CREATE-ALL-TOOLS] no session context, returning empty tools list");
-    return [];
-  }
-
-  logger.log(`[CREATE-ALL-TOOLS] creating tools for session=${ctx.sessionId}, task=${ctx.taskId}`);
+export function createAllTools(sessionKey: string): ChannelAgentTool[] {
+  logger.log(`[CREATE-ALL-TOOLS] creating tools for sessionKey=${sessionKey}`);
 
   return [
-    createLocationTool(ctx),
-    createCallDeviceTool(ctx),
-    createGetNoteToolSchemaTool(ctx),
-    createGetCalendarToolSchemaTool(ctx),
-    createGetContactToolSchemaTool(ctx),
-    createGetPhotoToolSchemaTool(ctx),
-    createXiaoyiGuiTool(ctx),
-    createGetDeviceFileToolSchemaTool(ctx),
-    createGetAlarmToolSchemaTool(ctx),
-    createGetCollectionToolSchemaTool(ctx),
-    createSendFileToUserTool(ctx),
-    createGetEmailToolSchemaTool(ctx),
+    createLocationTool(sessionKey),
+    createCallDeviceTool(sessionKey),
+    createGetNoteToolSchemaTool(sessionKey),
+    createGetCalendarToolSchemaTool(sessionKey),
+    createGetContactToolSchemaTool(sessionKey),
+    createGetPhotoToolSchemaTool(sessionKey),
+    createXiaoyiGuiTool(sessionKey),
+    createGetDeviceFileToolSchemaTool(sessionKey),
+    createGetAlarmToolSchemaTool(sessionKey),
+    createGetCollectionToolSchemaTool(sessionKey),
+    createSendFileToUserTool(sessionKey),
+    createGetEmailToolSchemaTool(sessionKey),
     viewPushResultTool,
-    createImageReadingTool(ctx),
+    createImageReadingTool(sessionKey),
     timestampToUtc8Tool,
-    createSaveSelfEvolutionSkillTool(ctx),
-    createLoginTokenTool(ctx),
+    createSaveSelfEvolutionSkillTool(sessionKey),
+    createLoginTokenTool(sessionKey),
   ];
 }

@@ -11,7 +11,6 @@ import {
   appendSelfEvolutionKeywordNudge,
   shouldNudgeForSelfEvolutionKeyword,
 } from "./self-evolution-keyword.js";
-import { registerSession, unregisterSession, runWithSessionContext } from "./tools/session-manager.js";
 import { configManager } from "./utils/config-manager.js";
 import { addPushId } from "./utils/pushid-manager.js";
 import { getPushDataById } from "./utils/pushdata-manager.js";
@@ -19,13 +18,12 @@ import { selfEvolutionManager } from "./utils/self-evolution-manager.js";
 import { saveRuntimeInfo } from "./utils/runtime-manager.js";
 import { toolCallNudgeManager } from "./utils/tool-call-nudge-manager.js";
 import {
-  registerTaskId,
-  incrementTaskIdRef,
-  decrementTaskIdRef,
-  lockTaskId,
-  unlockTaskId,
-  hasActiveTask,
-} from "./task-manager.js";
+  registerSession,
+  unregisterSession,
+  updateSession,
+  hasActiveSession,
+  xyAsyncLocalStorage,
+} from "./xy-session-store.js";
 import type { A2AJsonRpcRequest } from "./types.js";
 
 /**
@@ -140,28 +138,27 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
     }
     // ========================================
 
-    // 🔑 检测steer模式和是否是第二条消息
+    // 🔑 检测steer模式
+    // Resolve route early to determine steer state
+    const config = resolveXYConfig(cfg);
+    let route = core.channel.routing.resolveAgentRoute({
+      cfg,
+      channel: "xiaoyi-channel",
+      accountId,
+      peer: {
+        kind: "direct" as const,
+        id: parsed.sessionId,
+      },
+    });
+    log(`xy: resolved route accountId=${route.accountId}, sessionKey=${route.sessionKey}`);
+
     const isSteerMode = cfg.messages?.queue?.mode === "steer";
-    const isSecondMessage = isSteerMode && hasActiveTask(parsed.sessionId);
+    const isSecondMessage = isSteerMode && hasActiveSession(route.sessionKey);
 
     if (isSecondMessage) {
       log(`[BOT] 🔄 STEER MODE - Second message detected (will be follower)`);
       log(`[BOT]   - Session: ${parsed.sessionId}`);
       log(`[BOT]   - New taskId: ${parsed.taskId} (will replace current)`);
-    }
-
-    // 🔑 注册taskId（第二条消息会覆盖第一条的taskId）
-    const { isUpdate, refCount } = registerTaskId(
-      parsed.sessionId,
-      parsed.taskId,
-      parsed.messageId,
-      { incrementRef: true }  // 增加引用计数
-    );
-
-    // 🔑 如果是第一条消息，锁定taskId防止被过早清理
-    if (!isUpdate) {
-      lockTaskId(parsed.sessionId);
-      log(`[BOT] 🔒 Locked taskId for first message`);
     }
 
     // Extract and update push_id if present
@@ -193,30 +190,13 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
       error(`[BOT] Failed to save runtime info:`, err);
     });
 
-    // Resolve configuration (needed for status updates)
-    const config = resolveXYConfig(cfg);
-
-    // ✅ Resolve agent route (following feishu pattern)
-    // accountId is "default" for XY (single account mode)
-    // Use sessionId as peer.id to ensure all messages in the same session share context
-    let route = core.channel.routing.resolveAgentRoute({
-      cfg,
-      channel: "xiaoyi-channel",
-      accountId,  // "default"
-      peer: {
-        kind: "direct" as const,
-        id: parsed.sessionId,  // ✅ Use sessionId to share context within the same conversation session
-      },
-    });
-
-    log(`xy: resolved route accountId=${route.accountId}, sessionKey=${route.sessionKey}`);
-
+    // 🔑 Register / update session in unified store
     registerSession(route.sessionKey, {
       config,
-      sessionId: parsed.sessionId,
+      a2aSessionId: parsed.sessionId,
       taskId: parsed.taskId,
       messageId: parsed.messageId,
-      agentId: route.accountId,
+      accountId: route.accountId,
       deviceType,
     });
 
@@ -334,41 +314,21 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
       log(`[BOT-DISPATCHER] ✅ Status interval started for first message`);
     } 
 
-    // Build session context for AsyncLocalStorage
-    const sessionContext = {
-      config,
-      sessionId: parsed.sessionId,
-      taskId: parsed.taskId,
-      messageId: parsed.messageId,
-      agentId: route.accountId,
-      deviceType,
-    };
-
     log(`[BOT-DISPATCH] ⏳ withReplyDispatcher starting, sessionKey=${route.sessionKey}`);
 
     await core.channel.reply.withReplyDispatcher({
       dispatcher,
       onSettled: () => {
         log(`[BOT] 🏁 onSettled called for session: ${route.sessionKey}`);
-        log(`[BOT]   - isSecondMessage: ${isSecondMessage}`);
 
-        // 🔑 减少引用计数
-        decrementTaskIdRef(parsed.sessionId);
-
-        // 🔑 如果是第一条消息完成，解锁
-        if (!isSecondMessage) {
-          unlockTaskId(parsed.sessionId);
-          log(`[BOT] 🔓 Unlocked taskId (first message completed)`);
-        }
-
-        // 减少session引用计数
+        // Cleanup session from store
         unregisterSession(route.sessionKey);
 
         log(`[BOT] ✅ Cleanup completed`);
       },
       run: () =>
-        // 🔐 Use AsyncLocalStorage to provide session context to tools
-        runWithSessionContext(sessionContext, async () => {
+        // 🔐 Run inside ALS with openclawSessionKey so agentTools factory can read it
+        xyAsyncLocalStorage.run({ openclawSessionKey: route.sessionKey }, async () => {
           log(`[BOT-DISPATCH] ⏳ dispatchReplyFromConfig starting...`);
           log(`[BOT-DISPATCH]   - sessionKey: ${ctxPayload.SessionKey}`);
           log(`[BOT-DISPATCH]   - provider: ${ctxPayload.Provider}`);
@@ -404,20 +364,15 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
 
     log(`[BOT] ❌ Error occurred, attempting cleanup...`);
 
-    // 🔑 错误时也要清理taskId和session
+    // 🔑 错误时也要清理session
     try {
-      const params = message.params as any;
-      const sessionId = params?.sessionId;
+      const msgParams = message.params as any;
+      const sessionId = msgParams?.sessionId;
       if (sessionId) {
         log(`[BOT] 🧹 Cleaning up after error: ${sessionId}`);
 
-        // 清理 taskId
-        decrementTaskIdRef(sessionId);
-        unlockTaskId(sessionId);
-
-        // 清理 session
-        const core = getXYRuntime() as any;
-        const route = core.channel.routing.resolveAgentRoute({
+        const core2 = getXYRuntime() as any;
+        const errorRoute = core2.channel.routing.resolveAgentRoute({
           cfg,
           channel: "xiaoyi-channel",
           accountId,
@@ -427,12 +382,11 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
           },
         });
 
-        unregisterSession(route.sessionKey);
+        unregisterSession(errorRoute.sessionKey);
         log(`[BOT] ✅ Cleanup completed after error`);
       }
     } catch (cleanupErr) {
       log(`[BOT] ⚠️  Cleanup failed:`, cleanupErr);
-      // Ignore cleanup errors
     }
 
     // ❌ Don't re-throw: message processing error should not affect gateway stability

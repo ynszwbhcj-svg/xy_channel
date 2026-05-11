@@ -23,40 +23,38 @@ import { createSaveFileToPhoneTool } from "./save-file-to-phone-tool.js";
 import { createSendEmailTool } from "./send-email-tool.js";
 import { createSearchEmailTool } from "./search-email-tool.js";
 import { sendStatusUpdate } from "../formatter.js";
-import type { SessionContext } from "./session-manager.js";
-import { getCurrentTaskId, getCurrentMessageId } from "../task-manager.js";
+import { requireSession } from "./session-helper.js";
 
 /**
  * call_device_tool - 通用端工具调度器。
  * LLM 必须先通过 get_xxx_tool_schema 获取具体工具 schema，再用本工具执行。
  */
-export function createCallDeviceTool(ctx: SessionContext): any {
-  const { config, sessionId, taskId, messageId } = ctx;
+export function createCallDeviceTool(sessionKey: string): any {
 
-  const noteTool = createNoteTool(ctx);
-  const modifyNoteTool = createModifyNoteTool(ctx);
-  const createAlarmTool = makeAlarmTool(ctx);
-  const modifyAlarmTool = createModifyAlarmTool(ctx);
-  const deleteAlarmTool = createDeleteAlarmTool(ctx);
-  const callPhoneTool = createCallPhoneTool(ctx);
-  const calendarTool = createCalendarTool(ctx);
-  const searchNoteTool = createSearchNoteTool(ctx);
-  const searchMessageTool = createSearchMessageTool(ctx);
-  const sendMessageTool = createSendMessageTool(ctx);
-  const xiaoyiAddCollectionTool = createXiaoyiAddCollectionTool(ctx);
-  const xiaoyiCollectionTool = createXiaoyiCollectionTool(ctx);
-  const xiaoyiDeleteCollectionTool = createXiaoyiDeleteCollectionTool(ctx);
-  const searchPhotoGalleryTool = createSearchPhotoGalleryTool(ctx);
-  const uploadPhotoTool = createUploadPhotoTool(ctx);
-  const uploadFileTool = createUploadFileTool(ctx);
-  const sendEmailTool = createSendEmailTool(ctx);
-  const searchAlarmTool = createSearchAlarmTool(ctx);
-  const searchContactTool = createSearchContactTool(ctx);
-  const searchCalendarTool = createSearchCalendarTool(ctx);
-  const saveMediaToGalleryTool = createSaveMediaToGalleryTool(ctx);
-  const searchFileTool = createSearchFileTool(ctx);
-  const saveFileToPhoneTool = createSaveFileToPhoneTool(ctx);
-  const searchEmailTool = createSearchEmailTool(ctx);
+  const noteTool = createNoteTool(sessionKey);
+  const modifyNoteTool = createModifyNoteTool(sessionKey);
+  const createAlarmTool = makeAlarmTool(sessionKey);
+  const modifyAlarmTool = createModifyAlarmTool(sessionKey);
+  const deleteAlarmTool = createDeleteAlarmTool(sessionKey);
+  const callPhoneTool = createCallPhoneTool(sessionKey);
+  const calendarTool = createCalendarTool(sessionKey);
+  const searchNoteTool = createSearchNoteTool(sessionKey);
+  const searchMessageTool = createSearchMessageTool(sessionKey);
+  const sendMessageTool = createSendMessageTool(sessionKey);
+  const xiaoyiAddCollectionTool = createXiaoyiAddCollectionTool(sessionKey);
+  const xiaoyiCollectionTool = createXiaoyiCollectionTool(sessionKey);
+  const xiaoyiDeleteCollectionTool = createXiaoyiDeleteCollectionTool(sessionKey);
+  const searchPhotoGalleryTool = createSearchPhotoGalleryTool(sessionKey);
+  const uploadPhotoTool = createUploadPhotoTool(sessionKey);
+  const uploadFileTool = createUploadFileTool(sessionKey);
+  const sendEmailTool = createSendEmailTool(sessionKey);
+  const searchAlarmTool = createSearchAlarmTool(sessionKey);
+  const searchContactTool = createSearchContactTool(sessionKey);
+  const searchCalendarTool = createSearchCalendarTool(sessionKey);
+  const saveMediaToGalleryTool = createSaveMediaToGalleryTool(sessionKey);
+  const searchFileTool = createSearchFileTool(sessionKey);
+  const saveFileToPhoneTool = createSaveFileToPhoneTool(sessionKey);
+  const searchEmailTool = createSearchEmailTool(sessionKey);
 
   /**
    * 端工具注册表 —— 按 name 索引所有可通过 call_device_tool 调度的工具。
@@ -107,15 +105,16 @@ export function createCallDeviceTool(ctx: SessionContext): any {
     required: ["toolName", "arguments"],
   },
   async execute(toolCallId: string, params: any) {
+    const session = requireSession(sessionKey);
     const { toolName, arguments: toolArgs } = params;
 
     // 向用户端发送具体工具名的状态更新
-    const currentTaskId = getCurrentTaskId(sessionId) ?? taskId;
-    const currentMessageId = getCurrentMessageId(sessionId) ?? messageId;
+    const currentTaskId = session.taskId;
+    const currentMessageId = session.messageId;
     try {
       await sendStatusUpdate({
-        config,
-        sessionId,
+        config: session.config,
+        sessionId: session.a2aSessionId,
         taskId: currentTaskId,
         messageId: currentMessageId,
         text: `正在使用工具: ${toolName}...`,

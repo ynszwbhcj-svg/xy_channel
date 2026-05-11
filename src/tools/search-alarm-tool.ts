@@ -2,7 +2,7 @@
 import type { ChannelAgentTool } from "openclaw/plugin-sdk";
 import { getXYWebSocketManager } from "../client.js";
 import { sendCommand } from "../formatter.js";
-import type { SessionContext } from "./session-manager.js";
+import { requireSession } from "./session-helper.js";
 import { logger } from "../utils/logger.js";
 import type { A2ADataEvent } from "../types.js";
 
@@ -18,8 +18,8 @@ const DAYS_OF_WAKE_TYPE_VALUES = [0, 1, 2, 3, 4];
  * At least one search criterion must be provided.
  * Multiple criteria can be combined.
  */
-export function createSearchAlarmTool(ctx: SessionContext): any {
-  const { config, sessionId, taskId, messageId } = ctx;
+export function createSearchAlarmTool(sessionKey: string): any {
+  
   return {
   name: "search_alarm",
   label: "Search Alarm",
@@ -67,6 +67,7 @@ b. 使用该工具之前需获取当前真实时间
 
   async execute(toolCallId: string, params: any) {
 
+    const session = requireSession(sessionKey);
     // ===== Validate at least one search criterion is provided =====
     const hasRangeType = params.rangeType !== undefined && params.rangeType !== null;
     const hasAlarmState = params.alarmState !== undefined && params.alarmState !== null;
@@ -135,7 +136,7 @@ b. 使用该工具之前需获取当前真实时间
     }
 
     // Get WebSocket manager
-    const wsManager = getXYWebSocketManager(config);
+    const wsManager = getXYWebSocketManager(session.config);
 
     // Build SearchAlarm command
 
@@ -225,10 +226,10 @@ b. 使用该工具之前需获取当前真实时间
 
       // Send the command
       sendCommand({
-        config,
-        sessionId,
-        taskId,
-        messageId,
+        config: session.config,
+        sessionId: session.a2aSessionId,
+        taskId: session.taskId,
+        messageId: session.messageId,
         command,
       })
         .then(() => {

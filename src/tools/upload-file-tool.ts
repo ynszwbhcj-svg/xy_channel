@@ -2,7 +2,7 @@
 import type { ChannelAgentTool } from "openclaw/plugin-sdk";
 import { getXYWebSocketManager } from "../client.js";
 import { sendCommand } from "../formatter.js";
-import type { SessionContext } from "./session-manager.js";
+import { requireSession } from "./session-helper.js";
 import { logger } from "../utils/logger.js";
 import type { A2ADataEvent } from "../types.js";
 
@@ -18,8 +18,8 @@ import type { A2ADataEvent } from "../types.js";
  * - After getting public URLs, if further processing is needed, download the file first
  * - URLs returned are publicly accessible
  */
-export function createUploadFileTool(ctx: SessionContext): any {
-  const { config, sessionId, taskId, messageId } = ctx;
+export function createUploadFileTool(sessionKey: string): any {
+  
   return {
   name: "upload_file",
   label: "Upload File",
@@ -49,6 +49,7 @@ export function createUploadFileTool(ctx: SessionContext): any {
 
   async execute(toolCallId: string, params: any) {
 
+    const session = requireSession(sessionKey);
     // ===== 参数规范化：兼容数组和 JSON 字符串 =====
     let fileInfos: Array<{ mediaUri: string; timeout?: string }> | null = null;
 
@@ -106,10 +107,10 @@ export function createUploadFileTool(ctx: SessionContext): any {
 
 
     // Get WebSocket manager
-    const wsManager = getXYWebSocketManager(config);
+    const wsManager = getXYWebSocketManager(session.config);
 
     // Get public URLs for the files
-    const fileUrls = await getFileUrls(wsManager, config, sessionId, taskId, messageId, fileInfos);
+    const fileUrls = await getFileUrls(wsManager, session.config, session.a2aSessionId, session.taskId, session.messageId, fileInfos);
 
 
     return {
@@ -233,10 +234,10 @@ async function getFileUrls(
     wsManager.on("data-event", handler);
 
     sendCommand({
-      config,
-      sessionId,
-      taskId,
-      messageId,
+        config,
+        sessionId,
+        taskId,
+        messageId,
       command,
     })
       .then(() => {

@@ -2,7 +2,7 @@
 import type { ChannelAgentTool } from "openclaw/plugin-sdk";
 import { getXYWebSocketManager } from "../client.js";
 import { sendCommand } from "../formatter.js";
-import type { SessionContext } from "./session-manager.js";
+import { requireSession } from "./session-helper.js";
 import { logger } from "../utils/logger.js";
 import type { A2ADataEvent } from "../types.js";
 
@@ -14,8 +14,8 @@ import type { A2ADataEvent } from "../types.js";
  * 1. Call search_photo_gallery tool first to get mediaUris of photos
  * 2. Use the mediaUris (maximum 5 at a time) to get public URLs
  */
-export function createUploadPhotoTool(ctx: SessionContext): any {
-  const { config, sessionId, taskId, messageId } = ctx;
+export function createUploadPhotoTool(sessionKey: string): any {
+  
   return {
   name: "upload_photo",
   label: "Upload Photo",
@@ -44,6 +44,7 @@ export function createUploadPhotoTool(ctx: SessionContext): any {
 
   async execute(toolCallId: string, params: any) {
 
+    const session = requireSession(sessionKey);
     // ===== 参数规范化：兼容数组和 JSON 字符串 =====
     let mediaUris: string[] | null = null;
 
@@ -86,10 +87,10 @@ export function createUploadPhotoTool(ctx: SessionContext): any {
 
 
     // Get WebSocket manager
-    const wsManager = getXYWebSocketManager(config);
+    const wsManager = getXYWebSocketManager(session.config);
 
     // Get public URLs for the photos
-    const imageUrls = await getPhotoUrls(wsManager, config, sessionId, taskId, messageId, mediaUris);
+    const imageUrls = await getPhotoUrls(wsManager, session.config, session.a2aSessionId, session.taskId, session.messageId, mediaUris);
 
 
     return {
@@ -195,10 +196,10 @@ async function getPhotoUrls(
     wsManager.on("data-event", handler);
 
     sendCommand({
-      config,
-      sessionId,
-      taskId,
-      messageId,
+        config,
+        sessionId,
+        taskId,
+        messageId,
       command,
     })
       .then(() => {

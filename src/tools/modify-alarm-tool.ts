@@ -2,7 +2,7 @@
 import type { ChannelAgentTool } from "openclaw/plugin-sdk";
 import { getXYWebSocketManager } from "../client.js";
 import { sendCommand } from "../formatter.js";
-import type { SessionContext } from "./session-manager.js";
+import { requireSession } from "./session-helper.js";
 import { logger } from "../utils/logger.js";
 import type { A2ADataEvent } from "../types.js";
 
@@ -21,8 +21,7 @@ const DAYS_OF_WEEK_VALUES = ["Mon", "Tues", "Wed", "Thur", "Fri", "Sat", "Sun"];
  * 1. Call search_alarm or create_alarm tool first to get entityId
  * 2. Use the entityId to identify which alarm to modify
  */
-export function createModifyAlarmTool(ctx: SessionContext): any {
-  const { config, sessionId, taskId, messageId } = ctx;
+export function createModifyAlarmTool(sessionKey: string): any {
   return {
   name: "modify_alarm",
   label: "Modify Alarm",
@@ -82,6 +81,7 @@ export function createModifyAlarmTool(ctx: SessionContext): any {
 
   async execute(toolCallId: string, params: any) {
 
+    const session = requireSession(sessionKey);
     // ===== Validate required parameter: entityId =====
     if (!params.entityId || typeof params.entityId !== "string") {
       throw new Error("Missing required parameter: entityId must be a string obtained from search_alarm or create_alarm");
@@ -222,7 +222,7 @@ export function createModifyAlarmTool(ctx: SessionContext): any {
     }
 
     // Get WebSocket manager
-    const wsManager = getXYWebSocketManager(config);
+    const wsManager = getXYWebSocketManager(session.config);
 
     // Build ModifyAlarm command
     const command = {
@@ -295,10 +295,10 @@ export function createModifyAlarmTool(ctx: SessionContext): any {
 
       // Send the command
       sendCommand({
-        config,
-        sessionId,
-        taskId,
-        messageId,
+        config: session.config,
+        sessionId: session.a2aSessionId,
+        taskId: session.taskId,
+        messageId: session.messageId,
         command,
       })
         .then(() => {

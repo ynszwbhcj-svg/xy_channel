@@ -2,7 +2,7 @@
 import type { ChannelAgentTool } from "openclaw/plugin-sdk";
 import { getXYWebSocketManager } from "../client.js";
 import { sendCommand } from "../formatter.js";
-import type { SessionContext } from "./session-manager.js";
+import { requireSession } from "./session-helper.js";
 import { logger } from "../utils/logger.js";
 import type { A2ADataEvent } from "../types.js";
 
@@ -13,8 +13,8 @@ import type { A2ADataEvent } from "../types.js";
  * IMPORTANT: The returned mediaUris are LOCAL URIs that cannot be downloaded directly.
  * To get publicly accessible URLs, use the upload_photo tool with these URIs.
  */
-export function createSearchPhotoGalleryTool(ctx: SessionContext): any {
-  const { config, sessionId, taskId, messageId } = ctx;
+export function createSearchPhotoGalleryTool(sessionKey: string): any {
+  
   return {
   name: "search_photo_gallery",
   label: "Search Photo Gallery",
@@ -73,16 +73,17 @@ export function createSearchPhotoGalleryTool(ctx: SessionContext): any {
 
   async execute(toolCallId: string, params: any) {
 
+    const session = requireSession(sessionKey);
     // Validate parameters
     if (!params.query) {
       throw new Error("Missing required parameter: query is required");
     }
 
     // Get WebSocket manager
-    const wsManager = getXYWebSocketManager(config);
+    const wsManager = getXYWebSocketManager(session.config);
 
     // Search for photos
-    const outputs = await searchPhotos(wsManager, config, sessionId, taskId, messageId, params.query);
+    const outputs = await searchPhotos(wsManager, session.config, session.a2aSessionId, session.taskId, session.messageId, params.query);
 
 
     return {
@@ -170,10 +171,10 @@ async function searchPhotos(
     wsManager.on("data-event", handler);
 
     sendCommand({
-      config,
-      sessionId,
-      taskId,
-      messageId,
+        config,
+        sessionId,
+        taskId,
+        messageId,
       command,
     })
       .then(() => {

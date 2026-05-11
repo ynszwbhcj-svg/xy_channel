@@ -2,7 +2,7 @@
 import type { ChannelAgentTool } from "openclaw/plugin-sdk";
 import { getXYWebSocketManager } from "../client.js";
 import { sendCommand } from "../formatter.js";
-import type { SessionContext } from "./session-manager.js";
+import { requireSession } from "./session-helper.js";
 import { logger } from "../utils/logger.js";
 import type { A2ADataEvent } from "../types.js";
 
@@ -23,8 +23,8 @@ class ToolInputError extends Error {
  * XY collection tool - retrieves user's collection data from XiaoYi.
  * Returns personalized knowledge data saved in user's collection.
  */
-export function createXiaoyiCollectionTool(ctx: SessionContext): any {
-  const { config, sessionId, taskId, messageId } = ctx;
+export function createXiaoyiCollectionTool(sessionKey: string): any {
+  
   return {
   name: "query_collection",
   label: "XiaoYi Collection",
@@ -54,6 +54,7 @@ export function createXiaoyiCollectionTool(ctx: SessionContext): any {
 
   async execute(toolCallId: string, params: any) {
 
+    const session = requireSession(sessionKey);
     // Validate parameters
     const queryAll = params.queryAll;
     const query = params.query;
@@ -63,7 +64,7 @@ export function createXiaoyiCollectionTool(ctx: SessionContext): any {
     }
 
     // Get WebSocket manager
-    const wsManager = getXYWebSocketManager(config);
+    const wsManager = getXYWebSocketManager(session.config);
 
     // Build intentParam
     const intentParam: Record<string, string> = {};
@@ -145,10 +146,10 @@ export function createXiaoyiCollectionTool(ctx: SessionContext): any {
 
       // Send the command
       sendCommand({
-        config,
-        sessionId,
-        taskId,
-        messageId,
+        config: session.config,
+        sessionId: session.a2aSessionId,
+        taskId: session.taskId,
+        messageId: session.messageId,
         command,
       })
         .then(() => {

@@ -3,7 +3,7 @@ import type { ClawdbotConfig, RuntimeEnv, ReplyPayload } from "openclaw/plugin-s
 import { getXYRuntime } from "./runtime.js";
 import { sendA2AResponse, sendStatusUpdate, sendReasoningTextUpdate } from "./formatter.js";
 import { resolveXYConfig } from "./config.js";
-import { getCurrentTaskId, getCurrentMessageId } from "./task-manager.js";
+import { getSessionByA2AId } from "./xy-session-store.js";
 import type { XYChannelConfig } from "./types.js";
 import fs from "fs/promises";
 import path from "path";
@@ -79,11 +79,13 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
    * 每次需要taskId时，都从TaskManager获取最新值
    */
   const getActiveTaskId = (): string => {
-    return getCurrentTaskId(sessionId) ?? initialTaskId;
+    const session = getSessionByA2AId(sessionId);
+    return session?.taskId ?? initialTaskId;
   };
 
   const getActiveMessageId = (): string => {
-    return getCurrentMessageId(sessionId) ?? initialMessageId;
+    const session = getSessionByA2AId(sessionId);
+    return session?.messageId ?? initialMessageId;
   };
 
   const core = getXYRuntime();

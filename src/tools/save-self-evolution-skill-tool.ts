@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { SessionContext } from "./session-manager.js";
+import { requireSession } from "./session-helper.js";
 import { selfEvolutionManager } from "../utils/self-evolution-manager.js";
 
 const SELF_EVOLVED_SKILL_ROOT = "/home/sandbox/.agents/skills";
@@ -275,8 +275,8 @@ function buildSkillMarkdown(params: {
   return lines.join("\n");
 }
 
-export function createSaveSelfEvolutionSkillTool(ctx: SessionContext): any {
-  const { sessionId } = ctx;
+export function createSaveSelfEvolutionSkillTool(sessionKey: string): any {
+  const session = requireSession(sessionKey);
   return {
   name: "save_self_evolution_skill",
   label: "Save Self Evolution Skill",
@@ -492,7 +492,7 @@ export function createSaveSelfEvolutionSkillTool(ctx: SessionContext): any {
               sanitized: sanitized.changed,
               skillName: slug,
               path: skillFilePath,
-              sessionId,
+              sessionId: session.a2aSessionId,
               createdAt,
               updatedAt,
               message: updatedAt

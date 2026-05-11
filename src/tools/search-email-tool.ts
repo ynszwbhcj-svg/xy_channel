@@ -1,15 +1,15 @@
 // Search Email tool implementation
 import { getXYWebSocketManager } from "../client.js";
 import { sendCommand } from "../formatter.js";
-import type { SessionContext } from "./session-manager.js";
+import { requireSession } from "./session-helper.js";
 import type { A2ADataEvent } from "../types.js";
 
 /**
  * XY search email tool - searches emails on user's device (花瓣邮箱).
  * Returns matching emails based on query text and search type.
  */
-export function createSearchEmailTool(ctx: SessionContext): any {
-  const { config, sessionId, taskId, messageId } = ctx;
+export function createSearchEmailTool(sessionKey: string): any {
+  
   return {
   name: "search_email",
   label: "Search Email",
@@ -43,6 +43,7 @@ b. 使用该工具之前需获取当前真实时间
   },
 
   async execute(_toolCallId: string, params: any) {
+    const session = requireSession(sessionKey);
     // ===== Validate queryText =====
     if (!params.queryText || typeof params.queryText !== "string" || !params.queryText.trim()) {
       throw new Error("queryText 为必填参数，且不能为空字符串");
@@ -55,7 +56,7 @@ b. 使用该工具之前需获取当前真实时间
     }
 
     // Get WebSocket manager
-    const wsManager = getXYWebSocketManager(config);
+    const wsManager = getXYWebSocketManager(session.config);
 
     // Build SearchEmails command
     const command = {
@@ -126,10 +127,10 @@ b. 使用该工具之前需获取当前真实时间
 
       // Send the command
       sendCommand({
-        config,
-        sessionId,
-        taskId,
-        messageId,
+        config: session.config,
+        sessionId: session.a2aSessionId,
+        taskId: session.taskId,
+        messageId: session.messageId,
         command,
       })
         .then(() => {})

@@ -1,8 +1,7 @@
 // Login Token tool - 自动获取用户授权信息
 import { v4 as uuidv4 } from "uuid";
 import { getXYWebSocketManager } from "../client.js";
-import type { SessionContext } from "./session-manager.js";
-import { getCurrentTaskId, getCurrentMessageId } from "../task-manager.js";
+import { requireSession } from "./session-helper.js";
 import { readFileSync, writeFileSync, existsSync } from "fs";
 import { logger } from "../utils/logger.js";
 import type { OutboundWebSocketMessage } from "../types.js";
@@ -16,8 +15,7 @@ const TOKEN_VALIDITY_MS = 5 * 60 * 1000; // 5 minutes
  * huawei_id_tool 工具
  * 当 skill 依赖用户获取鉴权信息时，此工具协助用户快速获取鉴权信息。
  */
-export function createLoginTokenTool(ctx: SessionContext): any {
-  const { config, sessionId, taskId, messageId } = ctx;
+export function createLoginTokenTool(sessionKey: string): any {
   return {
   name: "huawei_id_tool",
   label: "Get Login Token",
@@ -38,6 +36,7 @@ export function createLoginTokenTool(ctx: SessionContext): any {
   },
 
   async execute(toolCallId: string, params: any) {
+    const session = requireSession(sessionKey);
     const { clientId, skillName } = params;
 
     if (!clientId || typeof clientId !== "string" || clientId.trim() === "") {
@@ -47,8 +46,8 @@ export function createLoginTokenTool(ctx: SessionContext): any {
       throw new Error("Missing required parameter: skillName must be a non-empty string");
     }
 
-    const currentTaskId = getCurrentTaskId(sessionId) ?? taskId;
-    const currentMessageId = getCurrentMessageId(sessionId) ?? messageId;
+    const currentTaskId = session.taskId;
+    const currentMessageId = session.messageId;
 
     // (1) Build and send getLoginToken artifact
     const artifactId = uuidv4();
@@ -76,17 +75,17 @@ export function createLoginTokenTool(ctx: SessionContext): any {
       result: artifact,
     };
 
-    const wsManager = getXYWebSocketManager(config);
+    const wsManager = getXYWebSocketManager(session.config);
     const outboundMessage: OutboundWebSocketMessage = {
       msgType: "agent_response",
-      agentId: config.agentId,
-      sessionId,
+      agentId: session.config.agentId,
+      sessionId: session.a2aSessionId,
       taskId: currentTaskId,
       msgDetail: JSON.stringify(jsonRpcResponse),
     };
 
     logger.log(`[LOGIN_TOKEN] Sending getLoginToken artifact for clientId=${clientId}, skillName=${skillName}`);
-    await wsManager.sendMessage(sessionId, outboundMessage);
+    await wsManager.sendMessage(session.a2aSessionId, outboundMessage);
     logger.log(`[LOGIN_TOKEN] Artifact sent successfully`);
 
     // (2) Poll .xiaoyitoken.json every 5 seconds

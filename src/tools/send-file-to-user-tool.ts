@@ -2,10 +2,9 @@
 import type { ChannelAgentTool } from "openclaw/plugin-sdk";
 import { getXYWebSocketManager } from "../client.js";
 import { XYFileUploadService } from "../file-upload.js";
-import type { SessionContext } from "./session-manager.js";
+import { requireSession } from "./session-helper.js";
 import { logger } from "../utils/logger.js";
 import type { OutboundWebSocketMessage } from "../types.js";
-import { getCurrentTaskId, getCurrentMessageId } from "../task-manager.js";
 import fetch from "node-fetch";
 import fs from "fs/promises";
 import path from "path";
@@ -112,9 +111,7 @@ async function downloadRemoteFile(url: string): Promise<string> {
  * XY send file to user tool - sends local files or remote files to user's device.
  * Supports both local file paths and remote URLs.
  */
-export function createSendFileToUserTool(ctx: SessionContext): any {
-  const { config, sessionId, taskId, messageId } = ctx;
-  logger.log(`[SEND-FILE-TO-USER] 🏭 CREATE: sessionId=${sessionId} taskId=${taskId}`);
+export function createSendFileToUserTool(sessionKey: string): any {
   return {
   name: "send_file_to_user",
   label: "Send File to User",
@@ -139,9 +136,10 @@ b. 操作超时时间为2分钟（120秒），请勿重复调用此工具，如�
   },
 
   async execute(toolCallId: string, params: any) {
+    const session = requireSession(sessionKey);
     // Dynamic lookup: use latest taskId/messageId from task-manager (handles steer/interrupt)
-    const currentTaskId = getCurrentTaskId(sessionId) ?? taskId;
-    const currentMessageId = getCurrentMessageId(sessionId) ?? messageId;
+    const currentTaskId = session.taskId;
+    const currentMessageId = session.messageId;
 
     // Set timeout for the entire operation (2 minutes)
     const TOOL_TIMEOUT = 120000; // 2 minutes in milliseconds
@@ -185,13 +183,13 @@ b. 操作超时时间为2分钟（120秒），请勿重复调用此工具，如�
     }
 
     // Get WebSocket manager
-    const wsManager = getXYWebSocketManager(config);
+    const wsManager = getXYWebSocketManager(session.config);
 
     // Create upload service
     const uploadService = new XYFileUploadService(
-      config.fileUploadUrl,
-      config.apiKey,
-      config.uid
+      session.config.fileUploadUrl,
+      session.config.apiKey,
+      session.config.uid
     );
 
     // Collect all local file paths to upload
@@ -257,8 +255,8 @@ b. 操作超时时间为2分钟（120秒），请勿重复调用此工具，如�
 
       const agentResponse: OutboundWebSocketMessage = {
         msgType: "agent_response",
-        agentId: config.agentId,
-        sessionId: sessionId,
+        agentId: session.config.agentId,
+        sessionId: session.a2aSessionId,
         taskId: currentTaskId,
         msgDetail: JSON.stringify({
           jsonrpc: "2.0",
@@ -286,9 +284,9 @@ b. 操作超时时间为2分钟（120秒），请勿重复调用此工具，如�
         }),
       };
 
-      logger.log(`[SEND-FILE-TO-USER] 🚀 EXEC sending: sessionId=${sessionId} taskId=${currentTaskId} fileName=${fileName}`);
+      logger.log(`[SEND-FILE-TO-USER] 🚀 EXEC sending: sessionId=${session.a2aSessionId} taskId=${currentTaskId} fileName=${fileName}`);
       // Send WebSocket message
-      await wsManager.sendMessage(sessionId, agentResponse);
+      await wsManager.sendMessage(session.a2aSessionId, agentResponse);
       logger.log(`send ${fileName} file to user success`)
       sentFiles.push({ fileName, fileId });
     }

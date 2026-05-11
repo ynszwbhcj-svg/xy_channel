@@ -2,7 +2,7 @@
 import type { ChannelAgentTool } from "openclaw/plugin-sdk";
 import { getXYWebSocketManager } from "../client.js";
 import { sendCommand } from "../formatter.js";
-import type { SessionContext } from "./session-manager.js";
+import { requireSession } from "./session-helper.js";
 import { logger } from "../utils/logger.js";
 import type { A2ADataEvent } from "../types.js";
 
@@ -22,8 +22,8 @@ class ToolInputError extends Error {
 /**
  * XY delete collection tool - deletes data from user's XiaoYi collection.
  */
-export function createXiaoyiDeleteCollectionTool(ctx: SessionContext): any {
-  const { config, sessionId, taskId, messageId } = ctx;
+export function createXiaoyiDeleteCollectionTool(sessionKey: string): any {
+  
   return {
   name: "delete_collection",
   label: "Delete XiaoYi Collection",
@@ -49,6 +49,7 @@ export function createXiaoyiDeleteCollectionTool(ctx: SessionContext): any {
 
   async execute(toolCallId: string, params: any) {
 
+    const session = requireSession(sessionKey);
     // ===== 参数规范化：兼容数组和 JSON 字符串 =====
     let itemIds: string[] | null = null;
 
@@ -85,7 +86,7 @@ export function createXiaoyiDeleteCollectionTool(ctx: SessionContext): any {
     }
 
     // Get WebSocket manager
-    const wsManager = getXYWebSocketManager(config);
+    const wsManager = getXYWebSocketManager(session.config);
 
     // Build DeleteCollection command
     const command = {
@@ -159,10 +160,10 @@ export function createXiaoyiDeleteCollectionTool(ctx: SessionContext): any {
 
       // Send the command
       sendCommand({
-        config,
-        sessionId,
-        taskId,
-        messageId,
+        config: session.config,
+        sessionId: session.a2aSessionId,
+        taskId: session.taskId,
+        messageId: session.messageId,
         command,
       })
         .then(() => {

@@ -9,8 +9,7 @@
 //   models.providers.xiaoyiprovider.models = [...]
 import { createHash } from "crypto";
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
-import { getCurrentSessionContext } from "./tools/session-manager.js";
-import { getCurrentTaskId } from "./task-manager.js";
+import { getSession, getSessionByA2AId, xyAsyncLocalStorage } from "./xy-session-store.js";
 import { selfEvolutionManager } from "./utils/self-evolution-manager.js";
 
 // ── Retry config ──────────────────────────────────────────────
@@ -441,10 +440,13 @@ export const xiaoyiProvider: ProviderPlugin = {
    *   3. No uid available → return undefined (no headers injected)
    */
   prepareExtraParams: (ctx) => {
-    const sessionCtx = getCurrentSessionContext();
+    // Try to get session from ALS (valid during agent run setup)
+    const alsContext = xyAsyncLocalStorage.getStore();
+    const sessionKey = alsContext?.openclawSessionKey;
+    const session = sessionKey ? getSession(sessionKey) : null;
 
-    if (sessionCtx) {
-      const taskId = sessionCtx.taskId;
+    if (session) {
+      const taskId = session.taskId;
       const sessionId = taskId.split("&")[0];
       const interactionId = taskId.split("&")[1] || "";
       return {
@@ -452,7 +454,7 @@ export const xiaoyiProvider: ProviderPlugin = {
         [HEADER_TRACE_ID]: taskId,
         [HEADER_SESSION_ID]: sessionId,
         [HEADER_INTERACTION_ID]: interactionId,
-        [DEVICE_TYPE_KEY]: sessionCtx.deviceType ?? "",
+        [DEVICE_TYPE_KEY]: session.deviceType ?? "",
       };
     }
 
@@ -483,13 +485,13 @@ export const xiaoyiProvider: ProviderPlugin = {
     if (!underlying) return underlying;
 
     // Capture A2A sessionId at agent setup time for multi-session isolation.
-    // openclaw calls wrapStreamFn per-agent (per session), so this runs inside
-    // the correct runWithSessionContext() ALS scope.  When multiple sessions are
-    // active concurrently, getCurrentSessionContext() may later return the WRONG
-    // session (lastRegisteredKey fallback).  The captured sessionId lets us
-    // bypass that fallback and look up the correct taskId directly from
-    // task-manager.
-    const capturedA2ASessionId = getCurrentSessionContext()?.sessionId ?? null;
+    // wrapStreamFn is called per-agent (per session), ALS is still valid here.
+    // We capture the a2aSessionId and look up the store at each request time
+    // to always get the latest taskId (supports steer).
+    const alsContext = xyAsyncLocalStorage.getStore();
+    const capturedA2ASessionId = alsContext?.openclawSessionKey
+      ? getSession(alsContext.openclawSessionKey)?.a2aSessionId ?? null
+      : null;
 
     return async (model, context, options) => {
       // 每次请求时从 ctx.extraParams 动态读取 header
@@ -511,28 +513,18 @@ export const xiaoyiProvider: ProviderPlugin = {
             if (context.messages?.length === 1) dynamicHeaders["x-cron-flag"] = "begin";
           }
         } else {
-          // Session mode: resolve taskId for the correct session.
-          //
-          // Priority:
-          //   1. capturedA2ASessionId → getCurrentTaskId()  (most reliable,
-          //      bypasses lastRegisteredKey fallback)
-          //   2. getCurrentSessionContext()?.taskId           (works when ALS
-          //      is intact)
-          //   3. ctx.extraParams cached values                (last resort,
-          //      may be stale / from wrong session)
+          // Session mode: resolve taskId from store using captured a2aSessionId.
+          // This always returns the latest taskId (supports steer).
           let resolvedTaskId: string | null = null;
           if (capturedA2ASessionId) {
-            resolvedTaskId = getCurrentTaskId(capturedA2ASessionId);
-          }
-          if (!resolvedTaskId) {
-            resolvedTaskId = getCurrentSessionContext()?.taskId ?? null;
+            resolvedTaskId = getSessionByA2AId(capturedA2ASessionId)?.taskId ?? null;
           }
 
-          const traceId = resolvedTaskId ?? ctx.extraParams[HEADER_TRACE_ID];
+          const traceId = resolvedTaskId ?? ctx.extraParams[HEADER_TRACE_ID] as string;
           const sessionId = resolvedTaskId?.split("&")[0]
-            ?? ctx.extraParams[HEADER_SESSION_ID];
+            ?? ctx.extraParams[HEADER_SESSION_ID] as string;
           const interactionId = resolvedTaskId?.split("&")[1]
-            ?? ctx.extraParams[HEADER_INTERACTION_ID]
+            ?? ctx.extraParams[HEADER_INTERACTION_ID] as string
             ?? "";
 
           if (typeof traceId === "string") {
@@ -555,12 +547,15 @@ export const xiaoyiProvider: ProviderPlugin = {
         console.log(`[xiaoyiprovider] system prompt length: ${context.systemPrompt.length}`);
       }
       // Prefer deviceType from extraParams (set by prepareExtraParams).
-      // Fall back to getCurrentSessionContext() because OpenClaw caches
+      // Fall back to store lookup because OpenClaw caches
       // resolvePreparedExtraParams by provider/modelId – the cache key does
       // not include session-specific data, so deviceType may be missing
       // from the cached extraParams even when a session is active.
       const extraParamsDeviceType = (ctx.extraParams?.[DEVICE_TYPE_KEY] as string) || undefined;
-      const deviceType = extraParamsDeviceType ?? getCurrentSessionContext()?.deviceType;
+      const storeDeviceType = capturedA2ASessionId
+        ? getSessionByA2AId(capturedA2ASessionId)?.deviceType
+        : undefined;
+      const deviceType = extraParamsDeviceType ?? storeDeviceType;
 
       // 在发送给模型前，优化 systemPrompt 结构
       if (context.systemPrompt) {

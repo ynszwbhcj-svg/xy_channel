@@ -2,7 +2,7 @@
 import type { ChannelAgentTool } from "openclaw/plugin-sdk";
 import { getXYWebSocketManager } from "../client.js";
 import { sendCommand } from "../formatter.js";
-import type { SessionContext } from "./session-manager.js";
+import { requireSession } from "./session-helper.js";
 import { logger } from "../utils/logger.js";
 import type { A2ADataEvent } from "../types.js";
 
@@ -17,8 +17,8 @@ import type { A2ADataEvent } from "../types.js";
  * - For evening: 18:00:00 to 24:00:00
  * - For a specific time: use ±1 hour range (e.g., for 3PM, use 14:00:00 to 16:00:00)
  */
-export function createSearchCalendarTool(ctx: SessionContext): any {
-  const { config, sessionId, taskId, messageId } = ctx;
+export function createSearchCalendarTool(sessionKey: string): any {
+  
   return {
   name: "search_calendar_event",
   label: "Search Calendar Event",
@@ -60,6 +60,7 @@ d. 如果查询结果返回-303，代表查询结果为空
 
   async execute(toolCallId: string, params: any) {
 
+    const session = requireSession(sessionKey);
     // Validate parameters
     if (!params.startTime || !params.endTime) {
       throw new Error("Missing required parameters: startTime and endTime are required");
@@ -111,7 +112,7 @@ d. 如果查询结果返回-303，代表查询结果为空
 
 
     // Get WebSocket manager
-    const wsManager = getXYWebSocketManager(config);
+    const wsManager = getXYWebSocketManager(session.config);
 
     // Build SearchCalendarEvent command
 
@@ -195,10 +196,10 @@ d. 如果查询结果返回-303，代表查询结果为空
 
       // Send the command
       sendCommand({
-        config,
-        sessionId,
-        taskId,
-        messageId,
+        config: session.config,
+        sessionId: session.a2aSessionId,
+        taskId: session.taskId,
+        messageId: session.messageId,
         command,
       })
         .then(() => {

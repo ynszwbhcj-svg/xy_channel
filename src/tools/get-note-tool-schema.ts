@@ -2,12 +2,12 @@ import { createSchemaTool } from "./schema-tool-factory.js";
 import { createNoteTool } from "./note-tool.js";
 import { createSearchNoteTool } from "./search-note-tool.js";
 import { createModifyNoteTool } from "./modify-note-tool.js";
-import type { SessionContext } from "./session-manager.js";
+import { requireSession } from "./session-helper.js";
 
-export function createGetNoteToolSchemaTool(ctx: SessionContext) {
-  const noteTool = createNoteTool(ctx);
-  const modifyNoteTool = createModifyNoteTool(ctx);
-  const searchNoteTool = createSearchNoteTool(ctx);
+export function createGetNoteToolSchemaTool(sessionKey: string) {
+  const noteTool = createNoteTool(sessionKey);
+  const modifyNoteTool = createModifyNoteTool(sessionKey);
+  const searchNoteTool = createSearchNoteTool(sessionKey);
   return createSchemaTool({
     name: "get_note_tool_schema",
     label: "Get Note Tool Schema",

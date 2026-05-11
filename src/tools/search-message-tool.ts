@@ -2,7 +2,7 @@
 import type { ChannelAgentTool } from "openclaw/plugin-sdk";
 import { getXYWebSocketManager } from "../client.js";
 import { sendCommand } from "../formatter.js";
-import type { SessionContext } from "./session-manager.js";
+import { requireSession } from "./session-helper.js";
 import { logger } from "../utils/logger.js";
 import type { A2ADataEvent } from "../types.js";
 
@@ -10,8 +10,8 @@ import type { A2ADataEvent } from "../types.js";
  * XY search message tool - searches SMS messages on user's device.
  * Returns matching messages based on content keyword search.
  */
-export function createSearchMessageTool(ctx: SessionContext): any {
-  const { config, sessionId, taskId, messageId } = ctx;
+export function createSearchMessageTool(sessionKey: string): any {
+  
   return {
   name: "search_message",
   label: "Search Message",
@@ -29,6 +29,7 @@ export function createSearchMessageTool(ctx: SessionContext): any {
 
   async execute(toolCallId: string, params: any) {
 
+    const session = requireSession(sessionKey);
     // Validate content parameter
     if (!params.content || typeof params.content !== "string" || params.content.trim() === "") {
       throw new Error("Missing required parameter: content must be a non-empty string");
@@ -36,7 +37,7 @@ export function createSearchMessageTool(ctx: SessionContext): any {
 
 
     // Get WebSocket manager
-    const wsManager = getXYWebSocketManager(config);
+    const wsManager = getXYWebSocketManager(session.config);
 
     // Build SearchMessage command
     const command = {
@@ -115,10 +116,10 @@ export function createSearchMessageTool(ctx: SessionContext): any {
 
       // Send the command
       sendCommand({
-        config,
-        sessionId,
-        taskId,
-        messageId,
+        config: session.config,
+        sessionId: session.a2aSessionId,
+        taskId: session.taskId,
+        messageId: session.messageId,
         command,
       })
         .then(() => {

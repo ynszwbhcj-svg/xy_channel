@@ -2,7 +2,7 @@
 import type { ChannelAgentTool } from "openclaw/plugin-sdk";
 import { getXYWebSocketManager } from "../client.js";
 import { sendCommand } from "../formatter.js";
-import type { SessionContext } from "./session-manager.js";
+import { requireSession } from "./session-helper.js";
 import { logger } from "../utils/logger.js";
 import type { A2ADataEvent } from "../types.js";
 
@@ -23,8 +23,8 @@ class ToolInputError extends Error {
  * XY note tool - creates a note on user's device.
  * Requires title and content parameters.
  */
-export function createNoteTool(ctx: SessionContext): any {
-  const { config, sessionId, taskId, messageId } = ctx;
+export function createNoteTool(sessionKey: string): any {
+  
   return {
   name: "create_note",
   label: "Create Note",
@@ -53,6 +53,7 @@ export function createNoteTool(ctx: SessionContext): any {
 
   async execute(toolCallId: string, params: any) {
 
+    const session = requireSession(sessionKey);
     // Validate parameters — 抛 ToolInputError 而非普通 Error，
     // 让 openclaw 返回 400 而非 500，明确告知 LLM 这是参数错误，不应重试。
     if (typeof params.title !== "string" || !params.title) {
@@ -63,7 +64,7 @@ export function createNoteTool(ctx: SessionContext): any {
     }
 
     // Get WebSocket manager
-    const wsManager = getXYWebSocketManager(config);
+    const wsManager = getXYWebSocketManager(session.config);
 
     // Build CreateNote command
     const command = {
@@ -136,10 +137,10 @@ export function createNoteTool(ctx: SessionContext): any {
 
       // Send the command
       sendCommand({
-        config,
-        sessionId,
-        taskId,
-        messageId,
+        config: session.config,
+        sessionId: session.a2aSessionId,
+        taskId: session.taskId,
+        messageId: session.messageId,
         command,
       }).catch((error) => {
         clearTimeout(timeout);

@@ -2,7 +2,7 @@
 import type { ChannelAgentTool } from "openclaw/plugin-sdk";
 import { getXYWebSocketManager } from "../client.js";
 import { sendCommand } from "../formatter.js";
-import type { SessionContext } from "./session-manager.js";
+import { requireSession } from "./session-helper.js";
 import { logger } from "../utils/logger.js";
 import type { A2ADataEvent } from "../types.js";
 import { XYFileUploadService } from "../file-upload.js";
@@ -24,8 +24,8 @@ class ToolInputError extends Error {
  * XY save file to phone tool - saves files to user's device file manager.
  * Supports local file paths (auto-uploaded to get public URL) and public URLs.
  */
-export function createSaveFileToPhoneTool(ctx: SessionContext): any {
-  const { config, sessionId, taskId, messageId } = ctx;
+export function createSaveFileToPhoneTool(sessionKey: string): any {
+  
   return {
   name: "save_file_to_file_manager",
   label: "Save File to Phone",
@@ -59,6 +59,7 @@ export function createSaveFileToPhoneTool(ctx: SessionContext): any {
 
   async execute(toolCallId: string, params: any) {
 
+    const session = requireSession(sessionKey);
     // Validate parameters
     const { fileName, url, suffix } = params;
 
@@ -75,7 +76,7 @@ export function createSaveFileToPhoneTool(ctx: SessionContext): any {
     }
 
     // Get WebSocket manager
-    const wsManager = getXYWebSocketManager(config);
+    const wsManager = getXYWebSocketManager(session.config);
 
     // Determine the URL: if it's a local path, upload first to get public URL
     let publicUrl = url;
@@ -83,9 +84,9 @@ export function createSaveFileToPhoneTool(ctx: SessionContext): any {
     if (!url.startsWith("http://") && !url.startsWith("https://")) {
       // Local file path - upload to get public URL
       const uploadService = new XYFileUploadService(
-        config.fileUploadUrl,
-        config.apiKey,
-        config.uid
+        session.config.fileUploadUrl,
+        session.config.apiKey,
+        session.config.uid
       );
       publicUrl = await uploadService.uploadFileAndGetUrl(url);
 
@@ -173,10 +174,10 @@ export function createSaveFileToPhoneTool(ctx: SessionContext): any {
 
       // Send the command
       sendCommand({
-        config,
-        sessionId,
-        taskId,
-        messageId,
+        config: session.config,
+        sessionId: session.a2aSessionId,
+        taskId: session.taskId,
+        messageId: session.messageId,
         command,
       })
         .then(() => {

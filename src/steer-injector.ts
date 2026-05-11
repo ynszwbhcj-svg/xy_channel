@@ -1,6 +1,5 @@
 // Steer message injector for CSPL hook integration
-import { getSessionContext } from "./tools/session-manager.js";
-import { hasActiveTask, getCurrentTaskId } from "./task-manager.js";
+import { getSession, hasActiveSession } from "./xy-session-store.js";
 import { handleXYMessage } from "./bot.js";
 import { logger } from "./utils/logger.js";
 import { randomUUID } from "node:crypto";
@@ -41,15 +40,14 @@ export async function tryInjectSteer(
     return false;
   }
 
-  const sessionCtx = getSessionContext(sessionKey);
-  if (!sessionCtx) {
+  const session = getSession(sessionKey);
+  if (!session) {
     return false;
   }
 
-  const { sessionId } = sessionCtx;
-  const activeTaskId = getCurrentTaskId(sessionId);
+  const { a2aSessionId: sessionId, taskId: activeTaskId } = session;
 
-  if (!hasActiveTask(sessionId)) {
+  if (!hasActiveSession(sessionKey)) {
     return false;
   }
 

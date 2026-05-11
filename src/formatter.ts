@@ -2,7 +2,7 @@
 import { v4 as uuidv4 } from "uuid";
 import { getXYWebSocketManager } from "./client.js";
 import { logger } from "./utils/logger.js";
-import { getCurrentTaskId, getCurrentMessageId } from "./task-manager.js";
+import { getSessionByA2AId } from "./xy-session-store.js";
 import type {
   XYChannelConfig,
   A2AJsonRpcResponse,
@@ -181,8 +181,8 @@ export async function sendStatusUpdate(params: SendStatusUpdateParams): Promise<
 
   // Dynamic lookup: use latest taskId/messageId from task-manager (handles steer/interrupt),
   // fall back to closure-captured values
-  const currentTaskId = getCurrentTaskId(sessionId) ?? taskId;
-  const currentMessageId = getCurrentMessageId(sessionId) ?? messageId;
+  const currentTaskId = getSessionByA2AId(sessionId)?.taskId ?? taskId;
+  const currentMessageId = getSessionByA2AId(sessionId)?.messageId ?? messageId;
 
   // Build status update event following A2A protocol standard
   const statusUpdate: A2ATaskStatusUpdateEvent = {
@@ -247,8 +247,8 @@ export async function sendCommand(params: SendCommandParams): Promise<void> {
 
   // Dynamic lookup: use latest taskId/messageId from task-manager (handles steer/interrupt),
   // fall back to closure-captured values
-  const currentTaskId = getCurrentTaskId(sessionId) ?? taskId;
-  const currentMessageId = getCurrentMessageId(sessionId) ?? messageId;
+  const currentTaskId = getSessionByA2AId(sessionId)?.taskId ?? taskId;
+  const currentMessageId = getSessionByA2AId(sessionId)?.messageId ?? messageId;
 
   // Build artifact update with command as data
   // Wrap command in commands array as per protocol requirement

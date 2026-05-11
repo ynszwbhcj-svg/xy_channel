@@ -3,13 +3,13 @@ import { createSearchContactTool } from "./search-contact-tool.js";
 import { createCallPhoneTool } from "./call-phone-tool.js";
 import { createSearchMessageTool } from "./search-message-tool.js";
 import { createSendMessageTool } from "./send-message-tool.js";
-import type { SessionContext } from "./session-manager.js";
+import { requireSession } from "./session-helper.js";
 
-export function createGetContactToolSchemaTool(ctx: SessionContext) {
-  const callPhoneTool = createCallPhoneTool(ctx);
-  const searchMessageTool = createSearchMessageTool(ctx);
-  const sendMessageTool = createSendMessageTool(ctx);
-  const searchContactTool = createSearchContactTool(ctx);
+export function createGetContactToolSchemaTool(sessionKey: string) {
+  const callPhoneTool = createCallPhoneTool(sessionKey);
+  const searchMessageTool = createSearchMessageTool(sessionKey);
+  const sendMessageTool = createSendMessageTool(sessionKey);
+  const searchContactTool = createSearchContactTool(sessionKey);
   return createSchemaTool({
     name: "get_contact_tool_schema",
     label: "Get Contact Tool Schema",

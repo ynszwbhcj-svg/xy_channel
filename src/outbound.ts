@@ -7,7 +7,7 @@ type ChannelOutboundAdapter = any;
 import { resolveXYConfig } from "./config.js";
 import { XYFileUploadService } from "./file-upload.js";
 import { XYPushService } from "./push.js";
-import { getCurrentSessionContext } from "./tools/session-manager.js";
+import { getSessionByA2AId } from "./xy-session-store.js";
 import { savePushData } from "./utils/pushdata-manager.js";
 import { getAllPushIds } from "./utils/pushid-manager.js";
 import { logger } from "./utils/logger.js";
@@ -82,10 +82,10 @@ export const xyOutbound: ChannelOutboundAdapter = {
     if (!trimmedTo.includes("::")) {
       logger.log(`[xyOutbound.resolveTarget] Target "${trimmedTo}" missing taskId, looking up session context`);
 
-      // Try to get the current session context
-      const sessionContext = getCurrentSessionContext();
-      if (sessionContext && sessionContext.sessionId === trimmedTo) {
-        const enhancedTarget = `${trimmedTo}::${sessionContext.taskId}`;
+      // Try to get the current session context via A2A sessionId
+      const session = getSessionByA2AId(trimmedTo);
+      if (session) {
+        const enhancedTarget = `${trimmedTo}::${session.taskId}`;
         logger.log(`[xyOutbound.resolveTarget] Enhanced target: ${enhancedTarget}`);
         return {
           ok: true,

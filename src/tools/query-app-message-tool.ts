@@ -1,7 +1,7 @@
 // QueryAppMessage tool implementation
 import { getXYWebSocketManager } from "../client.js";
 import { sendCommand } from "../formatter.js";
-import type { SessionContext } from "./session-manager.js";
+import { requireSession } from "./session-helper.js";
 import type { A2ADataEvent } from "../types.js";
 
 class ToolInputError extends Error {
@@ -15,8 +15,8 @@ class ToolInputError extends Error {
 /**
  * 查询指定时间范围内的设备通知消息。
  */
-export function createQueryAppMessageTool(ctx: SessionContext): any {
-  const { config, sessionId, taskId, messageId } = ctx;
+export function createQueryAppMessageTool(sessionKey: string): any {
+  
   return {
   name: "query_app_message",
   label: "Query App Message",
@@ -51,7 +51,8 @@ c. 调用工具前需认真检查调用参数是否满足工具要求
   },
 
   async execute(_toolCallId: string, params: any) {
-    const wsManager = getXYWebSocketManager(config);
+    const session = requireSession(sessionKey);
+    const wsManager = getXYWebSocketManager(session.config);
 
     const intentParam: Record<string, any> = {};
     if (params.startTime !== undefined) intentParam.startTime = params.startTime;
@@ -125,10 +126,10 @@ c. 调用工具前需认真检查调用参数是否满足工具要求
       wsManager.on("data-event", handler);
 
       sendCommand({
-        config,
-        sessionId,
-        taskId,
-        messageId,
+        config: session.config,
+        sessionId: session.a2aSessionId,
+        taskId: session.taskId,
+        messageId: session.messageId,
         command,
       })
         .then(() => {})

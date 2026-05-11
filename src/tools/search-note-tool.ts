@@ -2,7 +2,7 @@
 import type { ChannelAgentTool } from "openclaw/plugin-sdk";
 import { getXYWebSocketManager } from "../client.js";
 import { sendCommand } from "../formatter.js";
-import type { SessionContext } from "./session-manager.js";
+import { requireSession } from "./session-helper.js";
 import { logger } from "../utils/logger.js";
 import type { A2ADataEvent } from "../types.js";
 
@@ -10,8 +10,8 @@ import type { A2ADataEvent } from "../types.js";
  * XY search note tool - searches notes on user's device.
  * Returns matching notes based on query string.
  */
-export function createSearchNoteTool(ctx: SessionContext): any {
-  const { config, sessionId, taskId, messageId } = ctx;
+export function createSearchNoteTool(sessionKey: string): any {
+  
   return {
   name: "search_notes",
   label: "Search Notes",
@@ -29,13 +29,14 @@ export function createSearchNoteTool(ctx: SessionContext): any {
 
   async execute(toolCallId: string, params: any) {
 
+    const session = requireSession(sessionKey);
     // Validate parameters
     if (!params.query) {
       throw new Error("Missing required parameter: query is required");
     }
 
     // Get WebSocket manager
-    const wsManager = getXYWebSocketManager(config);
+    const wsManager = getXYWebSocketManager(session.config);
 
     // Build SearchNote command
     const command = {
@@ -109,10 +110,10 @@ export function createSearchNoteTool(ctx: SessionContext): any {
 
       // Send the command
       sendCommand({
-        config,
-        sessionId,
-        taskId,
-        messageId,
+        config: session.config,
+        sessionId: session.a2aSessionId,
+        taskId: session.taskId,
+        messageId: session.messageId,
         command,
       }).then(() => {
       }).catch((error) => {

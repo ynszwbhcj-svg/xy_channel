@@ -2,7 +2,7 @@
 import type { ChannelAgentTool } from "openclaw/plugin-sdk";
 import { getXYWebSocketManager } from "../client.js";
 import { sendCommand } from "../formatter.js";
-import type { SessionContext } from "./session-manager.js";
+import { requireSession } from "./session-helper.js";
 import { logger } from "../utils/logger.js";
 import type { A2ADataEvent } from "../types.js";
 
@@ -10,8 +10,7 @@ import type { A2ADataEvent } from "../types.js";
  * XY location tool - gets user's current location.
  * Returns WGS84 coordinates (latitude, longitude).
  */
-export function createLocationTool(ctx: SessionContext): any {
-  const { config, sessionId, taskId, messageId } = ctx;
+export function createLocationTool(sessionKey: string): any {
   return {
   name: "get_user_location",
   label: "Get User Location",
@@ -24,8 +23,9 @@ export function createLocationTool(ctx: SessionContext): any {
 
   async execute(toolCallId: string, params: any) {
 
+    const session = requireSession(sessionKey);
     // Get WebSocket manager
-    const wsManager = getXYWebSocketManager(config);
+    const wsManager = getXYWebSocketManager(session.config);
 
     // Build GetCurrentLocation command
     const command = {
@@ -98,10 +98,10 @@ export function createLocationTool(ctx: SessionContext): any {
 
       // Send the command
       sendCommand({
-        config,
-        sessionId,
-        taskId,
-        messageId,
+        config: session.config,
+        sessionId: session.a2aSessionId,
+        taskId: session.taskId,
+        messageId: session.messageId,
         command,
       }).then(() => {
       }).catch((error) => {

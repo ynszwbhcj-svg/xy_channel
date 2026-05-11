@@ -1,6 +1,6 @@
 // Image Reading tool implementation
 import { XYFileUploadService } from "../file-upload.js";
-import type { SessionContext } from "./session-manager.js";
+import { requireSession } from "./session-helper.js";
 import fetch from "node-fetch";
 import fs from "fs/promises";
 import { v4 as uuidv4 } from "uuid";
@@ -194,8 +194,7 @@ async function callImageUnderstandingAPI(
  * XY Image Reading tool - performs image understanding using local or remote image URLs.
  * Supports both local file paths and remote URLs, up to 10 images at once.
  */
-export function createImageReadingTool(ctx: SessionContext): any {
-  const { config } = ctx;
+export function createImageReadingTool(sessionKey: string): any {
   return {
     name: "image_reading",
     label: "Image Reading",
@@ -219,6 +218,7 @@ export function createImageReadingTool(ctx: SessionContext): any {
 
     async execute(toolCallId: string, params: any) {
 
+      const session = requireSession(sessionKey);
       // Normalize images param
       const images: string[] = params.images
         ? (Array.isArray(params.images) ? params.images : [params.images])
@@ -239,9 +239,9 @@ export function createImageReadingTool(ctx: SessionContext): any {
 
       // Create upload service
       const uploadService = new XYFileUploadService(
-        config.fileUploadUrl,
-        config.apiKey,
-        config.uid
+        session.config.fileUploadUrl,
+        session.config.apiKey,
+        session.config.uid
       );
 
       // Process images: local files upload to OBS, remote URLs pass directly
@@ -256,9 +256,9 @@ export function createImageReadingTool(ctx: SessionContext): any {
         const caption = await callImageUnderstandingAPI(
           allImageUrls,
           prompt,
-          config.apiKey,
-          config.uid,
-          config.fileUploadUrl
+          session.config.apiKey,
+          session.config.uid,
+          session.config.fileUploadUrl
         );
 
         return {

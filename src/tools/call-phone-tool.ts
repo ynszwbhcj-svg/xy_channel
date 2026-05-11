@@ -2,7 +2,7 @@
 import type { ChannelAgentTool } from "openclaw/plugin-sdk";
 import { getXYWebSocketManager } from "../client.js";
 import { sendCommand } from "../formatter.js";
-import type { SessionContext } from "./session-manager.js";
+import { requireSession } from "./session-helper.js";
 import { logger } from "../utils/logger.js";
 import type { A2ADataEvent } from "../types.js";
 
@@ -10,8 +10,8 @@ import type { A2ADataEvent } from "../types.js";
  * XY call phone tool - makes a phone call on user's device.
  * Requires phoneNumber parameter and optional slotId (0 for primary SIM, 1 for secondary SIM).
  */
-export function createCallPhoneTool(ctx: SessionContext): any {
-  const { config, sessionId, taskId, messageId } = ctx;
+export function createCallPhoneTool(sessionKey: string): any {
+  
   return {
   name: "call_phone",
   label: "Call Phone",
@@ -34,6 +34,7 @@ export function createCallPhoneTool(ctx: SessionContext): any {
 
   async execute(toolCallId: string, params: any) {
 
+    const session = requireSession(sessionKey);
     // Validate phoneNumber parameter
     if (!params.phoneNumber || typeof params.phoneNumber !== "string" || params.phoneNumber.trim() === "") {
       throw new Error("Missing required parameter: phoneNumber must be a non-empty string");
@@ -49,7 +50,7 @@ export function createCallPhoneTool(ctx: SessionContext): any {
 
 
     // Get WebSocket manager
-    const wsManager = getXYWebSocketManager(config);
+    const wsManager = getXYWebSocketManager(session.config);
 
     // Build StartCall command
     const command = {
@@ -125,10 +126,10 @@ export function createCallPhoneTool(ctx: SessionContext): any {
 
       // Send the command
       sendCommand({
-        config,
-        sessionId,
-        taskId,
-        messageId,
+        config: session.config,
+        sessionId: session.a2aSessionId,
+        taskId: session.taskId,
+        messageId: session.messageId,
         command,
       })
         .then(() => {

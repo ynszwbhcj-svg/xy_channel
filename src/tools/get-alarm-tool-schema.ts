@@ -3,13 +3,13 @@ import { makeAlarmTool } from "./create-alarm-tool.js";
 import { createSearchAlarmTool } from "./search-alarm-tool.js";
 import { createModifyAlarmTool } from "./modify-alarm-tool.js";
 import { createDeleteAlarmTool } from "./delete-alarm-tool.js";
-import type { SessionContext } from "./session-manager.js";
+import { requireSession } from "./session-helper.js";
 
-export function createGetAlarmToolSchemaTool(ctx: SessionContext) {
-  const createAlarmTool = makeAlarmTool(ctx);
-  const modifyAlarmTool = createModifyAlarmTool(ctx);
-  const deleteAlarmTool = createDeleteAlarmTool(ctx);
-  const searchAlarmTool = createSearchAlarmTool(ctx);
+export function createGetAlarmToolSchemaTool(sessionKey: string) {
+  const createAlarmTool = makeAlarmTool(sessionKey);
+  const modifyAlarmTool = createModifyAlarmTool(sessionKey);
+  const deleteAlarmTool = createDeleteAlarmTool(sessionKey);
+  const searchAlarmTool = createSearchAlarmTool(sessionKey);
   return createSchemaTool({
     name: "get_alarm_tool_schema",
     label: "Get Alarm Tool Schema",

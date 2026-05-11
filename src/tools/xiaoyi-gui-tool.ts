@@ -1,8 +1,7 @@
 // XiaoYi GUI tool implementation - simulates phone screen interactions
 import { getXYWebSocketManager } from "../client.js";
 import { sendCommand } from "../formatter.js";
-import type { SessionContext } from "./session-manager.js";
-import { getCurrentTaskId } from "../task-manager.js";
+import { requireSession } from "./session-helper.js";
 import { logger } from "../utils/logger.js";
 
 /**
@@ -10,8 +9,7 @@ import { logger } from "../utils/logger.js";
  * Simulates user interactions on phone screen (click, swipe, input, navigation, etc.)
  * to complete tasks that cannot be done through internet APIs.
  */
-export function createXiaoyiGuiTool(ctx: SessionContext): any {
-  const { config, sessionId, taskId, messageId } = ctx;
+export function createXiaoyiGuiTool(sessionKey: string): any {
   return {
   name: "xiaoyi_gui_agent",
   label: "XiaoYi GUI Agent",
@@ -44,8 +42,9 @@ export function createXiaoyiGuiTool(ctx: SessionContext): any {
   },
 
   async execute(toolCallId: string, params: any) {
+    const session = requireSession(sessionKey);
     // Dynamic lookup: use latest taskId from task-manager (handles steer/interrupt)
-    const currentTaskId = getCurrentTaskId(sessionId) ?? taskId;
+    const currentTaskId = session.taskId;
 
     // Validate parameters
     if (!params.query || typeof params.query !== "string") {
@@ -53,7 +52,7 @@ export function createXiaoyiGuiTool(ctx: SessionContext): any {
     }
 
     // Get WebSocket manager
-    const wsManager = getXYWebSocketManager(config);
+    const wsManager = getXYWebSocketManager(session.config);
 
     // Build InvokeJarvisGUIAgentRequest command
     const command = {
@@ -63,7 +62,7 @@ export function createXiaoyiGuiTool(ctx: SessionContext): any {
       },
       payload: {
         query: params.query,
-        sessionId: sessionId,
+        sessionId: session.a2aSessionId,
         interactionId: currentTaskId, // taskId corresponds to interactionId; use dynamic lookup for steer safety
       },
     };
@@ -118,10 +117,10 @@ export function createXiaoyiGuiTool(ctx: SessionContext): any {
 
       // Send the command
       sendCommand({
-        config,
-        sessionId,
-        taskId,
-        messageId,
+        config: session.config,
+        sessionId: session.a2aSessionId,
+        taskId: session.taskId,
+        messageId: session.messageId,
         command,
       }).then(() => {
       }).catch((error) => {

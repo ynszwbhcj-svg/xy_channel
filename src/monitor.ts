@@ -5,13 +5,13 @@ import { resolveXYConfig } from "./config.js";
 import { getXYWebSocketManager, setClientRuntime, diagnoseAllManagers, cleanupOrphanConnections, removeXYWebSocketManager } from "./client.js";
 import { handleXYMessage } from "./bot.js";
 import { parseA2AMessage } from "./parser.js";
-import { hasActiveTask, getAllActiveTaskBindings } from "./task-manager.js";
+import { getAllActiveSessions, getSessionByA2AId } from "./xy-session-store.js";
 import { sendA2AResponse } from "./formatter.js";
 import { handleTriggerEvent } from "./trigger-handler.js";
 import { handleSelfEvolutionEvent, handleSelfEvolutionStateGetEvent } from "./self-evolution-handler.js";
 import { handleLoginTokenEvent } from "./login-token-handler.js";
 import { cleanupStaleTempFiles } from "./reply-dispatcher.js";
-import { cleanupStaleSessions, getActiveSessionCount, cleanupAllSessions } from "./tools/session-manager.js";
+import { cleanupStaleSessions, getActiveSessionCount, cleanupAllSessions } from "./xy-session-store.js";
 
 export type MonitorXYOpts = {
   config?: any;
@@ -136,7 +136,7 @@ export async function monitorXYProvider(opts: MonitorXYOpts = {}): Promise<void>
       try {
         const parsed = parseA2AMessage(message);
         const steerMode = cfg.messages?.queue?.mode === "steer";
-        const hasActiveRun = hasActiveTask(parsed.sessionId);
+        const hasActiveRun = Boolean(getSessionByA2AId(parsed.sessionId));
 
         if (steerMode && hasActiveRun) {
           // Steer模式且有活跃任务：不入队列，直接并发执行
@@ -261,29 +261,29 @@ export async function monitorXYProvider(opts: MonitorXYOpts = {}): Promise<void>
 
       // 📤 Send restart notification to all active sessions before disconnecting
       try {
-        const activeBindings = getAllActiveTaskBindings();
-        if (activeBindings.length > 0) {
+        const activeSessions = getAllActiveSessions();
+        if (activeSessions.length > 0) {
           const config = resolveXYConfig(cfg);
           const notificationText = "Gateway即将重启，重启期间可能短暂出现\u201c环境异常\u201d提示，请稍候并耐心重试~";
 
-          log(`[MONITOR] 📤 Sending restart notifications to ${activeBindings.length} active session(s)`);
-          const sendPromises = activeBindings.map(binding =>
+          log(`[MONITOR] 📤 Sending restart notifications to ${activeSessions.length} active session(s)`);
+          const sendPromises = activeSessions.map(({ session }) =>
             sendA2AResponse({
               config,
-              sessionId: binding.sessionId,
-              taskId: binding.currentTaskId,
-              messageId: binding.currentMessageId,
+              sessionId: session.a2aSessionId,
+              taskId: session.taskId,
+              messageId: session.messageId,
               text: notificationText,
               append: false,
               final: true,
               runtime,
             }).catch(err => {
-              error(`[MONITOR] Failed to send restart notification to session ${binding.sessionId}: ${String(err)}`);
+              error(`[MONITOR] Failed to send restart notification to session ${session.a2aSessionId}: ${String(err)}`);
             })
           );
 
           await Promise.all(sendPromises);
-          log(`[MONITOR] ✅ Restart notifications sent to ${activeBindings.length} session(s)`);
+          log(`[MONITOR] ✅ Restart notifications sent to ${activeSessions.length} session(s)`);
         } else {
           log(`[MONITOR] No active sessions, skipping restart notifications`);
         }

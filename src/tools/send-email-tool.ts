@@ -1,7 +1,7 @@
 // Send Email tool implementation
 import { getXYWebSocketManager } from "../client.js";
 import { sendCommand } from "../formatter.js";
-import type { SessionContext } from "./session-manager.js";
+import { requireSession } from "./session-helper.js";
 import type { A2ADataEvent } from "../types.js";
 
 class ToolInputError extends Error {
@@ -15,8 +15,8 @@ class ToolInputError extends Error {
 /**
  * XY send email tool - sends an email via 花瓣邮箱 on user's device.
  */
-export function createSendEmailTool(ctx: SessionContext): any {
-  const { config, sessionId, taskId, messageId } = ctx;
+export function createSendEmailTool(sessionKey: string): any {
+  
   return {
   name: "send_email",
   label: "Send Email",
@@ -47,6 +47,7 @@ c. 调用工具前需认真检查调用参数是否满足工具要求
   },
 
   async execute(_toolCallId: string, params: any) {
+    const session = requireSession(sessionKey);
     if (typeof params.subject !== "string" || !params.subject.trim()) {
       throw new ToolInputError("缺少必填参数 subject（邮件主题）");
     }
@@ -57,7 +58,7 @@ c. 调用工具前需认真检查调用参数是否满足工具要求
       throw new ToolInputError("缺少必填参数 body（邮件内容）");
     }
 
-    const wsManager = getXYWebSocketManager(config);
+    const wsManager = getXYWebSocketManager(session.config);
 
     const command = {
       header: {
@@ -124,10 +125,10 @@ c. 调用工具前需认真检查调用参数是否满足工具要求
       wsManager.on("data-event", handler);
 
       sendCommand({
-        config,
-        sessionId,
-        taskId,
-        messageId,
+        config: session.config,
+        sessionId: session.a2aSessionId,
+        taskId: session.taskId,
+        messageId: session.messageId,
         command,
       })
         .then(() => {})

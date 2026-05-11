@@ -2,7 +2,7 @@
 import type { ChannelAgentTool } from "openclaw/plugin-sdk";
 import { getXYWebSocketManager } from "../client.js";
 import { sendCommand } from "../formatter.js";
-import type { SessionContext } from "./session-manager.js";
+import { requireSession } from "./session-helper.js";
 import { logger } from "../utils/logger.js";
 import type { A2ADataEvent } from "../types.js";
 import { XYFileUploadService } from "../file-upload.js";
@@ -23,8 +23,8 @@ class ToolInputError extends Error {
 /**
  * XY add collection tool - adds data to user's XiaoYi collection.
  */
-export function createXiaoyiAddCollectionTool(ctx: SessionContext): any {
-  const { config, sessionId, taskId, messageId } = ctx;
+export function createXiaoyiAddCollectionTool(sessionKey: string): any {
+  
   return {
   name: "add_collection",
   label: "Add XiaoYi Collection",
@@ -77,6 +77,7 @@ export function createXiaoyiAddCollectionTool(ctx: SessionContext): any {
 
   async execute(toolCallId: string, params: any) {
 
+    const session = requireSession(sessionKey);
     // Validate parameters
     const { content, uri, sourceAppBundleName, dataType, title } = params;
 
@@ -94,15 +95,15 @@ export function createXiaoyiAddCollectionTool(ctx: SessionContext): any {
     }
 
     // Get WebSocket manager
-    const wsManager = getXYWebSocketManager(config);
+    const wsManager = getXYWebSocketManager(session.config);
 
     // Handle uri: upload local paths to get public URL
     let publicUri = uri;
     if (uri && !uri.startsWith("http://") && !uri.startsWith("https://") && !uri.startsWith("file://")) {
       const uploadService = new XYFileUploadService(
-        config.fileUploadUrl,
-        config.apiKey,
-        config.uid
+        session.config.fileUploadUrl,
+        session.config.apiKey,
+        session.config.uid
       );
       publicUri = await uploadService.uploadFileAndGetUrl(uri);
 
@@ -199,10 +200,10 @@ export function createXiaoyiAddCollectionTool(ctx: SessionContext): any {
 
       // Send the command
       sendCommand({
-        config,
-        sessionId,
-        taskId,
-        messageId,
+        config: session.config,
+        sessionId: session.a2aSessionId,
+        taskId: session.taskId,
+        messageId: session.messageId,
         command,
       })
         .then(() => {

@@ -2,7 +2,7 @@
 import type { ChannelAgentTool } from "openclaw/plugin-sdk";
 import { getXYWebSocketManager } from "../client.js";
 import { sendCommand } from "../formatter.js";
-import type { SessionContext } from "./session-manager.js";
+import { requireSession } from "./session-helper.js";
 import { logger } from "../utils/logger.js";
 import type { A2ADataEvent } from "../types.js";
 
@@ -10,8 +10,8 @@ import type { A2ADataEvent } from "../types.js";
  * XY search file tool - searches files on user's device file system.
  * Returns matching files based on keyword search in file name or content.
  */
-export function createSearchFileTool(ctx: SessionContext): any {
-  const { config, sessionId, taskId, messageId } = ctx;
+export function createSearchFileTool(sessionKey: string): any {
+  
   return {
   name: "search_file",
   label: "Search File",
@@ -41,6 +41,7 @@ export function createSearchFileTool(ctx: SessionContext): any {
 
   async execute(toolCallId: string, params: any) {
 
+    const session = requireSession(sessionKey);
     // Validate query parameter
     if (!params.query || typeof params.query !== "string" || params.query.trim() === "") {
       throw new Error("Missing required parameter: query must be a non-empty string");
@@ -48,7 +49,7 @@ export function createSearchFileTool(ctx: SessionContext): any {
 
 
     // Get WebSocket manager
-    const wsManager = getXYWebSocketManager(config);
+    const wsManager = getXYWebSocketManager(session.config);
 
     // Build SearchFile command
     const command = {
@@ -126,10 +127,10 @@ export function createSearchFileTool(ctx: SessionContext): any {
 
       // Send the command
       sendCommand({
-        config,
-        sessionId,
-        taskId,
-        messageId,
+        config: session.config,
+        sessionId: session.a2aSessionId,
+        taskId: session.taskId,
+        messageId: session.messageId,
         command,
       })
         .then(() => {
