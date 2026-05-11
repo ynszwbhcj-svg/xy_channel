@@ -37,6 +37,8 @@ export interface HandleXYMessageParams {
   message: A2AJsonRpcRequest;
   accountId: string;
   webSocketSessionId?: string; // 可选：WebSocket 层级的 sessionId，用于保存 .xiaoyiruntime
+  /** Called after dispatch init is complete (agentTools/wrapStreamFn done). */
+  onInitComplete?: () => void;
 }
 
 /**
@@ -274,6 +276,11 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
     // Build message body with speaker prefix (following feishu pattern)
     let messageBody = textForAgent;
 
+    // Embed A2A taskId marker before the user query so the provider can
+    // extract it from messages without relying on AsyncLocalStorage.
+    // The provider strips this marker before sending to the model.
+    messageBody = `xiaoyiA2A info[taskId:${parsed.taskId},deviceType:${deviceType}] ${messageBody}`;
+
     // Add speaker prefix for clarity
     const speaker = parsed.sessionId;
     messageBody = `${speaker}: ${messageBody}`;
@@ -366,9 +373,13 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
 
         log(`[BOT] ✅ Cleanup completed`);
       },
-      run: () =>
-        // 🔐 Use AsyncLocalStorage to provide session context to tools
-        runWithSessionContext(sessionContext, async () => {
+      run: () => {
+        // 🔐 Use AsyncLocalStorage to provide session context to tools.
+        // runWithSessionContext returns after the sync part of dispatch
+        // (including agentTools + wrapStreamFn) has executed, so we
+        // signal init complete to release the global dispatch gate
+        // for the next session.
+        const dispatchPromise = runWithSessionContext(sessionContext, async () => {
           log(`[BOT-DISPATCH] ⏳ dispatchReplyFromConfig starting...`);
           log(`[BOT-DISPATCH]   - sessionKey: ${ctxPayload.SessionKey}`);
           log(`[BOT-DISPATCH]   - provider: ${ctxPayload.Provider}`);
@@ -392,7 +403,13 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
             error(`[BOT-DISPATCH]   - error stack: ${dispatchErr instanceof Error ? dispatchErr.stack?.slice(0, 500) : "N/A"}`);
             throw dispatchErr;
           }
-        }),
+        });
+
+        // Signal init complete — sync part (agentTools, wrapStreamFn) is done
+        params.onInitComplete?.();
+
+        return dispatchPromise;
+      },
     });
 
     log(`[BOT] ✅ Dispatcher completed for session: ${parsed.sessionId}`);

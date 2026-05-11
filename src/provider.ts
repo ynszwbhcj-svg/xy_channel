@@ -9,8 +9,7 @@
 //   models.providers.xiaoyiprovider.models = [...]
 import { createHash } from "crypto";
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
-import { activeSessions, asyncLocalStorage, getCurrentSessionContext } from "./tools/session-manager.js";
-import { getCurrentTaskId } from "./task-manager.js";
+import { getCurrentSessionContext } from "./tools/session-manager.js";
 import { selfEvolutionManager } from "./utils/self-evolution-manager.js";
 
 // ── Retry config ──────────────────────────────────────────────
@@ -482,27 +481,48 @@ export const xiaoyiProvider: ProviderPlugin = {
     const underlying = ctx.streamFn;
     if (!underlying) return underlying;
 
-    // Capture A2A sessionId at agent setup time for multi-session isolation.
-    // openclaw calls wrapStreamFn per-agent (per session), so this runs inside
-    // the correct runWithSessionContext() ALS scope.  When multiple sessions are
-    // active concurrently, getCurrentSessionContext() may later return the WRONG
-    // session (lastRegisteredKey fallback).  The captured sessionId lets us
-    // bypass that fallback and look up the correct taskId directly from
-    // task-manager.
-    const alsStore = asyncLocalStorage.getStore();
-    const sessionCtx = getCurrentSessionContext();
-    const capturedA2ASessionId = sessionCtx?.sessionId ?? null;
-    console.log(
-      `[xiaoyiprovider] wrapStreamFn — ALS: ${alsStore ? "HIT" : "MISS"}, ` +
-      `capturedSessionId=${capturedA2ASessionId ?? "null"}, ` +
-      `taskId=${sessionCtx?.taskId ?? "null"}, ` +
-      `activeSessionsCount=${activeSessions.size}`,
-    );
+    // ── Regex to extract A2A taskId/deviceType from user messages ──
+    // bot.ts embeds: xiaoyiA2A info[taskId:<id>,deviceType:<type>]
+    const A2A_MARKER_RE = /xiaoyiA2A info\[taskId:([^\],]+)(?:,deviceType:([^\]]+))?\]\s*/;
 
     return async (model, context, options) => {
-      // 每次请求时从 ctx.extraParams 动态读取 header
       const dynamicHeaders: Record<string, string> = {};
 
+      // ── Extract A2A taskId/deviceType from user messages ──
+      // Scan from last user message backwards; strip the marker from all.
+      let resolvedTaskId: string | null = null;
+      let resolvedDeviceType: string | null = null;
+
+      if (context.messages) {
+        for (let i = context.messages.length - 1; i >= 0; i--) {
+          const msg = context.messages[i];
+          if (msg.role !== "user" || !msg.content) continue;
+
+          const extract = (text: string): string | null => {
+            const match = text.match(A2A_MARKER_RE);
+            if (match) {
+              if (!resolvedTaskId) resolvedTaskId = match[1] ?? null;
+              if (!resolvedDeviceType) resolvedDeviceType = match[2] ?? null;
+              return text.replace(A2A_MARKER_RE, "");
+            }
+            return null;
+          };
+
+          if (typeof msg.content === "string") {
+            const stripped = extract(msg.content);
+            if (stripped !== null) msg.content = stripped;
+          } else if (Array.isArray(msg.content)) {
+            for (const block of msg.content) {
+              if (block.type === "text" && typeof block.text === "string") {
+                const stripped = extract(block.text);
+                if (stripped !== null) block.text = stripped;
+              }
+            }
+          }
+        }
+      }
+
+      // ── Build dynamic headers ────────────────────────────
       if (ctx.extraParams) {
         const fallbackPrefix = ctx.extraParams[FALLBACK_PREFIX_KEY];
 
@@ -518,40 +538,27 @@ export const xiaoyiProvider: ProviderPlugin = {
             if (cronTitle) dynamicHeaders["x-cron-title"] = encodeURIComponent(cronTitle);
             if (context.messages?.length === 1) dynamicHeaders["x-cron-flag"] = "begin";
           }
+        } else if (resolvedTaskId) {
+          // Session mode: taskId extracted from user message marker
+          const traceId = resolvedTaskId;
+          const sessionId = traceId.split("&")[0];
+          const interactionId = traceId.split("&")[1] ?? "";
+
+          const isCron = isCronTriggered(context.messages);
+          dynamicHeaders[HEADER_TRACE_ID] = isCron ? `cron_${traceId}_${Date.now()}` : traceId;
+          if (isCron) {
+            const cronTitle = extractCronTitle(context.messages);
+            if (cronTitle) dynamicHeaders["x-cron-title"] = encodeURIComponent(cronTitle);
+            if (context.messages?.length === 1) dynamicHeaders["x-cron-flag"] = "begin";
+          }
+          if (typeof sessionId === "string") dynamicHeaders[HEADER_SESSION_ID] = sessionId;
+          if (typeof interactionId === "string") dynamicHeaders[HEADER_INTERACTION_ID] = interactionId;
         } else {
-          // Session mode: resolve taskId for the correct session.
-          //
-          // Priority:
-          //   1. capturedA2ASessionId → getCurrentTaskId()  (most reliable,
-          //      bypasses lastRegisteredKey fallback)
-          //   2. getCurrentSessionContext()?.taskId           (works when ALS
-          //      is intact)
-          //   3. ctx.extraParams cached values                (last resort,
-          //      may be stale / from wrong session)
-          let resolvedTaskId: string | null = null;
-          if (capturedA2ASessionId) {
-            resolvedTaskId = getCurrentTaskId(capturedA2ASessionId);
-          }
-          if (!resolvedTaskId) {
-            resolvedTaskId = getCurrentSessionContext()?.taskId ?? null;
-          }
-
-          const traceId = resolvedTaskId ?? ctx.extraParams[HEADER_TRACE_ID];
-          const sessionId = resolvedTaskId?.split("&")[0]
-            ?? ctx.extraParams[HEADER_SESSION_ID];
-          const interactionId = resolvedTaskId?.split("&")[1]
-            ?? ctx.extraParams[HEADER_INTERACTION_ID]
-            ?? "";
-
-          if (typeof traceId === "string") {
-            const isCron = isCronTriggered(context.messages);
-            dynamicHeaders[HEADER_TRACE_ID] = isCron ? `cron_${traceId}_${Date.now()}` : traceId;
-            if (isCron) {
-              const cronTitle = extractCronTitle(context.messages);
-              if (cronTitle) dynamicHeaders["x-cron-title"] = encodeURIComponent(cronTitle);
-              if (context.messages?.length === 1) dynamicHeaders["x-cron-flag"] = "begin";
-            }
-          }
+          // No marker found – fall back to extraParams cached values
+          const traceId = ctx.extraParams[HEADER_TRACE_ID];
+          const sessionId = ctx.extraParams[HEADER_SESSION_ID];
+          const interactionId = ctx.extraParams[HEADER_INTERACTION_ID];
+          if (typeof traceId === "string") dynamicHeaders[HEADER_TRACE_ID] = traceId;
           if (typeof sessionId === "string") dynamicHeaders[HEADER_SESSION_ID] = sessionId;
           if (typeof interactionId === "string") dynamicHeaders[HEADER_INTERACTION_ID] = interactionId;
         }
@@ -562,13 +569,9 @@ export const xiaoyiProvider: ProviderPlugin = {
       if (context.systemPrompt) {
         console.log(`[xiaoyiprovider] system prompt length: ${context.systemPrompt.length}`);
       }
-      // Prefer deviceType from extraParams (set by prepareExtraParams).
-      // Fall back to getCurrentSessionContext() because OpenClaw caches
-      // resolvePreparedExtraParams by provider/modelId – the cache key does
-      // not include session-specific data, so deviceType may be missing
-      // from the cached extraParams even when a session is active.
+      // deviceType: prefer marker-extracted value, fall back to extraParams
       const extraParamsDeviceType = (ctx.extraParams?.[DEVICE_TYPE_KEY] as string) || undefined;
-      const deviceType = extraParamsDeviceType ?? getCurrentSessionContext()?.deviceType;
+      const deviceType = resolvedDeviceType || extraParamsDeviceType || undefined;
 
       // 在发送给模型前，优化 systemPrompt 结构
       if (context.systemPrompt) {
@@ -612,7 +615,7 @@ export const xiaoyiProvider: ProviderPlugin = {
       console.log(`[selfEvolution] selfEvolution flag: ${selfEvolutionEnabled}`);
       context.systemPrompt = applySelfEvolutionPrompt(context.systemPrompt, selfEvolutionEnabled);
 
-      // Append device context to systemPrompt (using pre-captured deviceType from prepareExtraParams)
+      // Append device context to systemPrompt
       if (deviceType) {
         const displayDevice = (deviceType === "2in1") ? "鸿蒙PC" : deviceType;
         const deviceSection = `\n\n## Current User Device Context\nThe current user is using the following device: ${displayDevice}\nYou need to be aware of the user's current device and provide guidance accordingly. If the response involves device-related tools or actions, you must tailor the reply based on the user's current device, using device-specific references such as "saved to the Notes/Calendar on your {deviceType}.\n"`;
@@ -649,23 +652,5 @@ export const xiaoyiProvider: ProviderPlugin = {
 
       return createRetryingStream(makeStream, cronJob);
     };
-  },
-
-  /**
-   * Diagnostic-only: log ctx.sessionId format on every transport turn.
-   * Goal: confirm whether sessionId = sessionKey (so we can use it to
-   * look up A2A context directly from activeSessions, bypassing ALS).
-   */
-  resolveTransportTurnState: (ctx) => {
-    console.log(
-      `[xiaoyiprovider] resolveTransportTurnState — ` +
-      `sessionId=${ctx.sessionId ?? "null"}, ` +
-      `turnId=${ctx.turnId}, ` +
-      `transport=${ctx.transport}, ` +
-      `attempt=${ctx.attempt}, ` +
-      `provider=${ctx.provider}, ` +
-      `modelId=${ctx.modelId}`,
-    );
-    return null;
   },
 };

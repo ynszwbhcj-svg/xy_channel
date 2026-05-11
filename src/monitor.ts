@@ -93,6 +93,13 @@ export async function monitorXYProvider(opts: MonitorXYOpts = {}): Promise<void>
   // Create session queue for ordered message processing
   const enqueue = createSessionQueue();
 
+  // Global gate that serializes dispatch initialization across sessions.
+  // When a new session starts dispatching, it acquires this gate and holds it
+  // until agent setup (agentTools + wrapStreamFn) is complete, then releases it.
+  // This prevents lastRegisteredKey races when multiple sessions initialize
+  // concurrently.
+  let globalDispatchInitGate: Promise<void> = Promise.resolve();
+
   // Health check interval
   let healthCheckInterval: NodeJS.Timeout | null = null;
 
@@ -114,6 +121,12 @@ export async function monitorXYProvider(opts: MonitorXYOpts = {}): Promise<void>
       activeMessages.add(messageKey);
 
       const task = async () => {
+        // Wait for the previous session's init to complete (global gate),
+        // then acquire the gate for this session's init.
+        await globalDispatchInitGate;
+        let releaseGate: () => void;
+        globalDispatchInitGate = new Promise<void>((r) => { releaseGate = r; });
+
         try {
           await handleXYMessage({
             cfg,
@@ -121,9 +134,11 @@ export async function monitorXYProvider(opts: MonitorXYOpts = {}): Promise<void>
             message,
             accountId,  // ✅ Pass accountId ("default")
             webSocketSessionId: sessionId,  // ✅ 传递 WebSocket 层级的 sessionId
+            onInitComplete: () => releaseGate(),
           });
         } catch (err) {
           // ✅ Only log error, don't re-throw to prevent gateway restart
+          releaseGate();
           error(`XY gateway: error handling message from ${serverId}: ${String(err)}`);
         } finally {
           // Remove from active messages when done
