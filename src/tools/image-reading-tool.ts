@@ -1,10 +1,8 @@
 // Image Reading tool implementation
 import { XYFileUploadService } from "../file-upload.js";
 import type { SessionContext } from "./session-manager.js";
-import { logger } from "../utils/logger.js";
 import fetch from "node-fetch";
 import fs from "fs/promises";
-import path from "path";
 import { v4 as uuidv4 } from "uuid";
 
 /**
@@ -32,65 +30,19 @@ async function isLocalFile(value: string): Promise<boolean> {
 }
 
 /**
- * Download remote file to local temp directory
- */
-async function downloadRemoteFile(url: string): Promise<string> {
-
-  try {
-    const response = await fetch(url);
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-    }
-
-    // Get filename from URL or use default
-    let filename = url.split("/").pop() || "downloaded_image";
-    filename = filename.split("?")[0];
-
-    // Ensure temp directory exists
-    const tempDir = "/tmp/xy_channel";
-    await fs.mkdir(tempDir, { recursive: true });
-
-    // Generate unique filename to avoid conflicts
-    const timestamp = Date.now();
-    const ext = path.extname(filename) || ".jpg";
-    const baseName = path.basename(filename, ext);
-    const uniqueFilename = `${baseName}_${timestamp}${ext}`;
-    const localPath = path.join(tempDir, uniqueFilename);
-
-    // Save file to local temp directory
-    const arrayBuffer = await response.arrayBuffer();
-    const buffer = Buffer.from(arrayBuffer);
-    await fs.writeFile(localPath, buffer);
-
-    return localPath;
-  } catch (error) {
-    throw new Error(`Failed to download remote file: ${error instanceof Error ? error.message : String(error)}`);
-  }
-}
-
-/**
- * Process image input: validate and convert local file to OBS URL, keep remote URL unchanged
+ * Process image input: remote URL passed directly, local file uploaded to OBS
  */
 async function processImageInput(
   imageInput: string,
   uploadService: XYFileUploadService
-): Promise<{ imageUrl: string; localPath?: string }> {
+): Promise<string> {
 
-  // Check if it's a remote URL
+  // Remote URL: pass directly
   if (isRemoteUrl(imageInput)) {
-    const localPath = await downloadRemoteFile(imageInput);
-
-    const imageUrl = await uploadService.uploadFileAndGetUrl(localPath, "TEMPORARY_MATERIAL_DOC");
-
-    if (!imageUrl) {
-      throw new Error("图片上传失败：无法获取图片访问地址");
-    }
-
-
-    return { imageUrl, localPath };
+    return imageInput;
   }
 
-  // Check if it's a local file
+  // Local file: upload to OBS
   const isLocal = await isLocalFile(imageInput);
   if (isLocal) {
     const imageUrl = await uploadService.uploadFileAndGetUrl(imageInput, "TEMPORARY_MATERIAL_DOC");
@@ -99,8 +51,7 @@ async function processImageInput(
       throw new Error("图片上传失败：无法获取图片访问地址");
     }
 
-
-    return { imageUrl };
+    return imageUrl;
   }
 
   throw new Error(`Invalid image input: must be a remote URL or local file path, got: ${imageInput}`);
@@ -108,9 +59,10 @@ async function processImageInput(
 
 /**
  * Call image understanding API with streaming response
+ * Supports both single image and multiple images (imageUrls array)
  */
 async function callImageUnderstandingAPI(
-  imageUrl: string,
+  imageUrls: string[],
   text: string,
   apiKey: string,
   uid: string,
@@ -160,12 +112,11 @@ async function callImageUnderstandingAPI(
           pluginId: "aeac4e92c32949c1b7fc02de262615e6",
           agentState: "OnShelf",
           actionName: "imageUnderStandStream",
-          content: { imageUrl, text },
+          content: { imageUrls, text },
         },
       },
     ],
   };
-
 
   try {
     const response = await fetch(apiUrl, {
@@ -176,7 +127,6 @@ async function callImageUnderstandingAPI(
       timeout: 120000, // 2 minutes timeout
     });
 
-
     if (!response.ok) {
       const errorText = await response.text();
       throw new Error(`API request failed: ${response.status} ${response.statusText}`);
@@ -186,7 +136,6 @@ async function callImageUnderstandingAPI(
     let lastCaption = "";
     let lineCount = 0;
     let buffer = "";
-
 
     // Read the response body as a stream
     if (!response.body) {
@@ -231,7 +180,6 @@ async function callImageUnderstandingAPI(
       }
     }
 
-
     if (!lastCaption) {
       throw new Error("No caption received from image understanding API");
     }
@@ -244,146 +192,105 @@ async function callImageUnderstandingAPI(
 
 /**
  * XY Image Reading tool - performs image understanding using local or remote image URLs.
- * Supports both local file paths and remote URLs.
+ * Supports both local file paths and remote URLs, up to 10 images at once.
  */
 export function createImageReadingTool(ctx: SessionContext): any {
-  const { config, sessionId, taskId, messageId } = ctx;
+  const { config } = ctx;
   return {
-  name: "image_reading",
-  label: "Image Reading",
-  description: `
-工具使用场景：
-【必须调用此工具的情况】
-1. 用户消息中包含 mediaPath 字段且不为空（表示用户发送了图片）
-2. 用户希望理解图片内容，询问图片是什么，例如：
-   - "这是什么？"
-   - "图片里有什么？"
-   - "帮我看看这张图"
-   - "描述一下这张图片"
-   - "分析一下这张照片"
-   - "这个图片是什么意思"
-   - "识别一下图片内容"
-   - 或任何关于图片内容的理解、识别、分析类询问
+    name: "image_reading",
+    label: "Image Reading",
+    description: `图片理解工具，支持单图/多图（最多10张），返回图片描述文本。调用条件：用户消息含 media 图片或询问图片内容时必须调用。`,
 
-当同时满足以上两个条件时，必须优先调用此工具进行图像理解。
-
-工具能力描述：对图片进行理解和分析，返回图片的描述内容。
-
-工具参数说明：
-localUrl 与 remoteUrl 任意一个不为空即可，优先使用 localUrl
-
-注意事项：
-a. 支持常见图片格式（jpg, png, gif等）
-b. 远程图片会先下载到本地再处理
-c. 操作超时时间为2分钟（120秒）
-d. 返回图像理解的文本描述内容`,
-  parameters: {
-    type: "object",
-    properties: {
-      localUrl: {
-        type: "string",
-        description: "本地图片文件路径（可选，通常从用户消息的 mediaPath 字段获取）",
+    parameters: {
+      type: "object",
+      properties: {
+        images: {
+          type: "array",
+          items: { type: "string" },
+          description: "图片路径数组，支持本地路径或公网URL，最多10张",
+        },
+        prompt: {
+          type: "string",
+          description: "提示词，默认'描述图片内容'。多图可用'对比这些图片'等",
+        },
       },
-      remoteUrl: {
-        type: "string",
-        description: "公网图片地址（可选）,公网图片地址（HTTP/HTTPS URL），注意不要对原始url做任何截断（例如裁减掉链接后面的鉴权信息或者修改域名后缀），必须使用上下文中完整的图片地址",
-      },
-      prompt: {
-        type: "string",
-        description: "对图片的提示问题，默认为'描述这张图片内容'，可根据用户的具体问题自定义",
-      },
+      required: ["images"],
     },
-  },
 
-  async execute(toolCallId: string, params: any) {
+    async execute(toolCallId: string, params: any) {
 
-    // Validate that at least one parameter is provided
-    if (!params.localUrl && !params.remoteUrl) {
-      throw new Error("At least one of localUrl or remoteUrl must be provided");
-    }
+      // Normalize images param
+      const images: string[] = params.images
+        ? (Array.isArray(params.images) ? params.images : [params.images])
+        : [];
 
-    // Get prompt (default to "描述这张图片内容")
-    const prompt = params.prompt || "描述这张图片内容";
-
-    // Create upload service
-    const uploadService = new XYFileUploadService(
-      config.fileUploadUrl,
-      config.apiKey,
-      config.uid
-    );
-
-    let processedImage: { imageUrl: string; localPath?: string } | null = null;
-    let downloadedFile: string | null = null;
-
-    try {
-      // Process image input (prefer localUrl over remoteUrl)
-      const imageInput = params.localUrl || params.remoteUrl;
-
-      processedImage = await processImageInput(imageInput, uploadService);
-
-      // Track downloaded file for cleanup
-      if (processedImage.localPath) {
-        downloadedFile = processedImage.localPath;
+      // Validate that at least one image is provided
+      if (images.length === 0) {
+        throw new Error("images 参数不能为空");
       }
 
+      // Validate max image count
+      if (images.length > 10) {
+        throw new Error("最多支持 10 张图片，当前提供了 " + images.length + " 张");
+      }
 
-      // Call image understanding API
-      const caption = await callImageUnderstandingAPI(
-        processedImage.imageUrl,
-        prompt,
+      // Get prompt (default to "描述这些图片内容")
+      const prompt = params.prompt || "描述这些图片内容";
+
+      // Create upload service
+      const uploadService = new XYFileUploadService(
+        config.fileUploadUrl,
         config.apiKey,
-        config.uid,
-        config.fileUploadUrl
+        config.uid
       );
 
+      // Process images: local files upload to OBS, remote URLs pass directly
+      const allImageUrls: string[] = [];
 
-      // Clean up downloaded file if any
-      if (downloadedFile) {
-        try {
-          await fs.unlink(downloadedFile);
-        } catch (error) {
+      try {
+        for (const imageInput of images) {
+          allImageUrls.push(await processImageInput(imageInput, uploadService));
         }
+
+        // Call image understanding API with all image URLs
+        const caption = await callImageUnderstandingAPI(
+          allImageUrls,
+          prompt,
+          config.apiKey,
+          config.uid,
+          config.fileUploadUrl
+        );
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                caption,
+                prompt,
+                imageCount: allImageUrls.length,
+                success: true,
+              }),
+            },
+          ],
+        };
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : "图片分析失败";
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({
+                error: errorMessage,
+                prompt,
+                imageCount: images.length,
+                success: false,
+              }),
+            },
+          ],
+        };
       }
-
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify({
-              caption,
-              prompt,
-              imageSource: params.localUrl ? "local" : "remote",
-              success: true,
-            }),
-          },
-        ],
-      };
-    } catch (error) {
-      // Clean up downloaded file on error
-      if (downloadedFile) {
-        try {
-          await fs.unlink(downloadedFile);
-        } catch (cleanupError) {
-        }
-      }
-
-      const errorMessage = error instanceof Error ? error.message : "图片分析失败";
-
-      // Return error result instead of throwing
-      return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify({
-              error: errorMessage,
-              prompt,
-              imageSource: params.localUrl ? "local" : "remote",
-              success: false,
-            }),
-          },
-        ],
-      };
-    }
-  },
-};
+    },
+  };
 }

@@ -501,10 +501,19 @@ export const xiaoyiProvider: ProviderPlugin = {
             if (context.messages?.length === 1) dynamicHeaders["x-cron-flag"] = "begin";
           }
         } else {
-          // Session mode: use pre-resolved session headers + fresh timestamp
+          // Session mode: get session context at request time via ALS.
+          // OpenClaw caches prepareExtraParams by provider/modelId, so
+          // ctx.extraParams holds the first session's values. We must
+          // call getCurrentSessionContext() here to get the correct
+          // sessionId/interactionId for the current concurrent request.
+          const sessionCtx = getCurrentSessionContext();
+
           const traceId = ctx.extraParams[HEADER_TRACE_ID];
-          const sessionId = ctx.extraParams[HEADER_SESSION_ID];
-          const interactionId = ctx.extraParams[HEADER_INTERACTION_ID];
+          const sessionId = sessionCtx?.taskId?.split("&")[0]
+            ?? ctx.extraParams[HEADER_SESSION_ID];
+          const interactionId = sessionCtx?.taskId?.split("&")[1]
+            ?? ctx.extraParams[HEADER_INTERACTION_ID]
+            ?? "";
 
           if (typeof traceId === "string") {
             const isCron = isCronTriggered(context.messages);
