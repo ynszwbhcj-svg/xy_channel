@@ -9,7 +9,7 @@
 //   models.providers.xiaoyiprovider.models = [...]
 import { createHash } from "crypto";
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
-import { getCurrentSessionContext } from "./tools/session-manager.js";
+import { activeSessions, asyncLocalStorage, getCurrentSessionContext } from "./tools/session-manager.js";
 import { getCurrentTaskId } from "./task-manager.js";
 import { selfEvolutionManager } from "./utils/self-evolution-manager.js";
 
@@ -489,7 +489,15 @@ export const xiaoyiProvider: ProviderPlugin = {
     // session (lastRegisteredKey fallback).  The captured sessionId lets us
     // bypass that fallback and look up the correct taskId directly from
     // task-manager.
-    const capturedA2ASessionId = getCurrentSessionContext()?.sessionId ?? null;
+    const alsStore = asyncLocalStorage.getStore();
+    const sessionCtx = getCurrentSessionContext();
+    const capturedA2ASessionId = sessionCtx?.sessionId ?? null;
+    console.log(
+      `[xiaoyiprovider] wrapStreamFn — ALS: ${alsStore ? "HIT" : "MISS"}, ` +
+      `capturedSessionId=${capturedA2ASessionId ?? "null"}, ` +
+      `taskId=${sessionCtx?.taskId ?? "null"}, ` +
+      `activeSessionsCount=${activeSessions.size}`,
+    );
 
     return async (model, context, options) => {
       // 每次请求时从 ctx.extraParams 动态读取 header

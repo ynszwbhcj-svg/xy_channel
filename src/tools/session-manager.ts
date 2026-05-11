@@ -35,7 +35,7 @@ const _g = globalThis as Record<string, unknown>;
 if (!_g.__xyActiveSessions) {
   _g.__xyActiveSessions = new Map<string, SessionContextWithRef>();
 }
-const activeSessions = _g.__xyActiveSessions as Map<string, SessionContextWithRef>;
+export const activeSessions = _g.__xyActiveSessions as Map<string, SessionContextWithRef>;
 
 // Track the most recently registered sessionKey for reliable fallback
 // when AsyncLocalStorage context is lost across openclaw's embedded runner boundary.
@@ -46,7 +46,7 @@ const getLastRegisteredKey = () => _g.__xyLastRegisteredSessionKey as string;
 const setLastRegisteredKey = (key: string) => { _g.__xyLastRegisteredSessionKey = key; };
 
 // AsyncLocalStorage for thread-safe session context isolation
-const asyncLocalStorage = new AsyncLocalStorage<SessionContext>();
+export const asyncLocalStorage = new AsyncLocalStorage<SessionContext>();
 
 /**
  * Register a session context for tool access.
