@@ -9,7 +9,7 @@
 //   models.providers.xiaoyiprovider.models = [...]
 import { createHash } from "crypto";
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
-import { getSession, getSessionByA2AId, xyAsyncLocalStorage } from "./xy-session-store.js";
+import { getSession, getSessionByA2AId, getAllActiveSessions, xyAsyncLocalStorage } from "./xy-session-store.js";
 import { selfEvolutionManager } from "./utils/self-evolution-manager.js";
 
 // ── Retry config ──────────────────────────────────────────────
@@ -496,14 +496,26 @@ export const xiaoyiProvider: ProviderPlugin = {
     return async (model, context, options) => {
       const dynamicHeaders: Record<string, string> = {};
 
-      // Priority: session store lookup (captured a2aSessionId) → prepareExtraParams cache → uid fallback
-      // We check capturedA2ASessionId FIRST because OpenClaw caches prepareExtraParams
-      // by provider/modelId (not per-session). A previous call without ALS may have
-      // populated the cache with FALLBACK_PREFIX_KEY, which would shadow the session
-      // lookup if we checked it first.
+      // Resolve taskId via three-layer fallback (same pattern as requireSession):
+      //   1. capturedA2ASessionId → store lookup (set at wrapStreamFn setup if ALS was active)
+      //   2. ALS → store lookup (works at request time if async chain preserved context)
+      //   3. Store enumeration (safe when only one session is active)
       let resolvedTaskId: string | null = null;
       if (capturedA2ASessionId) {
         resolvedTaskId = getSessionByA2AId(capturedA2ASessionId)?.taskId ?? null;
+      }
+      if (!resolvedTaskId) {
+        const alsContext = xyAsyncLocalStorage.getStore();
+        const alsKey = alsContext?.openclawSessionKey;
+        if (alsKey) {
+          resolvedTaskId = getSession(alsKey)?.taskId ?? null;
+        }
+      }
+      if (!resolvedTaskId) {
+        const allSessions = getAllActiveSessions();
+        if (allSessions.length === 1) {
+          resolvedTaskId = allSessions[0].session.taskId;
+        }
       }
 
       if (resolvedTaskId) {
@@ -521,7 +533,7 @@ export const xiaoyiProvider: ProviderPlugin = {
           if (context.messages?.length === 1) dynamicHeaders["x-cron-flag"] = "begin";
         }
       } else if (ctx.extraParams) {
-        // No active session — try extraParams (may contain cached prepareExtraParams result).
+        // No active session — fall back to prepareExtraParams cache.
         const fallbackPrefix = ctx.extraParams[FALLBACK_PREFIX_KEY];
 
         if (typeof fallbackPrefix === "string") {
@@ -567,9 +579,19 @@ export const xiaoyiProvider: ProviderPlugin = {
       // not include session-specific data, so deviceType may be missing
       // from the cached extraParams even when a session is active.
       const extraParamsDeviceType = (ctx.extraParams?.[DEVICE_TYPE_KEY] as string) || undefined;
-      const storeDeviceType = capturedA2ASessionId
-        ? getSessionByA2AId(capturedA2ASessionId)?.deviceType
-        : undefined;
+      let storeDeviceType: string | undefined;
+      if (capturedA2ASessionId) {
+        storeDeviceType = getSessionByA2AId(capturedA2ASessionId)?.deviceType;
+      }
+      if (!storeDeviceType) {
+        const alsCtx = xyAsyncLocalStorage.getStore();
+        const key = alsCtx?.openclawSessionKey;
+        if (key) storeDeviceType = getSession(key)?.deviceType;
+      }
+      if (!storeDeviceType) {
+        const all = getAllActiveSessions();
+        if (all.length === 1) storeDeviceType = all[0].session.deviceType;
+      }
       const deviceType = extraParamsDeviceType ?? storeDeviceType;
 
       // 在发送给模型前，优化 systemPrompt 结构
