@@ -180,6 +180,7 @@ async function getFileUrls(
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {
       wsManager.off("data-event", handler);
+      logger.error("超时: 获取文件URL超时（60秒）", { sessionId });
       reject(new Error("获取文件URL超时（60秒）"));
     }, 60000);
 

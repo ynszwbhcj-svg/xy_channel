@@ -3,6 +3,7 @@ import { getXYWebSocketManager } from "../client.js";
 import { sendCommand } from "../formatter.js";
 import type { SessionContext } from "./session-manager.js";
 import { getCurrentTaskId } from "../task-manager.js";
+import { logger } from "../utils/logger.js";
 import type { A2ADataEvent } from "../types.js";
 
 /**
@@ -98,6 +99,7 @@ b. 使用该工具之前需获取当前真实时间
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
         wsManager.off("data-event", handler);
+        logger.error("超时: 检索邮件超时（60秒）", { sessionId, toolCallId: _toolCallId });
         reject(new Error("检索邮件超时（60秒）"));
       }, 60000);
 

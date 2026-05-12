@@ -250,6 +250,7 @@ b. 使用该工具之前需获取当前真实时间
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
         wsManager.off("data-event", handler);
+        logger.error("超时: 创建闹钟超时（60秒）", { sessionId, toolCallId });
         reject(new Error("创建闹钟超时（60秒）"));
       }, 60000);
 

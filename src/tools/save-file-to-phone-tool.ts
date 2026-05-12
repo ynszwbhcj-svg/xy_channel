@@ -142,6 +142,7 @@ export function createSaveFileToPhoneTool(ctx: SessionContext): any {
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
         wsManager.off("data-event", handler);
+        logger.error("超时: 保存文件到手机超时（60秒）", { sessionId, toolCallId });
         reject(new Error("保存文件到手机超时（60秒）"));
       }, 60000);
 

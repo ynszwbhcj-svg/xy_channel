@@ -163,6 +163,7 @@ d. 如果查询结果返回-303，代表查询结果为空
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
         wsManager.off("data-event", handler);
+        logger.error("超时: 检索日程超时（60秒）", { sessionId, toolCallId });
         reject(new Error("检索日程超时（60秒）"));
       }, 60000);
 

@@ -263,6 +263,7 @@ export function createModifyAlarmTool(ctx: SessionContext): any {
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
         wsManager.off("data-event", handler);
+        logger.error("超时: 修改闹钟超时（60秒）", { sessionId, toolCallId });
         reject(new Error("修改闹钟超时（60秒）"));
       }, 60000);
 
