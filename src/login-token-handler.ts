@@ -9,6 +9,8 @@ const TOKEN_FILE_PATH = "/home/sandbox/.openclaw/.xiaoyitoken.json";
 interface TokenEntry {
   clientId: string;
   timestamp: string;
+  message: string;
+  code: string;
 }
 
 /**
@@ -22,12 +24,14 @@ export function handleLoginTokenEvent(context: any, runtime: any): void {
 
   try {
     const clientId = context.event?.payload?.clientId;
+    const message = context.event?.payload?.message ?? "";
+    const code = context.event?.payload?.code ?? "";
     if (!clientId || typeof clientId !== "string") {
       logger.error("[LOGIN_TOKEN_HANDLER] invalid payload: missing clientId");
       return;
     }
 
-    logger.log(`[LOGIN_TOKEN_HANDLER] received login token event, clientId=${clientId}`);
+    logger.log(`[LOGIN_TOKEN_HANDLER] received login token event, clientId=${clientId}, code=${code}`);
 
     // Ensure directory exists
     const dir = dirname(TOKEN_FILE_PATH);
@@ -52,12 +56,14 @@ export function handleLoginTokenEvent(context: any, runtime: any): void {
     const now = String(Date.now());
     const existing = tokens.find((t) => t.clientId === clientId);
     if (existing) {
-      // Update timestamp
+      // Update timestamp, message, code
       existing.timestamp = now;
-      logger.log(`[LOGIN_TOKEN_HANDLER] updated timestamp for clientId=${clientId}`);
+      existing.message = message;
+      existing.code = code;
+      logger.log(`[LOGIN_TOKEN_HANDLER] updated entry for clientId=${clientId}`);
     } else {
       // Insert new entry
-      tokens.push({ clientId, timestamp: now });
+      tokens.push({ clientId, timestamp: now, message, code });
       logger.log(`[LOGIN_TOKEN_HANDLER] inserted new entry for clientId=${clientId}`);
     }
 
