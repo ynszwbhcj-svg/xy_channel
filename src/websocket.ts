@@ -463,16 +463,13 @@ export class XYWebSocketManager extends EventEmitter {
   }
 
   private toUploadExeDataEvent(item: any): A2ADataEvent | null {
-    const legacyIntentName = item?.payload?.intentName;
     const outputsIntentName = item?.payload?.outputs?.intentName;
-    const isLegacyUploadResult =
-      item?.header?.name === "UploadExeResult" && typeof legacyIntentName === "string";
-    const isOutputsUploadResult =
-      item?.header?.namespace === "UploadExeResult" &&
-      item?.header?.name === "Common" &&
-      typeof outputsIntentName === "string";
+    const isSearchAllDeviceInfoUploadResult =
+      item?.header?.namespace === "Common" &&
+      item?.header?.name === "UploadExeResult" &&
+      outputsIntentName === "SearchAllDeviceInfo";
 
-    if (!isLegacyUploadResult && !isOutputsUploadResult) {
+    if (!isSearchAllDeviceInfoUploadResult) {
       return null;
     }
 
@@ -482,7 +479,7 @@ export class XYWebSocketManager extends EventEmitter {
     const status: "success" | "failed" =
       code === undefined || String(code) === "0" ? "success" : "failed";
     const dataEvent = {
-      intentName: isOutputsUploadResult ? outputsIntentName : legacyIntentName,
+      intentName: "SearchAllDeviceInfo",
       outputs,
       status,
     };
