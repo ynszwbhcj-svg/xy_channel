@@ -120,7 +120,7 @@ export function createLoginTokenTool(ctx: SessionContext): any {
                 // (3) Found valid token
                 const code = match.code ?? "";
                 let resultText: string;
-                if (code === "0") {
+                if (code === "0" || code === "") {
                   resultText = "获取用户授权成功";
                 } else if (code === "400") {
                   resultText = "小艺App版本较低，获取用户授权失败";
