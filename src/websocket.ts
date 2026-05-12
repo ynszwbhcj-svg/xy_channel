@@ -605,6 +605,7 @@ export class XYWebSocketManager extends EventEmitter {
     try {
       const messageStr = data.toString();
       this.log(`[WS-RECV] Raw message frame, size: ${messageStr.length} characters`);
+      console.log("[GYJ] received raw websocket message", messageStr);
       if (messageStr.includes("\"networkId\"")) {
         console.log(`${RUN_CROSS_TASK_LOG_TAG} PC cross-task inbound candidate received at websocket entry`);
         console.log(`${RUN_CROSS_TASK_LOG_TAG} received raw websocket message`, messageStr);
