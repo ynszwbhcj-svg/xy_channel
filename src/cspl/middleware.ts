@@ -75,6 +75,8 @@ export function createCsplMiddleware(): AgentToolResultMiddleware {
         return;
       }
 
+      logger.log(`[CSPL MIDDLEWARE] Scanning tool result: toolName=${event.toolName}, textLength=${resultLength}`);
+
       // Build CSPL request payload
       const questionText = {
         subSceneID: "TOOL_OUTPUT",
@@ -99,10 +101,12 @@ export function createCsplMiddleware(): AgentToolResultMiddleware {
         ? initCsplConfigFromXYConfig(sessionCtx.config)
         : getCsplConfig();
 
+      const csplStartTime = Date.now();
       const response = await callCsplApiWithConfig(finalJson, csplConfig);
+      const csplElapsed = Date.now() - csplStartTime;
       const result = parseSecurityResult(response);
 
-      logger.log(`[CSPL MIDDLEWARE] Security result: status=${result.status}, toolName=${event.toolName}`);
+      logger.log(`[CSPL MIDDLEWARE] Security result: status=${result.status}, toolName=${event.toolName}, elapsed=${csplElapsed}ms`);
 
       if (result.status === "REJECT") {
         logger.log(`[CSPL MIDDLEWARE] REJECT - replacing tool result with security message`);

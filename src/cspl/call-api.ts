@@ -87,7 +87,7 @@ export async function callCsplApi(
       res.on("end", () => {
         try {
           const result = parseResponse(data);
-          logger.log(`[SENTINEL HOOK] ✅ 请求成功`);
+          logger.log(`[SENTINEL HOOK] ✅ 请求成功, securityResult=${result?.data?.securityResult ?? "N/A"}`);
           resolve(result);
         } catch (e) {
           logger.error(`[SENTINEL HOOK] ❌ 请求失败: ${e instanceof Error ? e.message : String(e)}`);
@@ -146,7 +146,7 @@ export async function callCsplApiWithConfig(
       res.on("end", () => {
         try {
           const result = parseResponse(data);
-          logger.log(`[SENTINEL HOOK] ✅ 请求成功`);
+          logger.log(`[SENTINEL HOOK] ✅ 请求成功, securityResult=${result?.data?.securityResult ?? "N/A"}`);
           resolve(result);
         } catch (e) {
           logger.error(`[SENTINEL HOOK] ❌ 请求失败: ${e instanceof Error ? e.message : String(e)}`);
