@@ -1,7 +1,6 @@
 // Message dispatch engine - following feishu/bot.ts pattern (simplified)
 import type { ClawdbotConfig, RuntimeEnv, ReplyPayload } from "openclaw/plugin-sdk";
 import { getXYRuntime } from "./runtime.js";
-import { setCachedContext } from "./steer-injector.js";
 import { createXYReplyDispatcher } from "./reply-dispatcher.js";
 import { parseA2AMessage, extractTextFromParts, extractFileParts, extractPushId, extractDeviceType, extractTriggerData, isClearContextMessage, isTasksCancelMessage } from "./parser.js";
 import { downloadFilesFromParts } from "./file-download.js";
@@ -20,10 +19,7 @@ import { saveRuntimeInfo } from "./utils/runtime-manager.js";
 import { toolCallNudgeManager } from "./utils/tool-call-nudge-manager.js";
 import {
   registerTaskId,
-  incrementTaskIdRef,
   decrementTaskIdRef,
-  lockTaskId,
-  unlockTaskId,
   hasActiveTask,
 } from "./task-manager.js";
 import type { A2AJsonRpcRequest } from "./types.js";
@@ -49,9 +45,6 @@ export interface HandleXYMessageParams {
  */
 export async function handleXYMessage(params: HandleXYMessageParams): Promise<void> {
   const { cfg, runtime, message, accountId, webSocketSessionId } = params;
-
-  // 每次收到消息时更新缓存，供 steer 注入使用
-  setCachedContext(cfg, runtime, accountId);
 
   // Get runtime (already validated in monitor.ts, but get reference for use)
   const core = getXYRuntime() as any;
@@ -140,29 +133,16 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
     }
     // ========================================
 
-    // 🔑 检测steer模式和是否是第二条消息
-    const isSteerMode = cfg.messages?.queue?.mode === "steer";
-    const isSecondMessage = isSteerMode && hasActiveTask(parsed.sessionId);
+    // 🔑 注册taskId（检测是否是已有活跃任务的 session）
+    const isUpdate = hasActiveTask(parsed.sessionId);
 
-    if (isSecondMessage) {
-      logger.log(`[BOT] 🔄 STEER MODE - Second message detected (will be follower)`);
+    if (isUpdate) {
+      logger.log(`[BOT] 🔄 STEER MODE - Second message detected (core will handle steer)`);
       logger.log(`[BOT]   - Session: ${parsed.sessionId}`);
-      logger.log(`[BOT]   - New taskId: ${parsed.taskId} (will replace current)`);
+      logger.log(`[BOT]   - New taskId: ${parsed.taskId}`);
     }
 
-    // 🔑 注册taskId（第二条消息会覆盖第一条的taskId）
-    const { isUpdate, refCount } = registerTaskId(
-      parsed.sessionId,
-      parsed.taskId,
-      parsed.messageId,
-      { incrementRef: true }  // 增加引用计数
-    );
-
-    // 🔑 如果是第一条消息，锁定taskId防止被过早清理
-    if (!isUpdate) {
-      lockTaskId(parsed.sessionId);
-      logger.log(`[BOT] 🔒 Locked taskId for first message`);
-    }
+    registerTaskId(parsed.sessionId, parsed.taskId, parsed.messageId);
 
     // Extract and update push_id if present
     const pushId = extractPushId(parsed.parts);
@@ -220,14 +200,14 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
       deviceType,
     });
 
-    // 🔑 发送初始状态更新（第二条消息也要发，用新taskId）
+    // 🔑 发送初始状态更新
     logger.log(`[STATUS] Sending initial status update for session ${parsed.sessionId}`);
     void sendStatusUpdate({
       config,
       sessionId: parsed.sessionId,
       taskId: parsed.taskId,
       messageId: parsed.messageId,
-      text: isSecondMessage ? "新消息已接收，正在处理..." : "任务正在处理中，请稍候~",
+      text: "任务正在处理中，请稍候~",
       state: "working",
     }).catch((err) => {
       logger.error(`Failed to send initial status update:`, err);
@@ -312,7 +292,11 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
       ...mediaPayload,
     });
 
-    // 🔑 创建dispatcher（dispatcher会自动使用动态taskId）
+    // 🔑 Dynamic steer state: set to true when dispatchReplyFromConfig
+    // returns undefined (meaning the core steered the message into the active Pi run).
+    const steerState = { steered: false };
+
+    // 🔑 创建dispatcher
     logger.log(`[BOT-DISPATCHER] 🎯 Creating reply dispatcher`);
     logger.log(`[BOT-DISPATCHER]   - taskId: ${parsed.taskId}`);
 
@@ -323,15 +307,10 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
       taskId: parsed.taskId,
       messageId: parsed.messageId,
       accountId: route.accountId,
-      isSteerFollower: isSecondMessage,  // 🔑 标记第二条消息
+      steerState,
     });
 
-    // 🔑 只有第一条消息启动状态定时器
-    // 第二条消息会很快返回，不需要定时器
-    if (!isSecondMessage) {
-      startStatusInterval();
-      logger.log(`[BOT-DISPATCHER] ✅ Status interval started for first message`);
-    } 
+    startStatusInterval();
 
     // Build session context for AsyncLocalStorage
     const sessionContext = {
@@ -349,20 +328,16 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
       dispatcher,
       onSettled: () => {
         logger.log(`[BOT] 🏁 onSettled called for session: ${route.sessionKey}`);
-        logger.log(`[BOT]   - isSecondMessage: ${isSecondMessage}`);
+        logger.log(`[BOT]   - steered: ${steerState.steered}`);
 
-        // 🔑 减少引用计数
-        decrementTaskIdRef(parsed.sessionId);
-
-        // 🔑 如果是第一条消息完成，解锁
-        if (!isSecondMessage) {
-          unlockTaskId(parsed.sessionId);
-          logger.log(`[BOT] 🔓 Unlocked taskId (first message completed)`);
+        // 🔑 When steered, skip heavy cleanup — the first message's dispatcher is still running
+        if (steerState.steered) {
+          logger.log(`[BOT] ✅ Steered dispatch settled (skipping cleanup)`);
+          return;
         }
 
-        // 减少session引用计数
+        decrementTaskIdRef(parsed.sessionId);
         unregisterSession(route.sessionKey);
-
         logger.log(`[BOT] ✅ Cleanup completed`);
       },
       run: () => {
@@ -385,8 +360,16 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
               dispatcher,
               replyOptions,
             });
-            logger.log(`[BOT-DISPATCH] ✅ dispatchReplyFromConfig returned`);
-            logger.log(`[BOT-DISPATCH]   - result: ${JSON.stringify(result)}`);
+
+            // 🔑 Core returned undefined = message was steered into the active Pi run
+            if (result === undefined) {
+              steerState.steered = true;
+              logger.log(`[BOT-DISPATCH] ✅ Message steered into active Pi run`);
+            } else {
+              logger.log(`[BOT-DISPATCH] ✅ dispatchReplyFromConfig returned`);
+              logger.log(`[BOT-DISPATCH]   - result: ${JSON.stringify(result)}`);
+            }
+
             return result;
           } catch (dispatchErr) {
             logger.error(`[BOT-DISPATCH] ❌ dispatchReplyFromConfig threw`);
@@ -422,7 +405,6 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
 
         // 清理 taskId
         decrementTaskIdRef(sessionId);
-        unlockTaskId(sessionId);
 
         // 清理 session
         const core = getXYRuntime() as any;
