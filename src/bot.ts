@@ -240,6 +240,12 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
         );
       }
     }
+    // 🔑 Steer消息加 /steer 前缀，触发core的 queueEmbeddedPiMessage
+    if (isUpdate && textForAgent) {
+      textForAgent = `/steer ${textForAgent}`;
+      logger.log(`[BOT] 🔄 Prepended /steer for steer injection`);
+    }
+
     const fileParts = extractFileParts(parsed.parts);
 
     // Download files to local disk
@@ -292,9 +298,10 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
       ...mediaPayload,
     });
 
-    // 🔑 Dynamic steer state: set to true when dispatchReplyFromConfig
-    // returns undefined (meaning the core steered the message into the active Pi run).
-    const steerState = { steered: false };
+    // 🔑 Dynamic steer state: when isUpdate (second message), start as steered=true
+    // so the dispatcher skips all user-facing callbacks (deliver, onIdle, etc.)
+    // and onSettled skips cleanup.
+    const steerState = { steered: isUpdate };
 
     // 🔑 创建dispatcher
     logger.log(`[BOT-DISPATCHER] 🎯 Creating reply dispatcher`);
@@ -361,14 +368,8 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
               replyOptions,
             });
 
-            // 🔑 Core returned undefined = message was steered into the active Pi run
-            if (result === undefined) {
-              steerState.steered = true;
-              logger.log(`[BOT-DISPATCH] ✅ Message steered into active Pi run`);
-            } else {
-              logger.log(`[BOT-DISPATCH] ✅ dispatchReplyFromConfig returned`);
-              logger.log(`[BOT-DISPATCH]   - result: ${JSON.stringify(result)}`);
-            }
+            logger.log(`[BOT-DISPATCH] ✅ dispatchReplyFromConfig returned`);
+            logger.log(`[BOT-DISPATCH]   - result: ${JSON.stringify(result)}`);
 
             return result;
           } catch (dispatchErr) {

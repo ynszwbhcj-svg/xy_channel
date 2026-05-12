@@ -145,6 +145,12 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
       },
 
       deliver: async (payload: ReplyPayload, info) => {
+        // 🔑 steered dispatch不发送内容（让主dispatcher处理）
+        if (steerState.steered) {
+          logger.log(`[DELIVER] Steered dispatch - skipping deliver, info.kind=${info?.kind}`);
+          return;
+        }
+
         const text = payload.text ?? "";
         const currentTaskId = getActiveTaskId();
         const currentMessageId = getActiveMessageId();
