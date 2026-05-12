@@ -2,6 +2,7 @@
 import type { ClawdbotConfig, RuntimeEnv } from "openclaw/plugin-sdk";
 import type { A2AJsonRpcRequest } from "./types.js";
 import { handleXYMessage } from "./bot.js";
+import { logger } from "./utils/logger.js";
 
 /**
  * Trigger 事件上下文
@@ -30,16 +31,14 @@ export async function handleTriggerEvent(
   runtime: RuntimeEnv,
   accountId: string
 ): Promise<void> {
-  const log = runtime?.log ?? console.log;
-  const error = runtime?.error ?? console.error;
 
   try {
     const { event, sessionId, taskId } = context;
 
-    log(`[TRIGGER_HANDLER] 📌 Received Trigger event`);
-    log(`[TRIGGER_HANDLER]   - sessionId: ${sessionId}`);
-    log(`[TRIGGER_HANDLER]   - taskId: ${taskId}`);
-    log(`[TRIGGER_HANDLER]   - pushDataId: ${event.payload?.dataMap?.pushDataId}`);
+    logger.log(`[TRIGGER_HANDLER] 📌 Received Trigger event`);
+    logger.log(`[TRIGGER_HANDLER]   - sessionId: ${sessionId}`);
+    logger.log(`[TRIGGER_HANDLER]   - taskId: ${taskId}`);
+    logger.log(`[TRIGGER_HANDLER]   - pushDataId: ${event.payload?.dataMap?.pushDataId}`);
 
     // 构造包含 Trigger 事件的 A2A 消息
     // 将原始 event 放入 message.parts 中，让 handleXYMessage 检测并处理
@@ -65,7 +64,7 @@ export async function handleTriggerEvent(
       },
     };
 
-    log(`[TRIGGER_HANDLER] 🚀 Dispatching to handleXYMessage for processing`);
+    logger.log(`[TRIGGER_HANDLER] 🚀 Dispatching to handleXYMessage for processing`);
 
     // 通过 handleXYMessage 处理（复用现有链路）
     await handleXYMessage({
@@ -75,8 +74,8 @@ export async function handleTriggerEvent(
       accountId,
     });
 
-    log(`[TRIGGER_HANDLER] ✅ Trigger event dispatched successfully`);
+    logger.log(`[TRIGGER_HANDLER] ✅ Trigger event dispatched successfully`);
   } catch (err) {
-    error(`[TRIGGER_HANDLER] ❌ Failed to handle Trigger event:`, err);
+    logger.error(`[TRIGGER_HANDLER] ❌ Failed to handle Trigger event:`, err);
   }
 }

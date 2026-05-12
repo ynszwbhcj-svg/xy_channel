@@ -3,6 +3,7 @@ import os from "os";
 import WebSocket from "ws";
 import { EventEmitter } from "events";
 import type { RuntimeEnv } from "openclaw/plugin-sdk";
+import { logger } from "./utils/logger.js";
 import { HeartbeatManager } from "./heartbeat.js";
 import { MessageQueue } from "./message-queue.js";
 import type {
@@ -82,8 +83,8 @@ export class XYWebSocketManager extends EventEmitter {
     private runtime?: RuntimeEnv
   ) {
     super();
-    this.log = runtime?.log ?? console.log;
-    this.error = runtime?.error ?? console.error;
+    this.log = (msg, ...args) => logger.log(msg, ...args);
+    this.error = (msg, ...args) => logger.error(msg, ...args);
     this.messageQueue = new MessageQueue(this.log);
   }
 
@@ -164,6 +165,7 @@ export class XYWebSocketManager extends EventEmitter {
     }
 
     if (!this.ws || !this.state.ready || this.ws.readyState !== WebSocket.OPEN) {
+      logger.error("WebSocket not ready, cannot send message");
       throw new Error("WebSocket not ready");
     }
 

@@ -18,6 +18,7 @@ import {
   validateAndTruncateText,
 } from "./src/cspl/utils.js";
 import { setXYRuntime } from "./src/runtime.js";
+import { logger } from "./src/utils/logger.js";
 import { tryInjectSteer } from "./src/steer-injector.js";
 import { registerSelfEvolutionToolResultNudge } from "./src/self-evolution-tool-result-nudge.js";
 import { createBeforePromptBuildHandler } from "./src/skill-retriever/hooks.js";
@@ -42,7 +43,7 @@ function registerFullHooks(api: OpenClawPluginApi) {
       return;
     }
 
-    console.log(
+    logger.log(
       `[SENTINEL HOOK] after_tool_call triggered: toolName=${event.toolName}, sessionKey=${ctx.sessionKey ?? "none"}`,
     );
 
@@ -72,13 +73,13 @@ function registerFullHooks(api: OpenClawPluginApi) {
 
       const response = await callCsplApi(finalJson, api.config);
       const result = parseSecurityResult(response);
-      console.log(`[SENTINEL HOOK] Security result: status=${result.status}`);
+      logger.log(`[SENTINEL HOOK] Security result: status=${result.status}`);
 
       if (result.status === "REJECT") {
         await tryInjectSteer(ctx.sessionKey, STEER_ABORT_MESSAGE);
       }
     } catch (err) {
-      api.logger.error(`[SENTINEL HOOK] after_tool_call error: ${err}`);
+      logger.error(`[SENTINEL HOOK] after_tool_call error: ${err}`);
     }
   });
 }

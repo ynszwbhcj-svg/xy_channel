@@ -19,17 +19,15 @@ interface TokenEntry {
  * @param runtime - 运行时环境
  */
 export function handleLoginTokenEvent(context: any, runtime: any): void {
-  const log = runtime?.log ?? console.log;
-  const error = runtime?.error ?? console.error;
 
   try {
     const clientId = context.event?.payload?.clientId;
     if (!clientId || typeof clientId !== "string") {
-      error("[LOGIN_TOKEN_HANDLER] invalid payload: missing clientId");
+      logger.error("[LOGIN_TOKEN_HANDLER] invalid payload: missing clientId");
       return;
     }
 
-    log(`[LOGIN_TOKEN_HANDLER] received login token event, clientId=${clientId}`);
+    logger.log(`[LOGIN_TOKEN_HANDLER] received login token event, clientId=${clientId}`);
 
     // Ensure directory exists
     const dir = dirname(TOKEN_FILE_PATH);
@@ -56,16 +54,16 @@ export function handleLoginTokenEvent(context: any, runtime: any): void {
     if (existing) {
       // Update timestamp
       existing.timestamp = now;
-      log(`[LOGIN_TOKEN_HANDLER] updated timestamp for clientId=${clientId}`);
+      logger.log(`[LOGIN_TOKEN_HANDLER] updated timestamp for clientId=${clientId}`);
     } else {
       // Insert new entry
       tokens.push({ clientId, timestamp: now });
-      log(`[LOGIN_TOKEN_HANDLER] inserted new entry for clientId=${clientId}`);
+      logger.log(`[LOGIN_TOKEN_HANDLER] inserted new entry for clientId=${clientId}`);
     }
 
     writeFileSync(TOKEN_FILE_PATH, JSON.stringify(tokens, null, 2), "utf-8");
-    log(`[LOGIN_TOKEN_HANDLER] wrote token file: ${TOKEN_FILE_PATH}`);
+    logger.log(`[LOGIN_TOKEN_HANDLER] wrote token file: ${TOKEN_FILE_PATH}`);
   } catch (err) {
-    error("[LOGIN_TOKEN_HANDLER] failed to handle event:", err);
+    logger.error("[LOGIN_TOKEN_HANDLER] failed to handle event:", err);
   }
 }

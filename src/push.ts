@@ -131,8 +131,8 @@ export class XYPushService {
 
       if (!response.ok) {
         const errorText = await response.text();
-        logger.log(`[PUSH] ❌ Push request failed`);
-        logger.log(`[PUSH]   - HTTP Status: ${response.status}`);
+        logger.error(`[PUSH] ❌ Push request failed`);
+        logger.error(`[PUSH]   - HTTP Status: ${response.status}`);
         throw new Error(`Push failed: HTTP ${response.status} - ${errorText}`);
       }
 
@@ -142,27 +142,27 @@ export class XYPushService {
         const responseText = await response.text();
 
         if (!responseText || responseText.trim() === '') {
-          logger.log(`[PUSH] ⚠️ Received empty response body`);
+          logger.error(`[PUSH] ⚠️ Received empty response body`);
           result = {};
         } else {
           result = JSON.parse(responseText);
         }
       } catch (parseError) {
-        logger.log(`[PUSH] ❌ Failed to parse JSON response`);
-        logger.log(`[PUSH]   - Parse error: ${parseError instanceof Error ? parseError.message : String(parseError)}`);
+        logger.error(`[PUSH] ❌ Failed to parse JSON response`);
+        logger.error(`[PUSH]   - Parse error: ${parseError instanceof Error ? parseError.message : String(parseError)}`);
         throw new Error(`Invalid JSON response from push service: ${parseError instanceof Error ? parseError.message : String(parseError)}`);
       }
 
       logger.log(`[PUSH] ✅ Push message sent successfully`);
       logger.log(`[PUSH]   - Trace ID: ${traceId}`);
     } catch (error) {
-      logger.log(`[PUSH] ❌ Failed to send push message`);
+      logger.error(`[PUSH] ❌ Failed to send push message`);
 
       if (error instanceof Error) {
-        logger.log(`[PUSH]   - Error name: ${error.name}`);
-        logger.log(`[PUSH]   - Error message: ${error.message}`);
+        logger.error(`[PUSH]   - Error name: ${error.name}`);
+        logger.error(`[PUSH]   - Error message: ${error.message}`);
       } else {
-        logger.log(`[PUSH]   - Error:`, error);
+        logger.error(`[PUSH]   - Error:`, error);
       }
 
       throw error;

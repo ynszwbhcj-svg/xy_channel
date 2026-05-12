@@ -63,12 +63,10 @@ export async function cleanupStaleTempFiles(tempDir: string = "/tmp/xy_channel")
  */
 export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): any {
   const { cfg, runtime, sessionId, taskId, messageId, accountId, isSteerFollower } = params;
-  const log = runtime?.log ?? console.log;
-  const error = runtime?.error ?? console.error;
 
-  log(`[DISPATCHER-CREATE] ******* Creating dispatcher *******`);
-  log(`[DISPATCHER-CREATE]   - taskId: ${taskId}`);
-  log(`[DISPATCHER-CREATE]   - isSteerFollower: ${isSteerFollower ?? false}`);
+  logger.log(`[DISPATCHER-CREATE] ******* Creating dispatcher *******`);
+  logger.log(`[DISPATCHER-CREATE]   - taskId: ${taskId}`);
+  logger.log(`[DISPATCHER-CREATE]   - isSteerFollower: ${isSteerFollower ?? false}`);
 
   // 初始taskId和messageId（作为fallback）
   const initialTaskId = taskId;
@@ -104,16 +102,16 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
    * Start the status update interval
    */
   const startStatusInterval = () => {
-    log(`[STATUS INTERVAL] Starting interval for session ${sessionId}`);
+    logger.log(`[STATUS INTERVAL] Starting interval for session ${sessionId}`);
 
     statusUpdateInterval = setInterval(() => {
       // 🔑 使用动态taskId
       const currentTaskId = getActiveTaskId();
       const currentMessageId = getActiveMessageId();
 
-      log(`[STATUS INTERVAL] Triggering status update`);
-      log(`[STATUS INTERVAL]   - sessionId: ${sessionId}`);
-      log(`[STATUS INTERVAL]   - currentTaskId: ${currentTaskId}`);
+      logger.log(`[STATUS INTERVAL] Triggering status update`);
+      logger.log(`[STATUS INTERVAL]   - sessionId: ${sessionId}`);
+      logger.log(`[STATUS INTERVAL]   - currentTaskId: ${currentTaskId}`);
 
       void sendStatusUpdate({
         config,
@@ -124,14 +122,14 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
         state: "working",
         runtime,
       }).catch((err) => {
-        error(`Failed to send status update:`, err);
+        logger.error(`Failed to send status update:`, err);
       });
     }, 30000); // 30 seconds
   };
 
   const stopStatusInterval = () => {
     if (statusUpdateInterval) {
-      log(`[STATUS INTERVAL] Stopping interval for session ${sessionId}`);
+      logger.log(`[STATUS INTERVAL] Stopping interval for session ${sessionId}`);
       clearInterval(statusUpdateInterval);
       statusUpdateInterval = null;
     }
@@ -145,7 +143,7 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
 
       onReplyStart: () => {
         const currentTaskId = getActiveTaskId();
-        log(`[REPLY START] Reply started for session ${sessionId}, taskId=${currentTaskId}, isSteerFollower=${isSteerFollower}`);
+        logger.log(`[REPLY START] Reply started for session ${sessionId}, taskId=${currentTaskId}, isSteerFollower=${isSteerFollower}`);
       },
 
       deliver: async (payload: ReplyPayload, info) => {
@@ -153,17 +151,17 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
         const currentTaskId = getActiveTaskId();
         const currentMessageId = getActiveMessageId();
 
-        log(`[DELIVER] sessionId=${sessionId}, taskId=${currentTaskId}, info.kind=${info?.kind}, text.length=${text.length}`);
+        logger.log(`[DELIVER] sessionId=${sessionId}, taskId=${currentTaskId}, info.kind=${info?.kind}, text.length=${text.length}`);
 
         try {
           if (!text.trim()) {
-            log(`[DELIVER SKIP] Empty text, skipping`);
+            logger.log(`[DELIVER SKIP] Empty text, skipping`);
             return;
           }
 
           accumulatedText += text;
           hasSentResponse = true;
-          log(`[DELIVER ACCUMULATE] Accumulated text, current length=${accumulatedText.length}`);
+          logger.log(`[DELIVER ACCUMULATE] Accumulated text, current length=${accumulatedText.length}`);
 
           // 🔑 使用动态taskId发送reasoningText更新
           await sendReasoningTextUpdate({
@@ -173,9 +171,9 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
             messageId: currentMessageId,
             text,
           });
-          log(`[DELIVER] ✅ Sent deliver text as reasoningText update`);
+          logger.log(`[DELIVER] ✅ Sent deliver text as reasoningText update`);
         } catch (deliverError) {
-          error(`Failed to deliver message:`, deliverError);
+          logger.error(`Failed to deliver message:`, deliverError);
         }
       },
 
@@ -185,7 +183,7 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
 
         // 🔑 steer follower不发送错误状态（让主dispatcher处理）
         if (isSteerFollower) {
-          log(`[ON_ERROR] Steer follower - skipping error response`);
+          logger.log(`[ON_ERROR] Steer follower - skipping error response`);
           return;
         }
 
@@ -204,7 +202,7 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
               runtime,
             });
           } catch (statusError) {
-            error(`Failed to send error status:`, statusError);
+            logger.error(`Failed to send error status:`, statusError);
           }
         }
       },
@@ -213,24 +211,24 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
         const currentTaskId = getActiveTaskId();
         const currentMessageId = getActiveMessageId();
 
-        log(`[ON_IDLE] Reply idle`);
-        log(`[ON_IDLE]   - sessionId: ${sessionId}`);
-        log(`[ON_IDLE]   - taskId: ${currentTaskId}`);
-        log(`[ON_IDLE]   - isSteerFollower: ${isSteerFollower}`);
-        log(`[ON_IDLE]   - hasSentResponse: ${hasSentResponse}`);
-        log(`[ON_IDLE]   - finalSent: ${finalSent}`);
+        logger.log(`[ON_IDLE] Reply idle`);
+        logger.log(`[ON_IDLE]   - sessionId: ${sessionId}`);
+        logger.log(`[ON_IDLE]   - taskId: ${currentTaskId}`);
+        logger.log(`[ON_IDLE]   - isSteerFollower: ${isSteerFollower}`);
+        logger.log(`[ON_IDLE]   - hasSentResponse: ${hasSentResponse}`);
+        logger.log(`[ON_IDLE]   - finalSent: ${finalSent}`);
 
         // 🔑 核心改动：steer follower不发送final响应
         if (isSteerFollower) {
-          log(`[ON_IDLE] Steer follower - skipping final response`);
-          log(`[ON_IDLE]   - Message queued successfully, waiting for primary dispatcher`);
+          logger.log(`[ON_IDLE] Steer follower - skipping final response`);
+          logger.log(`[ON_IDLE]   - Message queued successfully, waiting for primary dispatcher`);
           stopStatusInterval();
           return;  // ← 直接返回，不发送任何东西！
         }
 
         // 正常模式（或steer的第一条消息）
         if (hasSentResponse && !finalSent) {
-          log(`[ON_IDLE] Sending accumulated text, length=${accumulatedText.length}`);
+          logger.log(`[ON_IDLE] Sending accumulated text, length=${accumulatedText.length}`);
           try {
             // 🔑 使用动态taskId发送完成状态
             await sendStatusUpdate({
@@ -242,7 +240,7 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
               state: "completed",
               runtime,
             });
-            log(`[ON_IDLE] ✅ Sent completion status update`);
+            logger.log(`[ON_IDLE] ✅ Sent completion status update`);
 
             // 🔑 使用动态taskId发送最终响应
             await sendA2AResponse({
@@ -256,13 +254,13 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
               runtime,
             });
             finalSent = true;
-            log(`[ON_IDLE] ✅ Sent final response with taskId=${currentTaskId}`);
+            logger.log(`[ON_IDLE] ✅ Sent final response with taskId=${currentTaskId}`);
           } catch (err) {
-            error(`[ON_IDLE] Failed to send final response:`, err);
+            logger.error(`[ON_IDLE] Failed to send final response:`, err);
           }
         } else {
           // 正常失败场景（非steer follower）
-          log(`[ON_IDLE] Skipping final message: hasSentResponse=${hasSentResponse}, finalSent=${finalSent}`);
+          logger.log(`[ON_IDLE] Skipping final message: hasSentResponse=${hasSentResponse}, finalSent=${finalSent}`);
           try {
             await sendStatusUpdate({
               config,
@@ -273,7 +271,7 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
               state: "failed",
               runtime,
             });
-            log(`[ON_IDLE] ✅ Sent failure status update`);
+            logger.log(`[ON_IDLE] ✅ Sent failure status update`);
 
             await sendA2AResponse({
               config,
@@ -288,9 +286,9 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
               runtime,
             });
             finalSent = true;
-            log(`[ON_IDLE] ✅ Sent error response with code: 99921111`);
+            logger.log(`[ON_IDLE] ✅ Sent error response with code: 99921111`);
           } catch (err) {
-            error(`[ON_IDLE] Failed to send error response:`, err);
+            logger.error(`[ON_IDLE] Failed to send error response:`, err);
           }
         }
 
@@ -299,7 +297,7 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
 
       onCleanup: () => {
         const currentTaskId = getActiveTaskId();
-        log(`[ON_CLEANUP] Reply cleanup, taskId=${currentTaskId}, isSteerFollower=${isSteerFollower}`);
+        logger.log(`[ON_CLEANUP] Reply cleanup, taskId=${currentTaskId}, isSteerFollower=${isSteerFollower}`);
       },
     });
 
@@ -318,7 +316,7 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
         const currentTaskId = getActiveTaskId();
         const currentMessageId = getActiveMessageId();
 
-        log(`[TOOL START] Tool: ${name}, phase: ${phase}, taskId: ${currentTaskId}`);
+        logger.log(`[TOOL START] Tool: ${name}, phase: ${phase}, taskId: ${currentTaskId}`);
 
         if (phase === "start") {
           const toolName = name || "unknown";
@@ -326,7 +324,7 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
           // call_device_tool 由自身 execute() 内部发送具体子工具名的状态更新
           // get_xxx_tool_schema 是给 LLM 查 schema 用的，无需向用户展示
           if (toolName === "call_device_tool" || toolName.endsWith("_tool_schema") || toolName === "huawei_id_tool") {
-            log(`[TOOL START] Skipping generic status for ${toolName}`);
+            logger.log(`[TOOL START] Skipping generic status for ${toolName}`);
             return;
           }
 
@@ -340,9 +338,9 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
               state: "working",
               runtime,
             });
-            log(`[TOOL START] ✅ Sent status update for tool start: ${toolName}`);
+            logger.log(`[TOOL START] ✅ Sent status update for tool start: ${toolName}`);
           } catch (err) {
-            error(`[TOOL START] ❌ Failed to send tool start status:`, err);
+            logger.error(`[TOOL START] ❌ Failed to send tool start status:`, err);
           }
         }
       },
@@ -358,7 +356,7 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
         const text = payload.text ?? "";
         const hasMedia = Boolean(payload.mediaUrl || (payload.mediaUrls?.length ?? 0) > 0);
 
-        log(`[TOOL RESULT] Tool result, taskId: ${currentTaskId}, text.length: ${text.length}`);
+        logger.log(`[TOOL RESULT] Tool result, taskId: ${currentTaskId}, text.length: ${text.length}`);
 
         try {
           if (text.length > 0 || hasMedia) {
@@ -373,10 +371,10 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
               state: "working",
               runtime,
             });
-            log(`[TOOL RESULT] ✅ Sent tool result as status update`);
+            logger.log(`[TOOL RESULT] ✅ Sent tool result as status update`);
           }
         } catch (err) {
-          error(`[TOOL RESULT] ❌ Failed to send tool result status:`, err);
+          logger.error(`[TOOL RESULT] ❌ Failed to send tool result status:`, err);
         }
       },
 
@@ -387,7 +385,7 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
         }
 
         const text = payload.text ?? "";
-        log(`[REASONING STREAM] Reasoning chunk received, text.length: ${text.length}`);
+        logger.log(`[REASONING STREAM] Reasoning chunk received, text.length: ${text.length}`);
 
         // Reasoning stream 目前被注释掉
         // 如果需要可以启用
@@ -415,7 +413,7 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
             });
           }
         } catch (err) {
-          error(`[PARTIAL REPLY] ❌ Failed to send partial reply:`, err);
+          logger.error(`[PARTIAL REPLY] ❌ Failed to send partial reply:`, err);
         }
       },
     },

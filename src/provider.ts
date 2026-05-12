@@ -8,6 +8,7 @@
 //   models.providers.xiaoyiprovider.api = "openai-completions"
 //   models.providers.xiaoyiprovider.models = [...]
 import { createHash } from "crypto";
+import { logger } from "./utils/logger.js";
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 import { getCurrentSessionContext } from "./tools/session-manager.js";
 import { selfEvolutionManager } from "./utils/self-evolution-manager.js";
@@ -137,7 +138,7 @@ function createRetryingStream(
         if (!hasContent && !isContent) {
           // ── Buffer phase (no content yet) ──
           if (event.type === "done") {
-            console.log(
+            logger.log(
               `[xiaoyiprovider] stream completed (no content), usage: input=${event.message?.usage?.input} output=${event.message?.usage?.output}`,
             );
             for (const b of buffer) yield b;
@@ -152,7 +153,7 @@ function createRetryingStream(
         } else {
           // ── Streaming phase ──
           if (!hasContent) {
-            console.log("[xiaoyiprovider] first content event received, switching to streaming mode");
+            logger.log("[xiaoyiprovider] first content event received, switching to streaming mode");
             hasContent = true;
             for (const b of buffer) yield b;
           }
@@ -160,7 +161,7 @@ function createRetryingStream(
           // The SDK calls result() when it sees done/error — if we yield first, the generator
           // suspends and can never reach resolve, causing a permanent deadlock.
           if (event.type === "done") {
-            console.log(
+            logger.log(
               `[xiaoyiprovider] stream completed, usage: input=${event.message?.usage?.input} output=${event.message?.usage?.output}`,
             );
             resultResolve(event.message);
@@ -168,7 +169,7 @@ function createRetryingStream(
             return;
           }
           if (event.type === "error") {
-            console.log(`[xiaoyiprovider] stream error after content: ${event.error?.errorMessage}`);
+            logger.log(`[xiaoyiprovider] stream error after content: ${event.error?.errorMessage}`);
             errorResult = event.error;
             break; // break inner loop, proceed to retry decision
           }
@@ -180,16 +181,16 @@ function createRetryingStream(
       if (errorResult?.stopReason === "error" && isRetryableProviderError(errorResult.errorMessage)) {
         if (attempt < MAX_RETRY_ATTEMPTS - 1) {
           const delayMs = getRetryDelayMs(attempt + 1, cronJob);
-          console.log(
+          logger.log(
             `[xiaoyiprovider] retryable error (attempt ${attempt + 1}/${MAX_RETRY_ATTEMPTS}): ` +
             `${errorResult.errorMessage} — retrying in ${delayMs}ms`,
           );
           await sleep(delayMs);
           continue; // discard buffer, retry with a new stream
         }
-        console.log(`[xiaoyiprovider] all ${MAX_RETRY_ATTEMPTS} retries exhausted, surfacing last error`);
+        logger.log(`[xiaoyiprovider] all ${MAX_RETRY_ATTEMPTS} retries exhausted, surfacing last error`);
       } else if (errorResult) {
-        console.log(`[xiaoyiprovider] non-retryable error: ${errorResult.errorMessage}`);
+        logger.log(`[xiaoyiprovider] non-retryable error: ${errorResult.errorMessage}`);
       }
 
       // Non-retryable or retries exhausted — yield buffered events.
@@ -210,7 +211,7 @@ function createRetryingStream(
     }
 
     // Safety: final fallback attempt
-    console.log("[xiaoyiprovider] entering final fallback attempt");
+    logger.log("[xiaoyiprovider] entering final fallback attempt");
     const lastStream = await createStream();
     for await (const event of lastStream) {
       if (event.type === "done") {
@@ -491,7 +492,7 @@ export const xiaoyiProvider: ProviderPlugin = {
    * since the default agent timeout is 48 hours).
    */
   wrapStreamFn: (ctx) => {
-    console.log("[xiaoyiprovider] wrapStreamFn CALLED — provider resolved by openclaw");
+    logger.log("[xiaoyiprovider] wrapStreamFn CALLED — provider resolved by openclaw");
     const underlying = ctx.streamFn;
     if (!underlying) return underlying;
 
@@ -565,9 +566,9 @@ export const xiaoyiProvider: ProviderPlugin = {
       }
 
       // 记录输入
-      console.log(`[xiaoyiprovider] input messages count: ${context.messages?.length ?? 0}`);
+      logger.log(`[xiaoyiprovider] input messages count: ${context.messages?.length ?? 0}`);
       if (context.systemPrompt) {
-        console.log(`[xiaoyiprovider] system prompt length: ${context.systemPrompt.length}`);
+        logger.log(`[xiaoyiprovider] system prompt length: ${context.systemPrompt.length}`);
       }
       // deviceType: prefer value extracted from Conversation info,
       // then extraParams, then ALS fallback.
@@ -608,13 +609,13 @@ export const xiaoyiProvider: ProviderPlugin = {
           }
         }
 
-        console.log(`[xiaoyiprovider] system prompt optimized: ${beforeLen} -> ${sp.length}`);
+        logger.log(`[xiaoyiprovider] system prompt optimized: ${beforeLen} -> ${sp.length}`);
         context.systemPrompt = sp;
       }
 
       const selfEvolutionEnabled = await selfEvolutionManager.isEnabled();
 
-      console.log(`[selfEvolution] selfEvolution flag: ${selfEvolutionEnabled}`);
+      logger.log(`[selfEvolution] selfEvolution flag: ${selfEvolutionEnabled}`);
       context.systemPrompt = applySelfEvolutionPrompt(context.systemPrompt, selfEvolutionEnabled);
 
       // Append device context to systemPrompt
@@ -642,7 +643,7 @@ export const xiaoyiProvider: ProviderPlugin = {
 
       // ── Retry-capable streaming ──────────────────────────────
       const cronJob = isCronTriggered(context.messages);
-      if (cronJob) console.log("[xiaoyiprovider] detected cron-triggered request, using extended retry delays");
+      if (cronJob) logger.log("[xiaoyiprovider] detected cron-triggered request, using extended retry delays");
 
       const makeStream = () => underlying(model, context, {
         ...options,

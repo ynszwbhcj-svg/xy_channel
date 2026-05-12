@@ -34,7 +34,7 @@ export interface SendA2AResponseParams {
  */
 export async function sendA2AResponse(params: SendA2AResponseParams): Promise<void> {
   const { config, sessionId, taskId, messageId, text, append, final, files, errorCode, errorMessage, runtime } = params;
-  const log = runtime?.log ?? console.log;
+  const log = runtime?.log ?? ((msg: string, ...args: any[]) => logger.log(msg, ...args));
 
 
   // Build artifact update event
@@ -177,7 +177,7 @@ export interface SendStatusUpdateParams {
  */
 export async function sendStatusUpdate(params: SendStatusUpdateParams): Promise<void> {
   const { config, sessionId, taskId, messageId, text, state, runtime } = params;
-  const log = runtime?.log ?? console.log;
+  const log = runtime?.log ?? ((msg: string, ...args: any[]) => logger.log(msg, ...args));
 
   // Dynamic lookup: use latest taskId/messageId from task-manager (handles steer/interrupt),
   // fall back to closure-captured values
