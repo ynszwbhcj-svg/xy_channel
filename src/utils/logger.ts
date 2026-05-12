@@ -115,7 +115,17 @@ export const logger = {
 function formatMessage(message: string, args: any[]): string {
   if (!args.length) return message;
   const suffix = args
-    .map((a) => (typeof a === "string" ? a : JSON.stringify(a)))
+    .map((a) => {
+      if (typeof a === "string") return a;
+      if (a instanceof Error) {
+        return `${a.name}: ${a.message}\n${a.stack ?? ""}`;
+      }
+      try {
+        return JSON.stringify(a);
+      } catch {
+        return String(a);
+      }
+    })
     .join(" ");
   return `${message} ${suffix}`;
 }

@@ -120,7 +120,6 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
         messageId: currentMessageId,  // 🔑 动态messageId
         text: "任务正在处理中，请稍候~",
         state: "working",
-        runtime,
       }).catch((err) => {
         logger.error(`Failed to send status update:`, err);
       });
@@ -199,7 +198,6 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
               messageId: currentMessageId,
               text: "处理失败，请稍后重试",
               state: "failed",
-              runtime,
             });
           } catch (statusError) {
             logger.error(`Failed to send error status:`, statusError);
@@ -238,7 +236,6 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
               messageId: currentMessageId,
               text: "任务处理已完成~",
               state: "completed",
-              runtime,
             });
             logger.log(`[ON_IDLE] ✅ Sent completion status update`);
 
@@ -251,7 +248,6 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
               text: accumulatedText,
               append: false,
               final: true,
-              runtime,
             });
             finalSent = true;
             logger.log(`[ON_IDLE] ✅ Sent final response with taskId=${currentTaskId}`);
@@ -269,7 +265,6 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
               messageId: currentMessageId,
               text: "任务处理中断了~",
               state: "failed",
-              runtime,
             });
             logger.log(`[ON_IDLE] ✅ Sent failure status update`);
 
@@ -283,7 +278,6 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
               final: true,
               errorCode: 99921111,
               errorMessage: "任务执行异常，请重试",
-              runtime,
             });
             finalSent = true;
             logger.log(`[ON_IDLE] ✅ Sent error response with code: 99921111`);
@@ -336,7 +330,6 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
               messageId: currentMessageId,
               text: `正在使用工具: ${toolName}...`,
               state: "working",
-              runtime,
             });
             logger.log(`[TOOL START] ✅ Sent status update for tool start: ${toolName}`);
           } catch (err) {
@@ -369,7 +362,6 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
               messageId: currentMessageId,
               text: resultText,
               state: "working",
-              runtime,
             });
             logger.log(`[TOOL RESULT] ✅ Sent tool result as status update`);
           }

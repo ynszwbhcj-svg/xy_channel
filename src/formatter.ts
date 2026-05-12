@@ -26,16 +26,13 @@ export interface SendA2AResponseParams {
   files?: Array<{ fileName: string; fileType: string; fileId: string }>;
   errorCode?: number | string; // 错误码，用于任务执行异常场景
   errorMessage?: string; // 错误描述
-  runtime?: any;
 }
 
 /**
  * Send an A2A artifact update response.
  */
 export async function sendA2AResponse(params: SendA2AResponseParams): Promise<void> {
-  const { config, sessionId, taskId, messageId, text, append, final, files, errorCode, errorMessage, runtime } = params;
-  const log = runtime?.log ?? ((msg: string, ...args: any[]) => logger.log(msg, ...args));
-
+  const { config, sessionId, taskId, messageId, text, append, final, files, errorCode, errorMessage } = params;
 
   // Build artifact update event
   const artifact: A2ATaskArtifactUpdateEvent = {
@@ -79,7 +76,7 @@ export async function sendA2AResponse(params: SendA2AResponseParams): Promise<vo
       code: errorCode,
       message: errorMessage ?? "任务执行异常，请重试",
     };
-    log(`[A2A_RESPONSE] ⚠️ Including error code: ${errorCode}`);
+    logger.log(`[A2A_RESPONSE] ⚠️ Including error code: ${errorCode}`);
   }
 
   // Send via WebSocket
@@ -93,14 +90,14 @@ export async function sendA2AResponse(params: SendA2AResponseParams): Promise<vo
   };
 
   // 📋 Log complete response body
-  log(`[A2A_RESPONSE] 📤 Sending A2A artifact-update response: taskId: ${taskId}`);
-  log(`[A2A_RESPONSE]   - append: ${append}`);
-  log(`[A2A_RESPONSE]   - final: ${final}`);
-  log(`[A2A_RESPONSE]   - text: ${text.length <= 10 ? text : text.slice(0, 5) + '***' + text.slice(-5)}`);
-  log(`[A2A_RESPONSE]   - files count: ${files?.length ?? 0}`);
+  logger.log(`[A2A_RESPONSE] 📤 Sending A2A artifact-update response: taskId: ${taskId}`);
+  logger.log(`[A2A_RESPONSE]   - append: ${append}`);
+  logger.log(`[A2A_RESPONSE]   - final: ${final}`);
+  logger.log(`[A2A_RESPONSE]   - text: ${text.length <= 10 ? text : text.slice(0, 5) + '***' + text.slice(-5)}`);
+  logger.log(`[A2A_RESPONSE]   - files count: ${files?.length ?? 0}`);
 
   await wsManager.sendMessage(sessionId, outboundMessage);
-  log(`[A2A_RESPONSE] ✅ Message sent successfully`);
+  logger.log(`[A2A_RESPONSE] ✅ Message sent successfully`);
 }
 
 /**
@@ -168,7 +165,6 @@ export interface SendStatusUpdateParams {
   messageId: string;
   text: string;
   state: "submitted" | "working" | "input-required" | "completed" | "canceled" | "failed" | "unknown";
-  runtime?: any;
 }
 
 /**
@@ -176,8 +172,7 @@ export interface SendStatusUpdateParams {
  * Follows A2A protocol standard format with nested status object.
  */
 export async function sendStatusUpdate(params: SendStatusUpdateParams): Promise<void> {
-  const { config, sessionId, taskId, messageId, text, state, runtime } = params;
-  const log = runtime?.log ?? ((msg: string, ...args: any[]) => logger.log(msg, ...args));
+  const { config, sessionId, taskId, messageId, text, state } = params;
 
   // Dynamic lookup: use latest taskId/messageId from task-manager (handles steer/interrupt),
   // fall back to closure-captured values
@@ -221,9 +216,9 @@ export async function sendStatusUpdate(params: SendStatusUpdateParams): Promise<
   };
 
   // 📋 Log complete response body
-  log(`[A2A_STATUS] 📤 Sending A2A status-update:`);
-  log(`[A2A_STATUS]   - taskId: ${currentTaskId}`);
-  log(`[A2A_STATUS]   - text: "${text}"`);
+  logger.log(`[A2A_STATUS] 📤 Sending A2A status-update:`);
+  logger.log(`[A2A_STATUS]   - taskId: ${currentTaskId}`);
+  logger.log(`[A2A_STATUS]   - text: "${text}"`);
 
   await wsManager.sendMessage(sessionId, outboundMessage);
 }
