@@ -184,27 +184,18 @@ export async function searchTools(options: SearchToolsOptions): Promise<ToolSear
 
       const formattedData = formatSkillData(rawSkills, installedSkills);
 
-      const topTools = formattedData.slice(0, 2);
+      const candidateTools = formattedData.filter((tool) => (tool.rrfScore ?? 0) >= 0.016);
+      logger.log(`${PLUGIN_LOG_PREFIX} [DEBUG] Candidates with rrfScore >= 0.016: ${candidateTools.length}, details: ${candidateTools.map((t: FormattedSkill) => `${t.skillId}(rrfScore=${t.rrfScore}, status=${t.status})`).join(", ")}`);
 
-      const allInstalled = topTools.every((tool) => tool.status === "已安装");
-      if (allInstalled) {
-        logger.log(`${PLUGIN_LOG_PREFIX} [DEBUG] All top 2 skills are installed, returning null`);
+      const hasInstalledInCandidates = candidateTools.some((tool) => tool.status === "已安装");
+      if (hasInstalledInCandidates) {
+        logger.log(`${PLUGIN_LOG_PREFIX} [DEBUG] Candidates contain installed skill, returning null`);
         return null;
       }
 
-      const hasInstalledWithHighScore = topTools.some(
-        (tool) => tool.status === "已安装" && (tool.rrfScore ?? 0) >= 0.016
-      );
-      if (hasInstalledWithHighScore) {
-        logger.log(`${PLUGIN_LOG_PREFIX} [DEBUG] Top 2 has installed skill with rrfScore >= 0.016, returning null`);
-        return null;
-      }
-
-      let filteredTools = topTools.filter((tool) => tool.status === "未安装" && (tool.rrfScore ?? 0) >= 0.016);
-      logger.log(`${PLUGIN_LOG_PREFIX} [DEBUG] After filtering uninstalled with rrfScore >= 0.016: ${filteredTools.length}, details: ${filteredTools.map((t: FormattedSkill) => `${t.skillId}(rrfScore=${t.rrfScore})`).join(", ")}`);
-
+      const filteredTools = candidateTools.slice(0, 2);
       if (filteredTools.length === 0) {
-        logger.log(`${PLUGIN_LOG_PREFIX} [DEBUG] No uninstalled skills with rrfScore >= 0.016, returning null`);
+        logger.log(`${PLUGIN_LOG_PREFIX} [DEBUG] No candidates with rrfScore >= 0.016, returning null`);
         return null;
       }
 
