@@ -1,7 +1,7 @@
 // Session manager for XY tool context
 // Stores active session contexts that tools can access
 import { AsyncLocalStorage } from "async_hooks";
-import type { XYChannelConfig } from "../types.js";
+import type { RunCrossTaskContext, XYChannelConfig } from "../types.js";
 import { logger } from "../utils/logger.js";
 import { configManager } from "../utils/config-manager.js";
 import { toolCallNudgeManager } from "../utils/tool-call-nudge-manager.js";
@@ -14,6 +14,7 @@ export interface SessionContext {
   messageId: string;
   agentId: string;
   deviceType?: string;
+  runCrossTaskContext?: RunCrossTaskContext;
 }
 
 /** 最大 session 存活时间（毫秒），超过此时间且无新消息的 session 视为僵尸。
@@ -258,6 +259,27 @@ export function cleanupStaleSessions(): number {
  */
 export function getActiveSessionCount(): number {
   return activeSessions.size;
+}
+
+export function appendRunCrossTaskFileUrls(fileUrls: string[]): string[] {
+  const context = asyncLocalStorage.getStore() ?? null;
+  const runCrossTaskContext = context?.runCrossTaskContext;
+  if (!runCrossTaskContext || fileUrls.length === 0) {
+    return runCrossTaskContext?.fileUrls ?? [];
+  }
+
+  const existing = Array.isArray(runCrossTaskContext.fileUrls) ? runCrossTaskContext.fileUrls : [];
+  const merged = Array.from(new Set([...existing, ...fileUrls.filter((url) => typeof url === "string" && url.length > 0)]));
+  runCrossTaskContext.fileUrls = merged;
+
+  const sessionWithRef = Array.from(activeSessions.values()).find(
+    (session) => session.runCrossTaskContext === runCrossTaskContext,
+  );
+  if (sessionWithRef?.runCrossTaskContext) {
+    sessionWithRef.runCrossTaskContext.fileUrls = merged;
+  }
+
+  return merged;
 }
 
 /**

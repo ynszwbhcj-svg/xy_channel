@@ -13,7 +13,14 @@ import type {
   OutboundWebSocketMessage,
   A2AJsonRpcRequest,
   A2ADataEvent,
+  CrossDeviceTaskResultEvent,
 } from "./types.js";
+import { v4 as uuidv4 } from "uuid";
+
+const GET_PC_DEVICE_LIST_LOG_TAG = "[GetPCDeviceList]";
+const SEND_PC_DEVICE_TASK_LOG_TAG = "[SendPcDeviceTask]";
+const RUN_CROSS_TASK_LOG_TAG = "[RunCrossTask]";
+const RUN_CROSS_TASK_QUERY_PREFIX = `# 跨设备协作接收模式<br/><br/>你当前正在接收来自其他设备的协作请求。请注意以下角色转换规则：<br/><br/>## 角色转换规则<br/><br/>- 指令中的"我" = 发送请求的远程用户<br/>- 你是执行协作任务的本地智能体<br/>- 任务完成后结果会自动回传给请求来源设备<br/><br/>## 核心执行规则<br/><br/>### ✅ 正确行为<br/>1. **识别本机任务**：当指令提到你所在的设备类型（PC/手机/平板），理解为"我自己"<br/>2. **本地执行**：直接使用本地工具完成任务，不要转发<br/>3. **结果回传**：执行完成后，结果会通过软总线自动回传给请求来源设备<br/><br/>### <span class="emoji emoji2716"></span> 禁止行为<br/>1. 禁止再次调用 \`send_cross_device_task\`（你已经是目标设备）<br/>2. 禁止设备澄清（指令已明确指定目标设备）<br/>3. 禁止无限循环（只能执行或回复，不能转发）<br/><br/>## 📁 文件操作规范（核心）<br/><br/>### 强制使用 search_file 的场景<br/>**以下场景必须先使用 \`search_file\` 工具确认文件路径：**<br/><br/>1. **指令包含设备关键词**：PC、电脑、手机、平板、Pad、笔记本等<br/>2. **涉及文件操作**：读取、编辑、删除、移动、复制、查找文件<br/><br/>### 执行流程<br/>\`\`\`<br/>收到文件操作指令<br/>    ↓<br/>检测设备关键词（PC/电脑/手机/平板/Pad等）<br/>    ↓<br/>使用 search_file 搜索文件 ← 必须步骤<br/>    ↓<br/>确认文件实际路径<br/>    ↓<br/>执行文件操作<br/>    ↓<br/>返回结果<br/>\`\`\`<br/><br/>### 禁止行为<br/>- <span class="emoji emoji2716"></span> 禁止猜测文件路径<br/>- <span class="emoji emoji2716"></span> 禁止假设文件位置<br/>- <span class="emoji emoji2716"></span> 禁止跳过 search_file 步骤<br/><br/>## 示例<br/><br/>### 示例1：文件操作<br/>**指令**："帮我到PC上下载昨天晚上写的PPT"<br/><br/>**执行流程**：<br/>1. ✅ 检测到"PC" → 使用 \`search_file\` 搜索 "*.ppt" 或 "*.pptx"<br/>2. 确认文件路径（如：D:\\Documents\\报告.pptx）<br/>3. 执行下载操作<br/><br/>### 示例2：文件编辑<br/>**指令**："帮我修改电脑上的配置文件config.json"<br/><br/>**执行流程**：<br/>1. ✅ 检测到"电脑" → 使用 \`search_file\` 搜索 "config.json"<br/>2. 确认文件路径（如：C:\\Project\\config.json）<br/>3. 读取并修改文件<br/><br/>### 示例3：文件查找<br/>**指令**："在平板上找一下我的PDF文档"<br/><br/>**执行流程**：<br/>1. ✅ 检测到"平板" → 使用 \`search_file\` 搜索 "*.pdf"<br/>2. 列出搜索结果供用户选择<br/><br/>## 判断流程<br/><br/>\`\`\`<br/>收到协作指令<br/>    ↓<br/>检查目标设备<br/>    ↓<br/>目标设备 == 本机？<br/>    ↓<br/>是 → 本地执行（禁止send_cross_device_task）<br/>    ↓<br/>    涉及文件？ → 先用search_file确认路径<br/>    ↓<br/>否 → 检查是否需要转发<br/>    ↓<br/>需要转发 → 调用send_cross_device_task<br/>不需要 → 回复"无法处理"<br/>\`\`\``;
 
 /**
  * Diagnostics for WebSocket connection
@@ -455,6 +462,141 @@ export class XYWebSocketManager extends EventEmitter {
     this.heartbeat = heartbeat;
   }
 
+  private toUploadExeDataEvent(item: any): A2ADataEvent | null {
+    const legacyIntentName = item?.payload?.intentName;
+    const outputsIntentName = item?.payload?.outputs?.intentName;
+    const isLegacyUploadResult =
+      item?.header?.name === "UploadExeResult" && typeof legacyIntentName === "string";
+    const isOutputsUploadResult =
+      item?.header?.namespace === "UploadExeResult" &&
+      item?.header?.name === "Common" &&
+      typeof outputsIntentName === "string";
+
+    if (!isLegacyUploadResult && !isOutputsUploadResult) {
+      return null;
+    }
+
+    console.log(`${GET_PC_DEVICE_LIST_LOG_TAG} received UploadExeResult event`, item);
+    const outputs = item?.payload?.outputs ?? {};
+    const code = outputs?.code;
+    const status: "success" | "failed" =
+      code === undefined || String(code) === "0" ? "success" : "failed";
+    const dataEvent = {
+      intentName: isOutputsUploadResult ? outputsIntentName : legacyIntentName,
+      outputs,
+      status,
+    };
+    console.log(`${GET_PC_DEVICE_LIST_LOG_TAG} normalized data-event`, dataEvent);
+    return dataEvent;
+  }
+
+  private toCrossDeviceTaskResultEvent(item: any, sessionId: string): CrossDeviceTaskResultEvent | null {
+    if (item?.header?.namespace !== "DistributionInteraction" || item?.header?.name !== "CrossTaskExecuteResult") {
+      return null;
+    }
+
+    const code = item?.payload?.code === undefined ? "" : String(item.payload.code);
+    const message = typeof item?.payload?.message === "string" ? item.payload.message : "";
+    const fileUrls = Array.isArray(item?.payload?.fileUrls)
+      ? item.payload.fileUrls.filter((url: unknown): url is string => typeof url === "string" && url.length > 0)
+      : [];
+    const status: "success" | "failed" = code === "0" ? "success" : "failed";
+    const event = {
+      sessionId,
+      code,
+      message,
+      fileUrls,
+      status,
+      rawEvent: item,
+    };
+
+    console.log(`${SEND_PC_DEVICE_TASK_LOG_TAG} received DistributionInteraction.CrossTaskExecuteResult event`, item);
+    console.log(`${SEND_PC_DEVICE_TASK_LOG_TAG} normalized cross-device-task-result`, event);
+    return event;
+  }
+
+  private toRunCrossTaskA2ARequest(parsed: any, fallbackSessionId?: string, fallbackTaskId?: string): A2AJsonRpcRequest | null {
+    const networkId = typeof parsed?.networkId === "string" ? parsed.networkId.trim() : "";
+    if (!networkId) {
+      return null;
+    }
+
+    const originalParts = Array.isArray(parsed?.params?.message?.parts)
+      ? parsed.params.message.parts
+      : [];
+    const hasTextQuery = originalParts.some(
+      (part: any) => part?.kind === "text" && typeof part?.text === "string" && part.text.trim().length > 0,
+    );
+    if (!hasTextQuery) {
+      console.log(`${RUN_CROSS_TASK_LOG_TAG} top-level networkId found but text query is empty`, parsed);
+      return null;
+    }
+
+    let hasPrependedCrossTaskPrompt = false;
+    const crossTaskParts = originalParts.map((part: any) => {
+      if (
+        !hasPrependedCrossTaskPrompt &&
+        part?.kind === "text" &&
+        typeof part?.text === "string" &&
+        part.text.trim().length > 0
+      ) {
+        hasPrependedCrossTaskPrompt = true;
+        return {
+          ...part,
+          text: `${RUN_CROSS_TASK_QUERY_PREFIX}\n${part.text}`,
+        };
+      }
+      return part;
+    });
+
+    const topLevelSessionId = typeof parsed?.sessionId === "string" ? parsed.sessionId : "";
+    const topLevelAgentId = typeof parsed?.agentId === "string" ? parsed.agentId : "";
+    const sessionId = topLevelSessionId || parsed?.params?.sessionId || fallbackSessionId || networkId;
+    const taskId = parsed?.params?.id || fallbackTaskId || parsed?.id || uuidv4();
+    const messageId = parsed?.id || parsed?.messageId || uuidv4();
+    const runCrossTaskContext = {
+      agentId: topLevelAgentId,
+      sessionId: topLevelSessionId,
+      networkId,
+      isDistributed: true,
+      isSupportAgent: true,
+      rawContext: parsed,
+    };
+
+    const request: A2AJsonRpcRequest = {
+      jsonrpc: "2.0",
+      method: "message/stream",
+      id: messageId,
+      params: {
+        id: taskId,
+        sessionId,
+        agentLoginSessionId: "",
+        message: {
+          role: "user",
+          parts: [
+            ...crossTaskParts,
+            {
+              kind: "data",
+              data: {
+                runCrossTaskContext,
+              },
+            },
+          ],
+        },
+      },
+    };
+
+    console.log(`${RUN_CROSS_TASK_LOG_TAG} normalized PC cross-task query to A2A request`, {
+      agentId: topLevelAgentId,
+      sessionId,
+      networkId,
+      taskId,
+      messageId,
+      prependedPrompt: hasPrependedCrossTaskPrompt,
+    });
+    return request;
+  }
+
   /**
    * Handle incoming message from server.
    */
@@ -463,7 +605,36 @@ export class XYWebSocketManager extends EventEmitter {
     try {
       const messageStr = data.toString();
       this.log(`[WS-RECV] Raw message frame, size: ${messageStr.length} characters`);
+      if (messageStr.includes("\"networkId\"")) {
+        console.log(`${RUN_CROSS_TASK_LOG_TAG} PC cross-task inbound candidate received at websocket entry`);
+        console.log(`${RUN_CROSS_TASK_LOG_TAG} received raw websocket message`, messageStr);
+      }
+      if (messageStr.includes("UploadExeResult") || messageStr.includes("SearchAllDeviceInfo")) {
+        console.log(`${GET_PC_DEVICE_LIST_LOG_TAG} received raw websocket message`, messageStr);
+      }
+      if (messageStr.includes("UnifiedDistribute") || messageStr.includes("ClientContext")) {
+        console.log(`${SEND_PC_DEVICE_TASK_LOG_TAG} received raw websocket message`, messageStr);
+      }
       const parsed = JSON.parse(messageStr);
+      const directRunCrossTaskRequest = this.toRunCrossTaskA2ARequest(parsed);
+      if (directRunCrossTaskRequest) {
+        console.log(`${RUN_CROSS_TASK_LOG_TAG} emitting distributed message event, sessionId=${directRunCrossTaskRequest.params.sessionId}`);
+        this.emit("message", directRunCrossTaskRequest, directRunCrossTaskRequest.params.sessionId);
+        return;
+      }
+
+      if (Array.isArray(parsed.events)) {
+        const eventSessionId = parsed.session?.sessionId || parsed.sessionId;
+        console.log(`${SEND_PC_DEVICE_TASK_LOG_TAG} processing top-level events, sessionId=${eventSessionId ?? ""}`);
+        for (const item of parsed.events) {
+          const crossDeviceTaskResult = this.toCrossDeviceTaskResultEvent(item, eventSessionId ?? "");
+          if (crossDeviceTaskResult) {
+            console.log(`${SEND_PC_DEVICE_TASK_LOG_TAG} emitting cross-device-task-result`);
+            this.emit("cross-device-task-result", crossDeviceTaskResult);
+          }
+        }
+        return;
+      }
       // 提取并打印消息内容（只显示 text，data 只打印提示）
       const parts = parsed.params?.message?.parts;
       if (parts && Array.isArray(parts) && parts.length > 0) {
@@ -519,14 +690,14 @@ export class XYWebSocketManager extends EventEmitter {
 
             this.log(`[XY] Processing ${events.length} events from data.events`);
             for (const item of events) {
-              if (item.header?.name === "UploadExeResult" && item.payload?.intentName) {
-                const dataEvent = {
-                  intentName: item.payload.intentName,
-                  outputs: item.payload.outputs || {},
-                  status: "success" as const,
-                };
-                this.log(`[XY] Emitting data-event, intentName: ${item.payload.intentName}, size: ${JSON.stringify(dataEvent).length} bytes`);
+              const dataEvent = this.toUploadExeDataEvent(item);
+              const crossDeviceTaskResult = this.toCrossDeviceTaskResultEvent(item, sessionId);
+              if (dataEvent) {
+                this.log(`[XY] Emitting data-event, intentName: ${dataEvent.intentName}, status: ${dataEvent.status}, size: ${JSON.stringify(dataEvent).length} bytes`);
                 this.emit("data-event", dataEvent);
+              } else if (crossDeviceTaskResult) {
+                console.log(`${SEND_PC_DEVICE_TASK_LOG_TAG} emitting cross-device-task-result`);
+                this.emit("cross-device-task-result", crossDeviceTaskResult);
               } else if (item.header?.namespace === "ClawAgent" && item.header?.name === "InvokeJarvisGUIAgentResponse") {
                 this.log(`[XY] Emitting gui-agent-response, size: ${JSON.stringify(item).length} bytes`);
                 this.emit("gui-agent-response", item);
@@ -582,7 +753,32 @@ export class XYWebSocketManager extends EventEmitter {
       if (inboundMsg.msgType === "data") {
         this.log("[XY] Processing data message");
         try {
-          const a2aRequest: A2AJsonRpcRequest = JSON.parse(inboundMsg.msgDetail);
+          const parsedDetail = JSON.parse(inboundMsg.msgDetail);
+          const wrappedRunCrossTaskRequest = this.toRunCrossTaskA2ARequest(
+            parsedDetail,
+            inboundMsg.sessionId,
+            inboundMsg.taskId,
+          );
+          if (wrappedRunCrossTaskRequest) {
+            console.log(`${RUN_CROSS_TASK_LOG_TAG} emitting wrapped distributed message event, sessionId=${wrappedRunCrossTaskRequest.params.sessionId}`);
+            this.emit("message", wrappedRunCrossTaskRequest, wrappedRunCrossTaskRequest.params.sessionId);
+            return;
+          }
+
+          if (Array.isArray(parsedDetail.events)) {
+            const eventSessionId = parsedDetail.session?.sessionId || inboundMsg.sessionId || parsedDetail.sessionId;
+            console.log(`${SEND_PC_DEVICE_TASK_LOG_TAG} processing wrapped top-level events, sessionId=${eventSessionId ?? ""}`);
+            for (const item of parsedDetail.events) {
+              const crossDeviceTaskResult = this.toCrossDeviceTaskResultEvent(item, eventSessionId ?? "");
+              if (crossDeviceTaskResult) {
+                console.log(`${SEND_PC_DEVICE_TASK_LOG_TAG} emitting cross-device-task-result`);
+                this.emit("cross-device-task-result", crossDeviceTaskResult);
+              }
+            }
+            return;
+          }
+
+          const a2aRequest: A2AJsonRpcRequest = parsedDetail;
           const dataParts = a2aRequest.params?.message?.parts?.filter((p): p is { kind: "data"; data: any } => p.kind === "data");
 
           if (dataParts && dataParts.length > 0) {
@@ -595,14 +791,17 @@ export class XYWebSocketManager extends EventEmitter {
 
               this.log(`[XY] Processing ${events.length} events from data.events`);
               for (const item of events) {
-                if (item.header?.name === "UploadExeResult" && item.payload?.intentName) {
-                  const dataEvent = {
-                    intentName: item.payload.intentName,
-                    outputs: item.payload.outputs || {},
-                    status: "success" as const,
-                  };
-                  this.log(`[XY] Emitting data-event, intentName: ${item.payload.intentName}, size: ${JSON.stringify(dataEvent).length} bytes`);
+                const dataEvent = this.toUploadExeDataEvent(item);
+                const crossDeviceTaskResult = this.toCrossDeviceTaskResultEvent(
+                  item,
+                  inboundMsg.sessionId || a2aRequest.params?.sessionId,
+                );
+                if (dataEvent) {
+                  this.log(`[XY] Emitting data-event, intentName: ${dataEvent.intentName}, status: ${dataEvent.status}, size: ${JSON.stringify(dataEvent).length} bytes`);
                   this.emit("data-event", dataEvent);
+                } else if (crossDeviceTaskResult) {
+                  console.log(`${SEND_PC_DEVICE_TASK_LOG_TAG} emitting cross-device-task-result`);
+                  this.emit("cross-device-task-result", crossDeviceTaskResult);
                 } else if (item.header?.namespace === "ClawAgent" && item.header?.name === "InvokeJarvisGUIAgentResponse") {
                   this.log(`[XY] Emitting gui-agent-response, size: ${JSON.stringify(item).length} bytes`);
                   this.emit("gui-agent-response", item);

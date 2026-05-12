@@ -231,14 +231,20 @@ export interface SendCommandParams {
   sessionId: string;
   taskId: string;
   messageId: string;
-  command: A2ACommand;
+  command?: A2ACommand;
+  commands?: A2ACommand[];
 }
 
 /**
  * Send a command as an artifact update (final=false).
  */
 export async function sendCommand(params: SendCommandParams): Promise<void> {
-  const { config, sessionId, taskId, messageId, command } = params;
+  const { config, sessionId, taskId, messageId } = params;
+  const commands = params.commands ?? (params.command ? [params.command] : []);
+
+  if (commands.length === 0) {
+    throw new Error("sendCommand requires command or commands.");
+  }
 
   // Dynamic lookup: use latest taskId/messageId from task-manager (handles steer/interrupt),
   // fall back to closure-captured values
@@ -259,7 +265,7 @@ export async function sendCommand(params: SendCommandParams): Promise<void> {
         {
           kind: "data",
           data: {
-            commands: [command],
+            commands,
           },
         },
       ],

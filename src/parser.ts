@@ -1,5 +1,5 @@
 // A2A message parsing utilities
-import type { A2AJsonRpcRequest, A2AMessagePart, A2ADataEvent } from "./types.js";
+import type { A2AJsonRpcRequest, A2AMessagePart, A2ADataEvent, RunCrossTaskContext } from "./types.js";
 import { logger } from "./utils/logger.js";
 
 /**
@@ -69,6 +69,36 @@ export function extractDataEvents(parts: A2AMessagePart[]): A2ADataEvent[] {
     .filter((part): part is { kind: "data"; data: any } => part.kind === "data")
     .map((part) => part.data.event)
     .filter((event): event is A2ADataEvent => event !== undefined);
+}
+
+export function extractRunCrossTaskContext(parts: A2AMessagePart[]): RunCrossTaskContext | null {
+  for (const part of parts) {
+    if (part.kind !== "data" || !part.data) {
+      continue;
+    }
+
+    const context = part.data.runCrossTaskContext;
+    if (!context || typeof context !== "object") {
+      continue;
+    }
+
+    const networkId = typeof context.networkId === "string" ? context.networkId : "";
+    if (!networkId) {
+      continue;
+    }
+
+    return {
+      agentId: typeof context.agentId === "string" ? context.agentId : "",
+      sessionId: typeof context.sessionId === "string" ? context.sessionId : "",
+      isDistributed: context.isDistributed === true,
+      networkId,
+      isSupportAgent: context.isSupportAgent !== false,
+      fileUrls: Array.isArray(context.fileUrls) ? context.fileUrls.filter((url): url is string => typeof url === "string") : [],
+      rawContext: context,
+    };
+  }
+
+  return null;
 }
 
 /**

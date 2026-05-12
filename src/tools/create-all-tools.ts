@@ -24,6 +24,8 @@ import { createGetAlarmToolSchemaTool } from "./get-alarm-tool-schema.js";
 import { createGetCollectionToolSchemaTool } from "./get-collection-tool-schema.js";
 import { createGetEmailToolSchemaTool } from "./get-email-tool-schema.js";
 import { createLoginTokenTool } from "./login-token-tool.js";
+import { createDiscoverCrossDevicesTool } from "./discover-cross-devices-tool.js";
+import { createSendCrossDeviceTaskTool } from "./send-cross-device-task-tool.js";
 import { logger } from "../utils/logger.js";
 
 /**
@@ -42,6 +44,8 @@ export function createAllTools(ctx: SessionContext | null): ChannelAgentTool[] {
 
   return [
     createLocationTool(ctx),
+    createDiscoverCrossDevicesTool(ctx),
+    createSendCrossDeviceTaskTool(ctx),
     createCallDeviceTool(ctx),
     createGetNoteToolSchemaTool(ctx),
     createGetCalendarToolSchemaTool(ctx),

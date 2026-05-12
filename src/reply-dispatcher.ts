@@ -1,10 +1,11 @@
 // Reply dispatcher - completely following feishu/reply-dispatcher.ts pattern
 import type { ClawdbotConfig, RuntimeEnv, ReplyPayload } from "openclaw/plugin-sdk";
 import { getXYRuntime } from "./runtime.js";
-import { sendA2AResponse, sendStatusUpdate, sendReasoningTextUpdate } from "./formatter.js";
+import { sendA2AResponse, sendStatusUpdate, sendReasoningTextUpdate, sendCommand } from "./formatter.js";
 import { resolveXYConfig } from "./config.js";
 import { getCurrentTaskId, getCurrentMessageId } from "./task-manager.js";
-import type { XYChannelConfig } from "./types.js";
+import type { A2ACommand, RunCrossTaskContext, XYChannelConfig } from "./types.js";
+import { getCurrentSessionContext } from "./tools/session-manager.js";
 import fs from "fs/promises";
 import path from "path";
 import { logger } from "./utils/logger.js";
@@ -20,6 +21,73 @@ export interface CreateXYReplyDispatcherParams {
 }
 
 const TEMP_FILE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+const RUN_CROSS_TASK_LOG_TAG = "[RunCrossTask]";
+
+function buildDistributionStatusCommand(context: RunCrossTaskContext): A2ACommand {
+  return {
+    header: {
+      namespace: "DistributionInteraction",
+      name: "DistributionStatus",
+    },
+    payload: {
+      agentId: context.agentId,
+      isDistributed: true,
+      networkId: context.networkId,
+      distributionType: "softbus",
+      distributionExecutePolicy: "backgroundExecution",
+    },
+  };
+}
+
+function buildCrossTaskExecuteResultCommand(code: string, message: string, fileUrls: string[] = []): A2ACommand {
+  return {
+    header: {
+      namespace: "DistributionInteraction",
+      name: "CrossTaskExecuteResult",
+    },
+    payload: {
+      code,
+      message,
+      fileUrls,
+    },
+  };
+}
+
+async function sendRunCrossTaskResult(params: {
+  config: XYChannelConfig;
+  sessionId: string;
+  taskId: string;
+  messageId: string;
+  context: RunCrossTaskContext;
+  resultCode: string;
+  resultMessage: string;
+}): Promise<void> {
+  const { config, sessionId, taskId, messageId, context, resultCode, resultMessage } = params;
+  const fileUrls = Array.isArray(context.fileUrls) ? context.fileUrls : [];
+  const statusCommand = buildDistributionStatusCommand(context);
+  const resultCommand = buildCrossTaskExecuteResultCommand(resultCode, resultMessage, fileUrls);
+
+  console.log(`${RUN_CROSS_TASK_LOG_TAG} sending merged cross-task result commands`, {
+    statusCommand,
+    resultCommand,
+    cachedFileUrls: fileUrls,
+  });
+  await sendCommand({
+    config,
+    sessionId,
+    taskId,
+    messageId,
+    commands: [statusCommand, resultCommand],
+  });
+
+  console.log(`${RUN_CROSS_TASK_LOG_TAG} merged cross task result commands sent`, {
+    sessionId,
+    taskId,
+    resultCode,
+    resultMessageLength: resultMessage.length,
+    fileUrlCount: fileUrls.length,
+  });
+}
 
 /**
  * 清理 /tmp/xy_channel 目录中超过 24 小时的旧文件
@@ -97,6 +165,19 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
   let hasSentResponse = false;
   let finalSent = false;
   let accumulatedText = "";
+  const initialRunCrossTaskContext = getCurrentSessionContext()?.runCrossTaskContext;
+  if (initialRunCrossTaskContext) {
+    console.log(`${RUN_CROSS_TASK_LOG_TAG} dispatcher created for distributed task`, {
+      sessionId,
+      taskId,
+      agentId: initialRunCrossTaskContext.agentId,
+      networkId: initialRunCrossTaskContext.networkId,
+    });
+  }
+
+  const getRunCrossTaskContext = (): RunCrossTaskContext | undefined => {
+    return getCurrentSessionContext()?.runCrossTaskContext ?? initialRunCrossTaskContext;
+  };
 
   /**
    * Start the status update interval
@@ -239,6 +320,24 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
             });
             logger.log(`[ON_IDLE] ✅ Sent completion status update`);
 
+            const runCrossTaskContext = getRunCrossTaskContext();
+            if (runCrossTaskContext) {
+              console.log(`${RUN_CROSS_TASK_LOG_TAG} model task completed, preparing cross-device result before final response`, {
+                sessionId,
+                taskId: currentTaskId,
+                messageLength: accumulatedText.length,
+              });
+              await sendRunCrossTaskResult({
+                config,
+                sessionId,
+                taskId: currentTaskId,
+                messageId: currentMessageId,
+                context: runCrossTaskContext,
+                resultCode: "0",
+                resultMessage: accumulatedText,
+              });
+            }
+
             // 🔑 使用动态taskId发送最终响应
             await sendA2AResponse({
               config,
@@ -267,6 +366,23 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
               state: "failed",
             });
             logger.log(`[ON_IDLE] ✅ Sent failure status update`);
+
+            const runCrossTaskContext = getRunCrossTaskContext();
+            if (runCrossTaskContext) {
+              console.log(`${RUN_CROSS_TASK_LOG_TAG} model task failed, preparing cross-device failure result before final response`, {
+                sessionId,
+                taskId: currentTaskId,
+              });
+              await sendRunCrossTaskResult({
+                config,
+                sessionId,
+                taskId: currentTaskId,
+                messageId: currentMessageId,
+                context: runCrossTaskContext,
+                resultCode: "1",
+                resultMessage: "任务执行异常，请重试",
+              });
+            }
 
             await sendA2AResponse({
               config,
