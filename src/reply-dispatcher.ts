@@ -309,20 +309,9 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
         if (hasSentResponse && !finalSent) {
           logger.log(`[ON_IDLE] Sending accumulated text, length=${accumulatedText.length}`);
           try {
-            // 🔑 使用动态taskId发送完成状态
-            await sendStatusUpdate({
-              config,
-              sessionId,
-              taskId: currentTaskId,
-              messageId: currentMessageId,
-              text: "任务处理已完成~",
-              state: "completed",
-            });
-            logger.log(`[ON_IDLE] ✅ Sent completion status update`);
-
             const runCrossTaskContext = getRunCrossTaskContext();
             if (runCrossTaskContext) {
-              console.log(`${RUN_CROSS_TASK_LOG_TAG} model task completed, preparing cross-device result before final response`, {
+              console.log(`${RUN_CROSS_TASK_LOG_TAG} model task completed, preparing cross-device result before completion status and final response`, {
                 sessionId,
                 taskId: currentTaskId,
                 messageLength: accumulatedText.length,
@@ -337,6 +326,17 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
                 resultMessage: accumulatedText,
               });
             }
+
+            // 🔑 使用动态taskId发送完成状态
+            await sendStatusUpdate({
+              config,
+              sessionId,
+              taskId: currentTaskId,
+              messageId: currentMessageId,
+              text: "任务处理已完成~",
+              state: "completed",
+            });
+            logger.log(`[ON_IDLE] ✅ Sent completion status update`);
 
             // 🔑 使用动态taskId发送最终响应
             await sendA2AResponse({
@@ -357,19 +357,9 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
           // 正常失败场景（非steer follower）
           logger.log(`[ON_IDLE] Skipping final message: hasSentResponse=${hasSentResponse}, finalSent=${finalSent}`);
           try {
-            await sendStatusUpdate({
-              config,
-              sessionId,
-              taskId: currentTaskId,
-              messageId: currentMessageId,
-              text: "任务处理中断了~",
-              state: "failed",
-            });
-            logger.log(`[ON_IDLE] ✅ Sent failure status update`);
-
             const runCrossTaskContext = getRunCrossTaskContext();
             if (runCrossTaskContext) {
-              console.log(`${RUN_CROSS_TASK_LOG_TAG} model task failed, preparing cross-device failure result before final response`, {
+              console.log(`${RUN_CROSS_TASK_LOG_TAG} model task failed, preparing cross-device failure result before failure status and final response`, {
                 sessionId,
                 taskId: currentTaskId,
               });
@@ -383,6 +373,16 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
                 resultMessage: "任务执行异常，请重试",
               });
             }
+
+            await sendStatusUpdate({
+              config,
+              sessionId,
+              taskId: currentTaskId,
+              messageId: currentMessageId,
+              text: "任务处理中断了~",
+              state: "failed",
+            });
+            logger.log(`[ON_IDLE] ✅ Sent failure status update`);
 
             await sendA2AResponse({
               config,
