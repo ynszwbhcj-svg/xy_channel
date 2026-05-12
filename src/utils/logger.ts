@@ -54,8 +54,8 @@ let currentDate = getTodayDateStr();
 const dest = pino.destination({ dest: getLogFilePath(currentDate), sync: false, mkdir: true });
 const pinoLogger = pino(
   {
-    name: "xiaoyi-channel",
     level: "debug",
+    base: undefined,
     timestamp: pino.stdTimeFunctions.isoTime,
     formatters: {
       level(label: string) {
