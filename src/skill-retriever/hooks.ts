@@ -29,7 +29,6 @@ const TOOL_RETRIEVER_HEADER = `[系统消息，非用户发言]
 
 const TOOL_RETRIEVER_FOOTER = `
 以上是检索到的、与当前用户请求相关但用户尚未安装的skill，请按照TOOLS.md中find-skills中的[隐式推荐触发规则]来判断是否要给用户推荐。
----以下是用户原始请求---
 `;
 
 const PLUGIN_LOG_PREFIX = "[skill-retriever]";
