@@ -120,7 +120,7 @@ export function createXiaoyiGuiTool(ctx: SessionContext): any {
       sendCommand({
         config,
         sessionId,
-        taskId,
+        taskId: currentTaskId,
         messageId,
         command,
       }).then(() => {
