@@ -323,9 +323,10 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
     // and onSettled skips cleanup.
     const steerState = { steered: isUpdate };
 
-    // 🔑 第一条消息的 streaming 信号：deliver 首次触发时 resolve
-    // steer 消息通过串行队列等待此信号后再 dispatch
-    const streamingSignal = !isUpdate ? createStreamingSignal(parsed.sessionId) : undefined;
+    // 🔑 第一条消息创建 streaming 信号（provider.ts 的 wrapStreamFn 触发）
+    if (!isUpdate) {
+      createStreamingSignal(parsed.sessionId);
+    }
 
     // 🔑 创建dispatcher
     logger.log(`[BOT-DISPATCHER] 🎯 Creating reply dispatcher`);
@@ -339,7 +340,6 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
       messageId: parsed.messageId,
       accountId: route.accountId,
       steerState,
-      onFirstStream: streamingSignal?.notify,
     });
 
     // Steer injections don't need status intervals
@@ -509,6 +509,19 @@ interface StreamingSignal {
 }
 
 const streamingSignals = new Map<string, StreamingSignal>();
+
+/**
+ * 由 provider.ts 在 wrapStreamFn 调用时触发。
+ * 这是模型 API 被调用的精确时刻，此时 isStreaming 一定为 true。
+ */
+export function notifyModelStreaming(sessionId: string): void {
+  const signal = streamingSignals.get(sessionId);
+  if (signal) {
+    streamingSignals.delete(sessionId);
+    signal.notify();
+    logger.log(`[STEER-QUEUE] 📡 Model streaming signal fired for session=${sessionId}`);
+  }
+}
 
 function createStreamingSignal(sessionId: string): StreamingSignal {
   let resolve!: () => void;
