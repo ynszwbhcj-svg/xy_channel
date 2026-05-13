@@ -178,7 +178,7 @@ function normalizeTargetDeviceInfo(value: unknown): TargetDeviceInfo | null {
 function buildUnifiedDistributeCommand(
   query: string,
   targetDeviceInfo: TargetDeviceInfo,
-  distributionSessionid: string,
+  distributionSessionId: string,
 ): A2ACommand {
   return {
     header: {
@@ -198,7 +198,7 @@ function buildUnifiedDistributeCommand(
             payload: {
               agentId: "",
               isSupportAgent: true,
-              distributionSessionid,
+              distributionSessionId,
               localNetworkId: targetDeviceInfo.networkId,
             },
           },
@@ -267,7 +267,8 @@ export function createSendCrossDeviceTaskTool(ctx: SessionContext): any {
       const currentTaskId = getCurrentTaskId(sessionId) ?? taskId;
       const currentMessageId = getCurrentMessageId(sessionId) ?? messageId;
       const wsManager = getXYWebSocketManager(config);
-      const command = buildUnifiedDistributeCommand(query, targetDeviceInfo, sessionId);
+      const distributionSessionId = ctx.webSocketSessionId || sessionId;
+      const command = buildUnifiedDistributeCommand(query, targetDeviceInfo, distributionSessionId);
       const statusText = `正在调用${targetDeviceInfo.deviceName}执行“${query}”跨设备任务...`;
 
       logger.log(`${LOG_TAG} prepared UnifiedDistribute command=${stringifyForLog(command)}`);
@@ -300,7 +301,7 @@ export function createSendCrossDeviceTaskTool(ctx: SessionContext): any {
         handler = (event: CrossDeviceTaskResultEvent) => {
           logger.log(`${LOG_TAG} received cross-device-task-result=${stringifyForLog(event)}`);
           logger.log(`${SEND_CROSS_RESULT_LOG_TAG} received cross-device result, code=${event.code}, message=${event.message}, rawEvent=${stringifyForLog(event.rawEvent)}`);
-          if (event.sessionId && event.sessionId !== sessionId) {
+          if (event.sessionId && event.sessionId !== sessionId && event.sessionId !== distributionSessionId) {
             return;
           }
 

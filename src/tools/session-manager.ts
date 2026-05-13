@@ -10,6 +10,7 @@ import { getCurrentTaskId, getCurrentMessageId } from "../task-manager.js";
 export interface SessionContext {
   config: XYChannelConfig;
   sessionId: string;
+  webSocketSessionId?: string;
   taskId: string;
   messageId: string;
   agentId: string;

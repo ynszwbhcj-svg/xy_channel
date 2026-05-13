@@ -219,6 +219,7 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
       registerSession(route.sessionKey, {
         config,
         sessionId: parsed.sessionId,
+        webSocketSessionId,
         taskId: parsed.taskId,
         messageId: parsed.messageId,
         agentId: route.accountId,
@@ -361,6 +362,7 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
     const sessionContext = {
       config,
       sessionId: parsed.sessionId,
+      webSocketSessionId,
       taskId: parsed.taskId,
       messageId: parsed.messageId,
       agentId: route.accountId,
