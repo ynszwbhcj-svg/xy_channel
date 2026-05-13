@@ -67,7 +67,7 @@ async function sendRunCrossTaskResult(params: {
   const statusCommand = buildDistributionStatusCommand(context);
   const resultCommand = buildCrossTaskExecuteResultCommand(resultCode, resultMessage, fileUrls);
 
-  console.log(`${RUN_CROSS_TASK_LOG_TAG} sending merged cross-task result commands`, {
+  logger.log(`${RUN_CROSS_TASK_LOG_TAG} sending merged cross-task result commands`, {
     statusCommand,
     resultCommand,
     cachedFileUrls: fileUrls,
@@ -80,7 +80,7 @@ async function sendRunCrossTaskResult(params: {
     commands: [statusCommand, resultCommand],
   });
 
-  console.log(`${RUN_CROSS_TASK_LOG_TAG} merged cross task result commands sent`, {
+  logger.log(`${RUN_CROSS_TASK_LOG_TAG} merged cross task result commands sent`, {
     sessionId,
     taskId,
     resultCode,
@@ -167,7 +167,7 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
   let accumulatedText = "";
   const initialRunCrossTaskContext = getCurrentSessionContext()?.runCrossTaskContext;
   if (initialRunCrossTaskContext) {
-    console.log(`${RUN_CROSS_TASK_LOG_TAG} dispatcher created for distributed task`, {
+    logger.log(`${RUN_CROSS_TASK_LOG_TAG} dispatcher created for distributed task`, {
       sessionId,
       taskId,
       agentId: initialRunCrossTaskContext.agentId,
@@ -311,7 +311,7 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
           try {
             const runCrossTaskContext = getRunCrossTaskContext();
             if (runCrossTaskContext) {
-              console.log(`${RUN_CROSS_TASK_LOG_TAG} model task completed, preparing cross-device result before completion status and final response`, {
+              logger.log(`${RUN_CROSS_TASK_LOG_TAG} model task completed, preparing cross-device result before completion status and final response`, {
                 sessionId,
                 taskId: currentTaskId,
                 messageLength: accumulatedText.length,
@@ -359,7 +359,7 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
           try {
             const runCrossTaskContext = getRunCrossTaskContext();
             if (runCrossTaskContext) {
-              console.log(`${RUN_CROSS_TASK_LOG_TAG} model task failed, preparing cross-device failure result before failure status and final response`, {
+              logger.log(`${RUN_CROSS_TASK_LOG_TAG} model task failed, preparing cross-device failure result before failure status and final response`, {
                 sessionId,
                 taskId: currentTaskId,
               });

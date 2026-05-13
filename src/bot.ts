@@ -185,7 +185,7 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
     }
     const runCrossTaskContext = extractRunCrossTaskContext(parsed.parts);
     if (runCrossTaskContext) {
-      console.log("[RunCrossTask] extracted distributed task context", {
+      logger.log("[RunCrossTask] extracted distributed task context", {
         sessionId: parsed.sessionId,
         taskId: parsed.taskId,
         agentId: runCrossTaskContext.agentId,

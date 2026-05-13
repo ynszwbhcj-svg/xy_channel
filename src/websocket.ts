@@ -475,7 +475,7 @@ export class XYWebSocketManager extends EventEmitter {
     }
 
     if (outputsIntentName === "SearchAllDeviceInfo") {
-      console.log(`${GET_PC_DEVICE_LIST_LOG_TAG} received UploadExeResult event`, item);
+      this.log(`${GET_PC_DEVICE_LIST_LOG_TAG} received UploadExeResult event`, item);
     } else {
       this.log(`[XY] received UploadExeResult event, intentName=${outputsIntentName}`);
     }
@@ -488,7 +488,7 @@ export class XYWebSocketManager extends EventEmitter {
       status,
     };
     if (outputsIntentName === "SearchAllDeviceInfo") {
-      console.log(`${GET_PC_DEVICE_LIST_LOG_TAG} normalized data-event`, dataEvent);
+      this.log(`${GET_PC_DEVICE_LIST_LOG_TAG} normalized data-event`, dataEvent);
     } else {
       this.log(`[XY] normalized UploadExeResult data-event, intentName=${outputsIntentName}, status=${status}`);
     }
@@ -515,8 +515,8 @@ export class XYWebSocketManager extends EventEmitter {
       rawEvent: item,
     };
 
-    console.log(`${SEND_PC_DEVICE_TASK_LOG_TAG} received DistributionInteraction.CrossTaskExecuteResult event`, item);
-    console.log(`${SEND_PC_DEVICE_TASK_LOG_TAG} normalized cross-device-task-result`, event);
+    this.log(`${SEND_PC_DEVICE_TASK_LOG_TAG} received DistributionInteraction.CrossTaskExecuteResult event`, item);
+    this.log(`${SEND_PC_DEVICE_TASK_LOG_TAG} normalized cross-device-task-result`, event);
     return event;
   }
 
@@ -533,7 +533,7 @@ export class XYWebSocketManager extends EventEmitter {
       (part: any) => part?.kind === "text" && typeof part?.text === "string" && part.text.trim().length > 0,
     );
     if (!hasTextQuery) {
-      console.log(`${RUN_CROSS_TASK_LOG_TAG} top-level networkId found but text query is empty`, parsed);
+      this.log(`${RUN_CROSS_TASK_LOG_TAG} top-level networkId found but text query is empty`, parsed);
       return null;
     }
 
@@ -592,7 +592,7 @@ export class XYWebSocketManager extends EventEmitter {
       },
     };
 
-    console.log(`${RUN_CROSS_TASK_LOG_TAG} normalized PC cross-task query to A2A request`, {
+    this.log(`${RUN_CROSS_TASK_LOG_TAG} normalized PC cross-task query to A2A request`, {
       agentId: topLevelAgentId,
       sessionId,
       networkId,
@@ -611,32 +611,32 @@ export class XYWebSocketManager extends EventEmitter {
     try {
       const messageStr = data.toString();
       this.log(`[WS-RECV] Raw message frame, size: ${messageStr.length} characters`);
-      console.log("[GYJ] received raw websocket message", messageStr);
+      this.log("[GYJ] received raw websocket message", messageStr);
       if (messageStr.includes("\"networkId\"")) {
-        console.log(`${RUN_CROSS_TASK_LOG_TAG} PC cross-task inbound candidate received at websocket entry`);
-        console.log(`${RUN_CROSS_TASK_LOG_TAG} received raw websocket message`, messageStr);
+        this.log(`${RUN_CROSS_TASK_LOG_TAG} PC cross-task inbound candidate received at websocket entry`);
+        this.log(`${RUN_CROSS_TASK_LOG_TAG} received raw websocket message`, messageStr);
       }
       if (messageStr.includes("UploadExeResult") || messageStr.includes("SearchAllDeviceInfo")) {
-        console.log(`${GET_PC_DEVICE_LIST_LOG_TAG} received raw websocket message`, messageStr);
+        this.log(`${GET_PC_DEVICE_LIST_LOG_TAG} received raw websocket message`, messageStr);
       }
       if (messageStr.includes("UnifiedDistribute") || messageStr.includes("ClientContext")) {
-        console.log(`${SEND_PC_DEVICE_TASK_LOG_TAG} received raw websocket message`, messageStr);
+        this.log(`${SEND_PC_DEVICE_TASK_LOG_TAG} received raw websocket message`, messageStr);
       }
       const parsed = JSON.parse(messageStr);
       const directRunCrossTaskRequest = this.toRunCrossTaskA2ARequest(parsed);
       if (directRunCrossTaskRequest) {
-        console.log(`${RUN_CROSS_TASK_LOG_TAG} emitting distributed message event, sessionId=${directRunCrossTaskRequest.params.sessionId}`);
+        this.log(`${RUN_CROSS_TASK_LOG_TAG} emitting distributed message event, sessionId=${directRunCrossTaskRequest.params.sessionId}`);
         this.emit("message", directRunCrossTaskRequest, directRunCrossTaskRequest.params.sessionId);
         return;
       }
 
       if (Array.isArray(parsed.events)) {
         const eventSessionId = parsed.session?.sessionId || parsed.sessionId;
-        console.log(`${SEND_PC_DEVICE_TASK_LOG_TAG} processing top-level events, sessionId=${eventSessionId ?? ""}`);
+        this.log(`${SEND_PC_DEVICE_TASK_LOG_TAG} processing top-level events, sessionId=${eventSessionId ?? ""}`);
         for (const item of parsed.events) {
           const crossDeviceTaskResult = this.toCrossDeviceTaskResultEvent(item, eventSessionId ?? "");
           if (crossDeviceTaskResult) {
-            console.log(`${SEND_PC_DEVICE_TASK_LOG_TAG} emitting cross-device-task-result`);
+            this.log(`${SEND_PC_DEVICE_TASK_LOG_TAG} emitting cross-device-task-result`);
             this.emit("cross-device-task-result", crossDeviceTaskResult);
           }
         }
@@ -703,7 +703,7 @@ export class XYWebSocketManager extends EventEmitter {
                 this.log(`[XY] Emitting data-event, intentName: ${dataEvent.intentName}, status: ${dataEvent.status}, size: ${JSON.stringify(dataEvent).length} bytes`);
                 this.emit("data-event", dataEvent);
               } else if (crossDeviceTaskResult) {
-                console.log(`${SEND_PC_DEVICE_TASK_LOG_TAG} emitting cross-device-task-result`);
+                this.log(`${SEND_PC_DEVICE_TASK_LOG_TAG} emitting cross-device-task-result`);
                 this.emit("cross-device-task-result", crossDeviceTaskResult);
               } else if (item.header?.namespace === "ClawAgent" && item.header?.name === "InvokeJarvisGUIAgentResponse") {
                 this.log(`[XY] Emitting gui-agent-response, size: ${JSON.stringify(item).length} bytes`);
@@ -767,18 +767,18 @@ export class XYWebSocketManager extends EventEmitter {
             inboundMsg.taskId,
           );
           if (wrappedRunCrossTaskRequest) {
-            console.log(`${RUN_CROSS_TASK_LOG_TAG} emitting wrapped distributed message event, sessionId=${wrappedRunCrossTaskRequest.params.sessionId}`);
+            this.log(`${RUN_CROSS_TASK_LOG_TAG} emitting wrapped distributed message event, sessionId=${wrappedRunCrossTaskRequest.params.sessionId}`);
             this.emit("message", wrappedRunCrossTaskRequest, wrappedRunCrossTaskRequest.params.sessionId);
             return;
           }
 
           if (Array.isArray(parsedDetail.events)) {
             const eventSessionId = parsedDetail.session?.sessionId || inboundMsg.sessionId || parsedDetail.sessionId;
-            console.log(`${SEND_PC_DEVICE_TASK_LOG_TAG} processing wrapped top-level events, sessionId=${eventSessionId ?? ""}`);
+            this.log(`${SEND_PC_DEVICE_TASK_LOG_TAG} processing wrapped top-level events, sessionId=${eventSessionId ?? ""}`);
             for (const item of parsedDetail.events) {
               const crossDeviceTaskResult = this.toCrossDeviceTaskResultEvent(item, eventSessionId ?? "");
               if (crossDeviceTaskResult) {
-                console.log(`${SEND_PC_DEVICE_TASK_LOG_TAG} emitting cross-device-task-result`);
+                this.log(`${SEND_PC_DEVICE_TASK_LOG_TAG} emitting cross-device-task-result`);
                 this.emit("cross-device-task-result", crossDeviceTaskResult);
               }
             }
@@ -807,7 +807,7 @@ export class XYWebSocketManager extends EventEmitter {
                   this.log(`[XY] Emitting data-event, intentName: ${dataEvent.intentName}, status: ${dataEvent.status}, size: ${JSON.stringify(dataEvent).length} bytes`);
                   this.emit("data-event", dataEvent);
                 } else if (crossDeviceTaskResult) {
-                  console.log(`${SEND_PC_DEVICE_TASK_LOG_TAG} emitting cross-device-task-result`);
+                  this.log(`${SEND_PC_DEVICE_TASK_LOG_TAG} emitting cross-device-task-result`);
                   this.emit("cross-device-task-result", crossDeviceTaskResult);
                 } else if (item.header?.namespace === "ClawAgent" && item.header?.name === "InvokeJarvisGUIAgentResponse") {
                   this.log(`[XY] Emitting gui-agent-response, size: ${JSON.stringify(item).length} bytes`);

@@ -3,6 +3,7 @@ import { getXYWebSocketManager } from "../client.js";
 import { getCurrentMessageId, getCurrentTaskId } from "../task-manager.js";
 import type { A2ACommand, A2ADataEvent } from "../types.js";
 import type { SessionContext } from "./session-manager.js";
+import { logger } from "../utils/logger.js";
 
 const DISCOVER_DEVICES_INTENT = "SearchAllDeviceInfo";
 const DISCOVER_DEVICES_BUNDLE = "com.huawei.hmos.vassistant";
@@ -162,7 +163,7 @@ export function createDiscoverCrossDevicesTool(ctx: SessionContext): any {
 
     async execute(_toolCallId: string, params: any) {
       const query = typeof params.query === "string" ? params.query.trim() : "";
-      console.log(`${LOG_TAG} tool invoked, params=${stringifyForLog(params)}`);
+      logger.log(`${LOG_TAG} tool invoked, params=${stringifyForLog(params)}`);
       if (!query) {
         return buildResultText({
           success: false,
@@ -194,7 +195,7 @@ export function createDiscoverCrossDevicesTool(ctx: SessionContext): any {
           },
         },
       };
-      console.log(`${LOG_TAG} prepared device discovery command=${stringifyForLog(command)}`);
+      logger.log(`${LOG_TAG} prepared device discovery command=${stringifyForLog(command)}`);
 
       return new Promise((resolve) => {
         let timeout: NodeJS.Timeout;
@@ -204,7 +205,7 @@ export function createDiscoverCrossDevicesTool(ctx: SessionContext): any {
         const cleanup = () => {
           clearTimeout(timeout);
           wsManager.off("data-event", handler);
-          console.log(`${LOG_TAG} cleaned up data-event listener`);
+          logger.log(`${LOG_TAG} cleaned up data-event listener`);
         };
 
         const finish = (result: Record<string, unknown>) => {
@@ -212,13 +213,13 @@ export function createDiscoverCrossDevicesTool(ctx: SessionContext): any {
             return;
           }
           settled = true;
-          console.log(`${LOG_TAG} finishing tool result=${stringifyForLog(result)}`);
+          logger.log(`${LOG_TAG} finishing tool result=${stringifyForLog(result)}`);
           cleanup();
           resolve(buildResultText(result));
         };
 
         handler = (event: A2ADataEvent) => {
-          console.log(`${LOG_TAG} received data-event=${stringifyForLog(event)}`);
+          logger.log(`${LOG_TAG} received data-event=${stringifyForLog(event)}`);
           if (event.intentName !== DISCOVER_DEVICES_INTENT) {
             return;
           }
@@ -246,7 +247,7 @@ export function createDiscoverCrossDevicesTool(ctx: SessionContext): any {
         };
 
         timeout = setTimeout(() => {
-          console.log(`${LOG_TAG} timeout waiting UploadExeResult after ${DISCOVER_DEVICES_TIMEOUT_MS}ms`);
+          logger.log(`${LOG_TAG} timeout waiting UploadExeResult after ${DISCOVER_DEVICES_TIMEOUT_MS}ms`);
           finish({
             success: false,
             rawOutputs: null,
@@ -258,7 +259,7 @@ export function createDiscoverCrossDevicesTool(ctx: SessionContext): any {
         }, DISCOVER_DEVICES_TIMEOUT_MS);
 
         wsManager.on("data-event", handler);
-        console.log(`${LOG_TAG} data-event listener registered, timeoutMs=${DISCOVER_DEVICES_TIMEOUT_MS}`);
+        logger.log(`${LOG_TAG} data-event listener registered, timeoutMs=${DISCOVER_DEVICES_TIMEOUT_MS}`);
 
         sendStatusUpdate({
           config,
@@ -276,7 +277,7 @@ export function createDiscoverCrossDevicesTool(ctx: SessionContext): any {
             command,
           }))
           .catch((error) => {
-            console.error(`${LOG_TAG} failed to send device discovery command: ${error instanceof Error ? error.message : String(error)}`);
+            logger.error(`${LOG_TAG} failed to send device discovery command: ${error instanceof Error ? error.message : String(error)}`);
             finish({
               success: false,
               rawOutputs: null,

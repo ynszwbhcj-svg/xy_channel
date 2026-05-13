@@ -113,7 +113,7 @@ export function createUploadFileTool(ctx: SessionContext): any {
 
     if (ctx.runCrossTaskContext && fileUrls.length > 0) {
       const cachedFileUrls = appendRunCrossTaskFileUrls(fileUrls);
-      console.log("[RunCrossTask] cached upload_file fileUrls for cross-task result", {
+      logger.log("[RunCrossTask] cached upload_file fileUrls for cross-task result", {
         sessionId,
         networkId: ctx.runCrossTaskContext.networkId,
         fileUrls,
