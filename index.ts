@@ -39,10 +39,14 @@ function registerFullHooks(api: OpenClawPluginApi) {
   const beforePromptBuildHandler = createBeforePromptBuildHandler(skillRetrieverConfig);
   api.on("before_prompt_build", beforePromptBuildHandler);
   registerSelfEvolutionToolResultNudge(api);
+}
 
+function registerCsplHook(api: OpenClawPluginApi) {
   // CSPL security scanning via after_tool_call hook.
   // When CSPL returns REJECT, injects a steer message (with /steer prefix)
   // into the active Pi run to interrupt the agent.
+  // Only registered in "full" mode because it depends on handleXYMessage
+  // having cached cfg/runtime via setCsplSteerContext.
   api.on("after_tool_call", async (event, ctx) => {
     if (!ALLOWED_TOOLS.includes(event.toolName)) {
       return;
@@ -128,6 +132,7 @@ export default definePluginEntry({
 
     if (api.registrationMode === "full") {
       registerFullHooks(api);
+      registerCsplHook(api);
     }
   },
 });
