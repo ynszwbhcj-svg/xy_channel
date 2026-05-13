@@ -533,22 +533,15 @@ export const xiaoyiProvider: ProviderPlugin = {
       }
 
       // ── Build dynamic headers ────────────────────────────
+      // Priority:
+      //   1. TaskId extracted from Conversation info in user messages (most reliable
+      //      — based on message content, not mutable global state or cached values)
+      //   2. UID-based fallback: sha256(uid).hex[:32]_timestamp
+      //   3. Cached extraParams from prepareExtraParams (session keys)
       if (ctx.extraParams) {
         const fallbackPrefix = ctx.extraParams[FALLBACK_PREFIX_KEY];
 
-        if (typeof fallbackPrefix === "string") {
-          // Fallback mode: generate fresh timestamp per request
-          const isCron = isCronTriggered(context.messages);
-          const fallbackValue = `${fallbackPrefix}_${Date.now()}`;
-          dynamicHeaders[HEADER_TRACE_ID] = isCron ? `cron_${fallbackValue}` : fallbackValue;
-          dynamicHeaders[HEADER_SESSION_ID] = fallbackValue;
-          dynamicHeaders[HEADER_INTERACTION_ID] = fallbackValue;
-          if (isCron) {
-            const cronTitle = extractCronTitle(context.messages);
-            if (cronTitle) dynamicHeaders["x-cron-title"] = encodeURIComponent(cronTitle);
-            if (context.messages?.length === 1) dynamicHeaders["x-cron-flag"] = "begin";
-          }
-        } else if (extractedTaskId) {
+        if (extractedTaskId) {
           // Session mode: taskId extracted from Conversation info
           const traceId = extractedTaskId;
           const sessionId = traceId.split("&")[0];
@@ -563,6 +556,18 @@ export const xiaoyiProvider: ProviderPlugin = {
           }
           dynamicHeaders[HEADER_SESSION_ID] = sessionId;
           dynamicHeaders[HEADER_INTERACTION_ID] = interactionId;
+        } else if (typeof fallbackPrefix === "string") {
+          // Fallback mode: generate fresh timestamp per request
+          const isCron = isCronTriggered(context.messages);
+          const fallbackValue = `${fallbackPrefix}_${Date.now()}`;
+          dynamicHeaders[HEADER_TRACE_ID] = isCron ? `cron_${fallbackValue}` : fallbackValue;
+          dynamicHeaders[HEADER_SESSION_ID] = fallbackValue;
+          dynamicHeaders[HEADER_INTERACTION_ID] = fallbackValue;
+          if (isCron) {
+            const cronTitle = extractCronTitle(context.messages);
+            if (cronTitle) dynamicHeaders["x-cron-title"] = encodeURIComponent(cronTitle);
+            if (context.messages?.length === 1) dynamicHeaders["x-cron-flag"] = "begin";
+          }
         } else {
           // Fallback: use extraParams cached values
           const traceId = ctx.extraParams[HEADER_TRACE_ID];
