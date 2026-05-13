@@ -52,6 +52,10 @@ export interface HandleXYMessageParams {
  */
 export async function handleXYMessage(params: HandleXYMessageParams): Promise<void> {
   const { cfg, runtime, message, accountId, webSocketSessionId } = params;
+  const distributionSessionId =
+    typeof (message as any)?.sessionId === "string" && (message as any).sessionId.length > 0
+      ? (message as any).sessionId
+      : undefined;
 
   // Cache context for CSPL steer injection (after_tool_call hook)
   setCsplSteerContext(cfg, runtime);
@@ -220,6 +224,7 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
         config,
         sessionId: parsed.sessionId,
         webSocketSessionId,
+        distributionSessionId,
         taskId: parsed.taskId,
         messageId: parsed.messageId,
         agentId: route.accountId,
@@ -363,6 +368,7 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
       config,
       sessionId: parsed.sessionId,
       webSocketSessionId,
+      distributionSessionId,
       taskId: parsed.taskId,
       messageId: parsed.messageId,
       agentId: route.accountId,

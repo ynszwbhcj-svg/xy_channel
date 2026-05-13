@@ -11,6 +11,7 @@ export interface SessionContext {
   config: XYChannelConfig;
   sessionId: string;
   webSocketSessionId?: string;
+  distributionSessionId?: string;
   taskId: string;
   messageId: string;
   agentId: string;

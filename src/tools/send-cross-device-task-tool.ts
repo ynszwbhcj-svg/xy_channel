@@ -267,7 +267,7 @@ export function createSendCrossDeviceTaskTool(ctx: SessionContext): any {
       const currentTaskId = getCurrentTaskId(sessionId) ?? taskId;
       const currentMessageId = getCurrentMessageId(sessionId) ?? messageId;
       const wsManager = getXYWebSocketManager(config);
-      const distributionSessionId = ctx.webSocketSessionId || sessionId;
+      const distributionSessionId = ctx.distributionSessionId || ctx.webSocketSessionId || sessionId;
       const command = buildUnifiedDistributeCommand(query, targetDeviceInfo, distributionSessionId);
       const statusText = `正在调用${targetDeviceInfo.deviceName}执行“${query}”跨设备任务...`;
 
