@@ -261,6 +261,11 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
     // 🔑 Steer消息: 跳过旧路径直接进入 streaming-signal 队列
     // /steer 前缀由 dispatchSteerWhenReady 内部添加
     if (isUpdate) {
+      // 立即释放 init gate——steer 不走 withReplyDispatcher 的 run()
+      // 回调，onInitComplete 永远不会被触发。如果不释放，后续消息
+      // 会被 globalDispatchInitGate 永久阻塞。
+      params.onInitComplete?.();
+
       logger.log(`[BOT] 🔄 Steer message — enqueuing to streaming-signal queue`);
       await enqueueSteer({
         sessionId: parsed.sessionId,
