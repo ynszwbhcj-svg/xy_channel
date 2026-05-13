@@ -16,7 +16,9 @@ export interface CreateXYReplyDispatcherParams {
   taskId: string;
   messageId: string;
   accountId: string;
-  steerState: { steered: boolean; steerResult?: 'success' | 'fail' };  // Dynamic flag set when dispatchReplyFromConfig steers
+  steerState: { steered: boolean };  // Dynamic flag set when dispatchReplyFromConfig steers
+  /** Called the first time deliver fires for a non-steered dispatch — signals the model is streaming. */
+  onFirstStream?: () => void;
 }
 
 const TEMP_FILE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
@@ -62,7 +64,7 @@ export async function cleanupStaleTempFiles(tempDir: string = "/tmp/xy_channel")
  * Runtime is expected to be validated before calling this function.
  */
 export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): any {
-  const { cfg, runtime, sessionId, taskId, messageId, accountId, steerState } = params;
+  const { cfg, runtime, sessionId, taskId, messageId, accountId, steerState, onFirstStream } = params;
 
   logger.log(`[DISPATCHER-CREATE] ******* Creating dispatcher *******`);
   logger.log(`[DISPATCHER-CREATE]   - taskId: ${taskId}`);
@@ -96,6 +98,7 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
   let hasSentResponse = false;
   let finalSent = false;
   let accumulatedText = "";
+  let streamingSignaled = false;
 
   /**
    * Start the status update interval
@@ -147,14 +150,14 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
       deliver: async (payload: ReplyPayload, info) => {
         // 🔑 steered dispatch不发送内容（让主dispatcher处理）
         if (steerState.steered) {
-          const text = payload.text ?? '';
-          if (text.includes('steered current session')) {
-            steerState.steerResult = 'success';
-          } else if (text.includes('not accepting steering') || text.includes('No active run')) {
-            steerState.steerResult = 'fail';
-          }
-          logger.log(`[DELIVER] Steered dispatch - result=${steerState.steerResult}, info.kind=${info?.kind}, text=${text.slice(0, 80)}`);
+          logger.log(`[DELIVER] Steered dispatch - skipping deliver, info.kind=${info?.kind}`);
           return;
+        }
+
+        // 🔑 第一次 deliver = 模型开始 streaming，通知等待中的 steer
+        if (onFirstStream && !streamingSignaled) {
+          streamingSignaled = true;
+          onFirstStream();
         }
 
         const text = payload.text ?? "";

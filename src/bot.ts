@@ -323,6 +323,10 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
     // and onSettled skips cleanup.
     const steerState = { steered: isUpdate };
 
+    // 🔑 第一条消息的 streaming 信号：deliver 首次触发时 resolve
+    // steer 消息通过串行队列等待此信号后再 dispatch
+    const streamingSignal = !isUpdate ? createStreamingSignal(parsed.sessionId) : undefined;
+
     // 🔑 创建dispatcher
     logger.log(`[BOT-DISPATCHER] 🎯 Creating reply dispatcher`);
     logger.log(`[BOT-DISPATCHER]   - taskId: ${parsed.taskId}`);
@@ -335,6 +339,7 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
       messageId: parsed.messageId,
       accountId: route.accountId,
       steerState,
+      onFirstStream: streamingSignal?.notify,
     });
 
     // Steer injections don't need status intervals
@@ -411,14 +416,12 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
       },
     });
 
-    // 🔑 Steer 重试：如果首次注入失败（run 还没 streaming），等待后重试
+    // 🔑 Steer 串行队列：等待 streaming 信号后 dispatch，多个 steer 按顺序处理
     if (isUpdate) {
-      await retrySteerIfNeeded({
-        steerState,
+      await enqueueSteer({
         sessionId: parsed.sessionId,
         sessionKey: route.sessionKey,
         steerText: textForAgent,
-        ctxPayload,
         cfg,
         runtime,
         parsed,
@@ -495,13 +498,34 @@ function buildXYMediaPayload(
   };
 }
 
-/** Steer 重试参数 */
-interface SteerRetryParams {
-  steerState: { steered: boolean; steerResult?: 'success' | 'fail' };
+// ─────────────────────────────────────────────────────────────
+// Steer 串行队列 + streaming 信号
+// ─────────────────────────────────────────────────────────────
+
+/** Per-session streaming 信号 */
+interface StreamingSignal {
+  promise: Promise<void>;
+  notify: () => void;
+}
+
+const streamingSignals = new Map<string, StreamingSignal>();
+
+function createStreamingSignal(sessionId: string): StreamingSignal {
+  let resolve!: () => void;
+  const promise = new Promise<void>(r => { resolve = r; });
+  const signal: StreamingSignal = { promise, notify: resolve };
+  streamingSignals.set(sessionId, signal);
+  logger.log(`[STEER-QUEUE] 🟢 Streaming signal created for session ${sessionId}`);
+  return signal;
+}
+
+/** Per-session 串行队列：保证同一 session 的 steer 消息按顺序处理 */
+const steerQueues = new Map<string, Promise<void>>();
+
+interface EnqueueSteerParams {
   sessionId: string;
   sessionKey: string;
-  steerText: string;    // 已带 /steer 前缀的文本
-  ctxPayload: any;
+  steerText: string;
   cfg: ClawdbotConfig;
   runtime: RuntimeEnv;
   parsed: ReturnType<typeof parseA2AMessage>;
@@ -509,132 +533,124 @@ interface SteerRetryParams {
   deviceType: string;
 }
 
-const STEER_RETRY_DELAYS = [2000, 3000, 5000];
-
 /**
- * Steer 注入重试：当首次注入因 run 未 streaming 而失败时，
- * 等待递增延迟后重试，最多尝试 3 次。
+ * 将 steer 消息放入 per-session 串行队列。
+ * 等待第一条消息的 streaming 信号（deliver 首次触发），然后 dispatch。
+ * 多个 steer 按到达顺序串行处理，无需重试。
  */
-async function retrySteerIfNeeded(params: SteerRetryParams): Promise<void> {
-  const { steerState, sessionId, steerText } = params;
+function enqueueSteer(params: EnqueueSteerParams): Promise<void> {
+  const { sessionId } = params;
 
-  // 首次成功则无需重试
-  if (steerState.steerResult === 'success') {
-    logger.log(`[STEER-RETRY] ✅ Steer succeeded on first attempt`);
+  // 取出当前队列尾部（或 undefined），然后链上新的 Promise
+  const prev = steerQueues.get(sessionId);
+  const next = (prev ?? Promise.resolve()).then(() => dispatchSteerWhenReady(params));
+  steerQueues.set(sessionId, next);
+
+  // 链条结束后清理
+  next.catch(() => {}).finally(() => {
+    if (steerQueues.get(sessionId) === next) {
+      steerQueues.delete(sessionId);
+    }
+  });
+
+  return next;
+}
+
+async function dispatchSteerWhenReady(params: EnqueueSteerParams): Promise<void> {
+  const { sessionId, sessionKey, steerText } = params;
+
+  // 1. 等待第一条消息开始 streaming
+  const signal = streamingSignals.get(sessionId);
+  if (signal) {
+    logger.log(`[STEER-QUEUE] ⏳ Waiting for streaming signal, session=${sessionId}`);
+    await signal.promise;
+    streamingSignals.delete(sessionId);
+    logger.log(`[STEER-QUEUE] ✅ Streaming signal received, session=${sessionId}`);
+  }
+
+  // 2. 第一条消息已结束 → 放弃
+  if (!hasActiveTask(sessionId)) {
+    logger.log(`[STEER-QUEUE] ℹ️ First message completed, skip steer`);
     return;
   }
 
-  // 只有明确失败才重试；无结果可能是异常路径，也尝试重试
-  if (steerState.steerResult !== 'fail' && steerState.steerResult !== undefined) {
-    return;
-  }
-
-  logger.log(`[STEER-RETRY] ⚠️ First steer attempt result=${steerState.steerResult}, starting retry loop`);
-
+  // 3. 构建 dispatch 上下文并 dispatch /steer
   const core = getXYRuntime() as any;
+  const speaker = sessionId;
+  const messageBody = `${speaker}: ${steerText}`;
+  const envelopeOptions = core.channel.reply.resolveEnvelopeFormatOptions(params.cfg);
+  const body = core.channel.reply.formatAgentEnvelope({
+    channel: "xiaoyi-channel",
+    from: speaker,
+    timestamp: new Date(),
+    envelope: envelopeOptions,
+    body: messageBody,
+  });
 
-  for (let attempt = 0; attempt < STEER_RETRY_DELAYS.length; attempt++) {
-    const delay = STEER_RETRY_DELAYS[attempt];
-    logger.log(`[STEER-RETRY] ⏳ Waiting ${delay}ms before retry #${attempt + 1}`);
+  const ctxPayload = core.channel.reply.finalizeInboundContext({
+    Body: body,
+    RawBody: steerText,
+    CommandBody: steerText,
+    From: sessionId,
+    To: sessionId,
+    SessionKey: params.route.sessionKey,
+    AccountId: params.route.accountId,
+    ChatType: "direct" as const,
+    GroupSubject: undefined,
+    SenderName: sessionId,
+    SenderId: sessionId,
+    Provider: "xiaoyi-channel" as const,
+    Surface: "xiaoyi-channel" as const,
+    MessageSid: `${params.parsed.taskId}_${params.deviceType}`,
+    Timestamp: Date.now(),
+    WasMentioned: false,
+    CommandAuthorized: true,
+    OriginatingChannel: "xiaoyi-channel" as const,
+    OriginatingTo: sessionId,
+    ReplyToBody: undefined,
+  });
 
-    await new Promise(resolve => setTimeout(resolve, delay));
+  const steerState = { steered: true };
 
-    // 第一条消息已结束，无需继续
-    if (!hasActiveTask(sessionId)) {
-      logger.log(`[STEER-RETRY] ℹ️ First message completed, skip retry`);
-      return;
-    }
+  const { dispatcher, replyOptions } = createXYReplyDispatcher({
+    cfg: params.cfg,
+    runtime: params.runtime,
+    sessionId,
+    taskId: params.parsed.taskId,
+    messageId: params.parsed.messageId,
+    accountId: params.route.accountId,
+    steerState,
+  });
 
-    logger.log(`[STEER-RETRY] 🔄 Retrying steer dispatch #${attempt + 1}`);
+  const sessionContext = {
+    config: resolveXYConfig(params.cfg),
+    sessionId,
+    taskId: params.parsed.taskId,
+    messageId: params.parsed.messageId,
+    agentId: params.route.accountId,
+    deviceType: params.deviceType,
+  };
 
-    // 构建新的 steer 消息上下文
-    const speaker = sessionId;
-    const messageBody = `${speaker}: ${steerText}`;
-    const envelopeOptions = core.channel.reply.resolveEnvelopeFormatOptions(params.cfg);
-    const body = core.channel.reply.formatAgentEnvelope({
-      channel: "xiaoyi-channel",
-      from: speaker,
-      timestamp: new Date(),
-      envelope: envelopeOptions,
-      body: messageBody,
-    });
+  logger.log(`[STEER-QUEUE] 🚀 Dispatching steer for session=${sessionId}`);
 
-    const retryCtx = core.channel.reply.finalizeInboundContext({
-      Body: body,
-      RawBody: steerText,
-      CommandBody: steerText,
-      From: sessionId,
-      To: sessionId,
-      SessionKey: params.route.sessionKey,
-      AccountId: params.route.accountId,
-      ChatType: "direct" as const,
-      GroupSubject: undefined,
-      SenderName: sessionId,
-      SenderId: sessionId,
-      Provider: "xiaoyi-channel" as const,
-      Surface: "xiaoyi-channel" as const,
-      MessageSid: `${params.parsed.taskId}_${params.deviceType}`,
-      Timestamp: Date.now(),
-      WasMentioned: false,
-      CommandAuthorized: true,
-      OriginatingChannel: "xiaoyi-channel" as const,
-      OriginatingTo: sessionId,
-      ReplyToBody: undefined,
-    });
-
-    const retryState: { steered: boolean; steerResult?: 'success' | 'fail' } = { steered: true };
-
-    const { dispatcher: retryDispatcher, replyOptions: retryReplyOptions } =
-      createXYReplyDispatcher({
-        cfg: params.cfg,
-        runtime: params.runtime,
-        sessionId,
-        taskId: params.parsed.taskId,
-        messageId: params.parsed.messageId,
-        accountId: params.route.accountId,
-        steerState: retryState,
+  await core.channel.reply.withReplyDispatcher({
+    dispatcher,
+    onSettled: () => {
+      logger.log(`[STEER-QUEUE] 🏁 Steer dispatch settled for session=${sessionId}`);
+    },
+    run: () => {
+      return runWithSessionContext(sessionContext, async () => {
+        const result = await core.channel.reply.dispatchReplyFromConfig({
+          ctx: ctxPayload,
+          cfg: params.cfg,
+          dispatcher,
+          replyOptions,
+        });
+        logger.log(`[STEER-QUEUE] dispatch result: ${JSON.stringify(result)}`);
+        return result;
       });
+    },
+  });
 
-    const sessionContext = {
-      config: resolveXYConfig(params.cfg),
-      sessionId,
-      taskId: params.parsed.taskId,
-      messageId: params.parsed.messageId,
-      agentId: params.route.accountId,
-      deviceType: params.deviceType,
-    };
-
-    try {
-      await core.channel.reply.withReplyDispatcher({
-        dispatcher: retryDispatcher,
-        onSettled: () => {
-          logger.log(`[STEER-RETRY] 🏁 Retry dispatch settled, result=${retryState.steerResult}`);
-        },
-        run: () => {
-          return runWithSessionContext(sessionContext, async () => {
-            const result = await core.channel.reply.dispatchReplyFromConfig({
-              ctx: retryCtx,
-              cfg: params.cfg,
-              dispatcher: retryDispatcher,
-              replyOptions: retryReplyOptions,
-            });
-            logger.log(`[STEER-RETRY] dispatch result: ${JSON.stringify(result)}`);
-            return result;
-          });
-        },
-      });
-    } catch (err) {
-      logger.error(`[STEER-RETRY] ❌ Retry dispatch #${attempt + 1} threw: ${String(err)}`);
-      continue;
-    }
-
-    if (retryState.steerResult === 'success') {
-      logger.log(`[STEER-RETRY] ✅ Steer succeeded on retry #${attempt + 1}`);
-      return;
-    }
-
-    logger.log(`[STEER-RETRY] ⚠️ Retry #${attempt + 1} result=${retryState.steerResult}, continuing`);
-  }
-
-  logger.warn(`[STEER-RETRY] ❌ All retries exhausted for session ${sessionId}`);
+  logger.log(`[STEER-QUEUE] ✅ Steer dispatch completed for session=${sessionId}`);
 }
