@@ -397,6 +397,7 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
           return;
         }
 
+        streamingSignals.delete(parsed.sessionId);
         decrementTaskIdRef(parsed.sessionId);
         unregisterSession(route.sessionKey);
         logger.log(`[BOT] ✅ Cleanup completed`);
@@ -537,7 +538,8 @@ const steerQueues = _g.__xySteerQueues as Map<string, Promise<void>>;
 export function notifyModelStreaming(sessionId: string): void {
   const signal = streamingSignals.get(sessionId);
   if (signal) {
-    streamingSignals.delete(sessionId);
+    // 不删除 signal——后续 steer 需要靠它判断模型已在 streaming。
+    // 清理由第一条消息的 onSettled 兜底。
     signal.notify();
     logger.log(`[STEER-QUEUE] 📡 Model streaming signal fired for session=${sessionId}`);
   }
@@ -611,7 +613,6 @@ async function dispatchSteerWhenReady(params: EnqueueSteerParams): Promise<void>
   if (signal) {
     logger.log(`[STEER-QUEUE] ⏳ Waiting for streaming signal, session=${sessionId}`);
     await signal.promise;
-    streamingSignals.delete(sessionId);
     logger.log(`[STEER-QUEUE] ✅ Streaming signal received, session=${sessionId}`);
   } else {
     // 轮询超时且 hasActiveTask 仍为 true——说明第一条消息可能卡在异常路径，
