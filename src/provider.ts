@@ -12,6 +12,7 @@ import { logger } from "./utils/logger.js";
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 import { getCurrentSessionContext } from "./tools/session-manager.js";
 import { selfEvolutionManager } from "./utils/self-evolution-manager.js";
+import { notifyModelStreaming } from "./bot.js";
 
 // ── Retry config ──────────────────────────────────────────────
 const RETRY_DELAYS_MS = [10_000, 20_000, 40_000, 60_000, 60_000];
@@ -567,6 +568,12 @@ export const xiaoyiProvider: ProviderPlugin = {
 
       // 记录输入
       logger.log(`[xiaoyiprovider] input messages count: ${context.messages?.length ?? 0}`);
+
+      // 🔑 通知 steer 队列：模型 API 已被调用，此时 isStreaming 一定为 true
+      const sessionCtx = getCurrentSessionContext();
+      if (sessionCtx?.sessionId) {
+        notifyModelStreaming(sessionCtx.sessionId);
+      }
       if (context.systemPrompt) {
         logger.log(`[xiaoyiprovider] system prompt length: ${context.systemPrompt.length}`);
       }

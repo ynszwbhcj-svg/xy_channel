@@ -17,7 +17,7 @@ export interface CreateXYReplyDispatcherParams {
   taskId: string;
   messageId: string;
   accountId: string;
-  isSteerFollower?: boolean;  // 🔑 新增：标记是否是steer模式的第二条消息
+  steerState: { steered: boolean };  // Dynamic flag set when dispatchReplyFromConfig steers
 }
 
 const TEMP_FILE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
@@ -130,11 +130,10 @@ export async function cleanupStaleTempFiles(tempDir: string = "/tmp/xy_channel")
  * Runtime is expected to be validated before calling this function.
  */
 export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): any {
-  const { cfg, runtime, sessionId, taskId, messageId, accountId, isSteerFollower } = params;
+  const { cfg, runtime, sessionId, taskId, messageId, accountId, steerState } = params;
 
   logger.log(`[DISPATCHER-CREATE] ******* Creating dispatcher *******`);
   logger.log(`[DISPATCHER-CREATE]   - taskId: ${taskId}`);
-  logger.log(`[DISPATCHER-CREATE]   - isSteerFollower: ${isSteerFollower ?? false}`);
 
   // 初始taskId和messageId（作为fallback）
   const initialTaskId = taskId;
@@ -223,10 +222,16 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
 
       onReplyStart: () => {
         const currentTaskId = getActiveTaskId();
-        logger.log(`[REPLY START] Reply started for session ${sessionId}, taskId=${currentTaskId}, isSteerFollower=${isSteerFollower}`);
+        logger.log(`[REPLY START] Reply started for session ${sessionId}, taskId=${currentTaskId}, steered=${steerState.steered}`);
       },
 
       deliver: async (payload: ReplyPayload, info) => {
+        // 🔑 steered dispatch不发送内容（让主dispatcher处理）
+        if (steerState.steered) {
+          logger.log(`[DELIVER] Steered dispatch - skipping deliver, info.kind=${info?.kind}`);
+          return;
+        }
+
         const text = payload.text ?? "";
         const currentTaskId = getActiveTaskId();
         const currentMessageId = getActiveMessageId();
@@ -261,9 +266,9 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
         runtime.error?.(`xy: ${info.kind} reply failed: ${String(err)}`);
         stopStatusInterval();
 
-        // 🔑 steer follower不发送错误状态（让主dispatcher处理）
-        if (isSteerFollower) {
-          logger.log(`[ON_ERROR] Steer follower - skipping error response`);
+        // 🔑 steered dispatcher不发送错误状态（让主dispatcher处理）
+        if (steerState.steered) {
+          logger.log(`[ON_ERROR] Steered dispatch - skipping error response`);
           return;
         }
 
@@ -293,19 +298,18 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
         logger.log(`[ON_IDLE] Reply idle`);
         logger.log(`[ON_IDLE]   - sessionId: ${sessionId}`);
         logger.log(`[ON_IDLE]   - taskId: ${currentTaskId}`);
-        logger.log(`[ON_IDLE]   - isSteerFollower: ${isSteerFollower}`);
+        logger.log(`[ON_IDLE]   - steered: ${steerState.steered}`);
         logger.log(`[ON_IDLE]   - hasSentResponse: ${hasSentResponse}`);
         logger.log(`[ON_IDLE]   - finalSent: ${finalSent}`);
 
-        // 🔑 核心改动：steer follower不发送final响应
-        if (isSteerFollower) {
-          logger.log(`[ON_IDLE] Steer follower - skipping final response`);
-          logger.log(`[ON_IDLE]   - Message queued successfully, waiting for primary dispatcher`);
+        // 🔑 steered dispatch不发送final响应（核心已注入到活跃 Pi run）
+        if (steerState.steered) {
+          logger.log(`[ON_IDLE] Steered dispatch - skipping final response`);
           stopStatusInterval();
           return;  // ← 直接返回，不发送任何东西！
         }
 
-        // 正常模式（或steer的第一条消息）
+        // 正常模式（或未被steer的dispatch）
         if (hasSentResponse && !finalSent) {
           logger.log(`[ON_IDLE] Sending accumulated text, length=${accumulatedText.length}`);
           try {
@@ -354,7 +358,7 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
             logger.error(`[ON_IDLE] Failed to send final response:`, err);
           }
         } else {
-          // 正常失败场景（非steer follower）
+          // 正常失败场景（非steered）
           logger.log(`[ON_IDLE] Skipping final message: hasSentResponse=${hasSentResponse}, finalSent=${finalSent}`);
           try {
             const runCrossTaskContext = getRunCrossTaskContext();
@@ -407,7 +411,7 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
 
       onCleanup: () => {
         const currentTaskId = getActiveTaskId();
-        logger.log(`[ON_CLEANUP] Reply cleanup, taskId=${currentTaskId}, isSteerFollower=${isSteerFollower}`);
+        logger.log(`[ON_CLEANUP] Reply cleanup, taskId=${currentTaskId}, steered=${steerState.steered}`);
       },
     });
 
@@ -418,8 +422,8 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
       onModelSelected: prefixContext.onModelSelected,
 
       onToolStart: async ({ name, phase }) => {
-        // 🔑 steer follower不发送tool状态（让主dispatcher处理）
-        if (isSteerFollower) {
+        // 🔑 steered dispatch不发送tool状态（让主dispatcher处理）
+        if (steerState.steered) {
           return;
         }
 
@@ -455,8 +459,8 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
       },
 
       onToolResult: async (payload: ReplyPayload) => {
-        // 🔑 steer follower不发送tool结果（让主dispatcher处理）
-        if (isSteerFollower) {
+        // 🔑 steered dispatch不发送tool结果（让主dispatcher处理）
+        if (steerState.steered) {
           return;
         }
 
@@ -487,8 +491,8 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
       },
 
       onReasoningStream: async (payload: ReplyPayload) => {
-        // 🔑 steer follower不发送reasoning stream
-        if (isSteerFollower) {
+        // 🔑 steered dispatch不发送reasoning stream
+        if (steerState.steered) {
           return;
         }
 
@@ -500,8 +504,8 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
       },
 
       onPartialReply: async (payload: ReplyPayload) => {
-        // 🔑 steer follower不发送partial reply（让主dispatcher处理）
-        if (isSteerFollower) {
+        // 🔑 steered dispatch不发送partial reply（让主dispatcher处理）
+        if (steerState.steered) {
           return;
         }
 

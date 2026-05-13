@@ -1,10 +1,11 @@
 // SENTINEL HOOK API 请求模块
 
+import http from "node:http";
 import https from "node:https";
 import { URL } from "node:url";
 import { randomBytes } from "node:crypto";
 import type { ClawdbotConfig } from "openclaw/plugin-sdk";
-import { getCsplConfig } from "./config.js";
+import { getCsplConfig, type CsplConfig } from "./config.js";
 import type { HttpHeaders, ApiPayload, ApiResponse } from "./constants.js";
 import { DEFAULT_HTTP_PORT, HTTP_STATUS_BAD_REQUEST } from "./constants.js";
 import { logger } from "../utils/logger.js";
@@ -54,28 +55,18 @@ function parseResponse(data: string): ApiResponse {
   return json;
 }
 
-export async function callCsplApi(
-  questionText: string,
-  cfg: ClawdbotConfig,
+function doApiRequest(
+  url: string,
+  headers: HttpHeaders,
+  payload: ApiPayload,
+  timeout: number,
 ): Promise<ApiResponse> {
-  const config = getCsplConfig(cfg);
-  const headers = buildHeaders(config);
-  const payload: ApiPayload = {
-    questionText,
-    textSource: config.textSource,
-    action: config.action,
-    extra: JSON.stringify({ userId: config.uid }),
-  };
+  const isHttp = url.startsWith("http://");
+  const module = isHttp ? http : https;
+  const options = buildRequestOptions(url, headers, timeout);
 
   return new Promise((resolve, reject) => {
-    const options = buildRequestOptions(
-      config.api.url,
-      headers,
-      config.api.timeout,
-    );
-
-    const req = https.request(options, (res) => {
-
+    const req = module.request(options, (res) => {
       if (res.statusCode && res.statusCode >= HTTP_STATUS_BAD_REQUEST) {
         reject(new Error(`[SENTINEL HOOK] HTTP error: ${res.statusCode}`));
         return;
@@ -87,7 +78,7 @@ export async function callCsplApi(
       res.on("end", () => {
         try {
           const result = parseResponse(data);
-          logger.log(`[SENTINEL HOOK] ✅ 请求成功`);
+          logger.log(`[SENTINEL HOOK] ✅ 请求成功, securityResult=${result?.data?.securityResult ?? "N/A"}`);
           resolve(result);
         } catch (e) {
           logger.error(`[SENTINEL HOOK] ❌ 请求失败: ${e instanceof Error ? e.message : String(e)}`);
@@ -101,7 +92,7 @@ export async function callCsplApi(
       reject(error);
     });
     req.on("timeout", () => {
-      logger.error(`[SENTINEL HOOK] ⏰ 请求超时 (${config.api.timeout}ms)`);
+      logger.error(`[SENTINEL HOOK] ⏰ 请求超时 (${timeout}ms)`);
       req.destroy();
       reject(new Error("[SENTINEL HOOK] Request timeout"));
     });
@@ -109,4 +100,39 @@ export async function callCsplApi(
     req.write(JSON.stringify(payload));
     req.end();
   });
+}
+
+export async function callCsplApi(
+  questionText: string,
+  cfg: ClawdbotConfig,
+): Promise<ApiResponse> {
+  const config = getCsplConfig(cfg);
+  const headers = buildHeaders(config);
+  const payload: ApiPayload = {
+    questionText,
+    textSource: config.textSource,
+    action: config.action,
+    extra: JSON.stringify({ userId: config.uid }),
+  };
+
+  return doApiRequest(config.api.url, headers, payload, config.api.timeout);
+}
+
+/**
+ * Call CSPL API with a pre-resolved CsplConfig.
+ * Used by after_tool_call hook which has session context but not ClawdbotConfig.
+ */
+export async function callCsplApiWithConfig(
+  questionText: string,
+  config: CsplConfig,
+): Promise<ApiResponse> {
+  const headers = buildHeaders(config);
+  const payload: ApiPayload = {
+    questionText,
+    textSource: config.textSource,
+    action: config.action,
+    extra: JSON.stringify({ userId: config.uid }),
+  };
+
+  return doApiRequest(config.api.url, headers, payload, config.api.timeout);
 }

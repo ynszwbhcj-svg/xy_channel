@@ -3,6 +3,9 @@
   "channels": ["xiaoyi-channel"],
   "providers": ["xiaoyiprovider"],
   "providerDiscoveryEntry": "./dist/provider-discovery.js",
+  "contracts": {
+    "agentToolResultMiddleware": ["pi"]
+  },
   "skills": [],
   "configSchema": {
     "type": "object",

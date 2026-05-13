@@ -21,7 +21,7 @@ export interface SessionContext {
  *  仅用于全局 Map 回退路径的清理，不影响 ALS 路径。
  *  工具已改为闭包捕获 ctx，此 TTL 仅作为防止 session 泄漏的最后防线。
  *  正常对话中 registerSession 会刷新 createdAt，所以长对话不受影响。 */
-const SESSION_TTL_MS = 60 * 60 * 1000; // 1 hour
+const SESSION_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
 
 interface SessionContextWithRef extends SessionContext {
   refCount: number;  // 引用计数

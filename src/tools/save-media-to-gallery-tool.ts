@@ -3,6 +3,7 @@ import type { ChannelAgentTool } from "openclaw/plugin-sdk";
 import { getXYWebSocketManager } from "../client.js";
 import { sendCommand } from "../formatter.js";
 import type { SessionContext } from "./session-manager.js";
+import { getCurrentTaskId } from "../task-manager.js";
 import { logger } from "../utils/logger.js";
 import type { A2ADataEvent } from "../types.js";
 import { XYFileUploadService } from "../file-upload.js";
@@ -149,6 +150,7 @@ export function createSaveMediaToGalleryTool(ctx: SessionContext): any {
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
         wsManager.off("data-event", handler);
+        logger.error("超时: 保存媒体到图库超时（60秒）", { sessionId, toolCallId });
         reject(new Error("保存媒体到图库超时（60秒）"));
       }, 60000);
 
@@ -180,10 +182,11 @@ export function createSaveMediaToGalleryTool(ctx: SessionContext): any {
       wsManager.on("data-event", handler);
 
       // Send the command
+      const currentTaskId = getCurrentTaskId(sessionId) ?? taskId;
       sendCommand({
         config,
         sessionId,
-        taskId,
+        taskId: currentTaskId,
         messageId,
         command,
       })

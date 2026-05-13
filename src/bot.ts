@@ -1,7 +1,6 @@
 // Message dispatch engine - following feishu/bot.ts pattern (simplified)
 import type { ClawdbotConfig, RuntimeEnv, ReplyPayload } from "openclaw/plugin-sdk";
 import { getXYRuntime } from "./runtime.js";
-import { setCachedContext } from "./steer-injector.js";
 import { createXYReplyDispatcher } from "./reply-dispatcher.js";
 import { parseA2AMessage, extractTextFromParts, extractFileParts, extractPushId, extractDeviceType, extractTriggerData, extractRunCrossTaskContext, isClearContextMessage, isTasksCancelMessage } from "./parser.js";
 import { downloadFilesFromParts } from "./file-download.js";
@@ -18,12 +17,10 @@ import { getPushDataById } from "./utils/pushdata-manager.js";
 import { selfEvolutionManager } from "./utils/self-evolution-manager.js";
 import { saveRuntimeInfo } from "./utils/runtime-manager.js";
 import { toolCallNudgeManager } from "./utils/tool-call-nudge-manager.js";
+import { setCsplSteerContext } from "./cspl/steer-context.js";
 import {
   registerTaskId,
-  incrementTaskIdRef,
   decrementTaskIdRef,
-  lockTaskId,
-  unlockTaskId,
   hasActiveTask,
 } from "./task-manager.js";
 import type { A2AJsonRpcRequest } from "./types.js";
@@ -40,6 +37,12 @@ export interface HandleXYMessageParams {
   webSocketSessionId?: string; // 可选：WebSocket 层级的 sessionId，用于保存 .xiaoyiruntime
   /** Called after dispatch init is complete (agentTools/wrapStreamFn done). */
   onInitComplete?: () => void;
+  /**
+   * When true, skip taskId/session registration. Used by tryInjectSteer to
+   * inject a steer message without overwriting the active taskId or leaking
+   * session refCount.
+   */
+  skipRegistration?: boolean;
 }
 
 /**
@@ -50,8 +53,8 @@ export interface HandleXYMessageParams {
 export async function handleXYMessage(params: HandleXYMessageParams): Promise<void> {
   const { cfg, runtime, message, accountId, webSocketSessionId } = params;
 
-  // 每次收到消息时更新缓存，供 steer 注入使用
-  setCachedContext(cfg, runtime, accountId);
+  // Cache context for CSPL steer injection (after_tool_call hook)
+  setCsplSteerContext(cfg, runtime);
 
   // Get runtime (already validated in monitor.ts, but get reference for use)
   const core = getXYRuntime() as any;
@@ -140,45 +143,45 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
     }
     // ========================================
 
-    // 🔑 检测steer模式和是否是第二条消息
-    const isSteerMode = cfg.messages?.queue?.mode === "steer";
-    const isSecondMessage = isSteerMode && hasActiveTask(parsed.sessionId);
+    // 🔑 注册taskId（检测是否是已有活跃任务的 session）
+    const isUpdate = hasActiveTask(parsed.sessionId);
+    const skipReg = params.skipRegistration === true;
 
-    if (isSecondMessage) {
-      logger.log(`[BOT] 🔄 STEER MODE - Second message detected (will be follower)`);
+    if (isUpdate) {
+      logger.log(`[BOT] 🔄 STEER MODE - Second message detected (core will handle steer)`);
       logger.log(`[BOT]   - Session: ${parsed.sessionId}`);
-      logger.log(`[BOT]   - New taskId: ${parsed.taskId} (will replace current)`);
+      logger.log(`[BOT]   - New taskId: ${parsed.taskId}`);
     }
 
-    // 🔑 注册taskId（第二条消息会覆盖第一条的taskId）
-    const { isUpdate, refCount } = registerTaskId(
-      parsed.sessionId,
-      parsed.taskId,
-      parsed.messageId,
-      { incrementRef: true }  // 增加引用计数
-    );
+    // Steer injections skip taskId registration to avoid overwriting the active taskId
+    if (!skipReg) {
+      registerTaskId(parsed.sessionId, parsed.taskId, parsed.messageId);
 
-    // 🔑 如果是第一条消息，锁定taskId防止被过早清理
-    if (!isUpdate) {
-      lockTaskId(parsed.sessionId);
-      logger.log(`[BOT] 🔒 Locked taskId for first message`);
-    }
+      // Extract and update push_id if present
+      const pushId = extractPushId(parsed.parts);
+      if (pushId) {
+        logger.log(`[BOT] 📌 Extracted push_id from user message`);
+        configManager.updatePushId(parsed.sessionId, pushId);
 
-    // Extract and update push_id if present
-    const pushId = extractPushId(parsed.parts);
-    if (pushId) {
-      logger.log(`[BOT] 📌 Extracted push_id from user message`);
-      configManager.updatePushId(parsed.sessionId, pushId);
+        // 持久化 pushId 到本地文件（异步，不阻塞主流程）
+        addPushId(pushId).catch((err) => {
+          logger.error(`[BOT] Failed to persist pushId:`, err);
+        });
+      } else {
+        logger.log(`[BOT] ℹ️  No push_id found in message, will use config default`);
+      }
 
-      // 持久化 pushId 到本地文件（异步，不阻塞主流程）
-      addPushId(pushId).catch((err) => {
-        logger.error(`[BOT] Failed to persist pushId:`, err);
+      // 保存 runtime 信息到 .xiaoyiruntime 文件（异步，不阻塞主流程）
+      saveRuntimeInfo(
+        webSocketSessionId || parsed.sessionId, // SESSION_ID (WebSocket 层级，如果没有则 fallback)
+        parsed.sessionId, // CONVERSATION_ID (param 里的 sessionId)
+        parsed.taskId // TASK_ID (param.id)
+      ).catch((err) => {
+        logger.error(`[BOT] Failed to save runtime info:`, err);
       });
-    } else {
-      logger.log(`[BOT] ℹ️  No push_id found in message, will use config default`);
     }
 
-    // Extract deviceType if present (same level as push_id in systemVariables)
+    // Extract deviceType if present (always parse — used in ctxPayload.MessageSid)
     const deviceType = extractDeviceType(parsed.parts);
     if (deviceType) {
       logger.log(`[BOT] 📱 Extracted deviceType from user message: ${deviceType}`);
@@ -192,15 +195,6 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
         networkId: runCrossTaskContext.networkId,
       });
     }
-
-    // 保存 runtime 信息到 .xiaoyiruntime 文件（异步，不阻塞主流程）
-    saveRuntimeInfo(
-      webSocketSessionId || parsed.sessionId, // SESSION_ID (WebSocket 层级，如果没有则 fallback)
-      parsed.sessionId, // CONVERSATION_ID (param 里的 sessionId)
-      parsed.taskId // TASK_ID (param.id)
-    ).catch((err) => {
-      logger.error(`[BOT] Failed to save runtime info:`, err);
-    });
 
     // Resolve configuration (needed for status updates)
     const config = resolveXYConfig(cfg);
@@ -220,33 +214,38 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
 
     logger.log(`xy: resolved route accountId=${route.accountId}, sessionKey=${route.sessionKey}`);
 
-    registerSession(route.sessionKey, {
-      config,
-      sessionId: parsed.sessionId,
-      taskId: parsed.taskId,
-      messageId: parsed.messageId,
-      agentId: route.accountId,
-      deviceType,
-      runCrossTaskContext: runCrossTaskContext ?? undefined,
-    });
+    // Steer injections skip session registration to avoid refCount leaks
+    if (!skipReg) {
+      registerSession(route.sessionKey, {
+        config,
+        sessionId: parsed.sessionId,
+        taskId: parsed.taskId,
+        messageId: parsed.messageId,
+        agentId: route.accountId,
+        deviceType,
+        runCrossTaskContext: runCrossTaskContext ?? undefined,
+      });
 
-    // 🔑 发送初始状态更新（第二条消息也要发，用新taskId）
-    logger.log(`[STATUS] Sending initial status update for session ${parsed.sessionId}`);
-    void sendStatusUpdate({
-      config,
-      sessionId: parsed.sessionId,
-      taskId: parsed.taskId,
-      messageId: parsed.messageId,
-      text: isSecondMessage ? "新消息已接收，正在处理..." : "任务正在处理中，请稍候~",
-      state: "working",
-    }).catch((err) => {
-      logger.error(`Failed to send initial status update:`, err);
-    });
+      // 🔑 发送初始状态更新
+      logger.log(`[STATUS] Sending initial status update for session ${parsed.sessionId}`);
+      logger.log(`[STATUS] Sending initial status update for session ${parsed.sessionId}`);
+      void sendStatusUpdate({
+        config,
+        sessionId: parsed.sessionId,
+        taskId: parsed.taskId,
+        messageId: parsed.messageId,
+        text: "任务正在处理中，请稍候~",
+        state: "working",
+      }).catch((err) => {
+        logger.error(`Failed to send initial status update:`, err);
+      });
+    }
 
     // Extract text and files from parts
     const text = extractTextFromParts(parsed.parts);
     let textForAgent = text || "";
-    if (route.sessionKey && textForAgent) {
+    // Self-evolution keyword nudge — only for real user messages, not steer injections
+    if (!skipReg && route.sessionKey && textForAgent) {
       try {
         const selfEvolutionEnabled = await selfEvolutionManager.isEnabled();
         if (selfEvolutionEnabled && shouldNudgeForSelfEvolutionKeyword(textForAgent)) {
@@ -270,12 +269,20 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
         );
       }
     }
-    const fileParts = extractFileParts(parsed.parts);
+    // 🔑 Steer消息加 /steer 前缀，触发core的 queueEmbeddedPiMessage
+    if (isUpdate && textForAgent) {
+      textForAgent = `/steer ${textForAgent}`;
+      logger.log(`[BOT] 🔄 Prepended /steer for steer injection`);
+    }
 
-    // Download files to local disk
-    const downloadedFiles = await downloadFilesFromParts(fileParts);
-    logger.log("Downloaded files:", JSON.stringify(downloadedFiles, null, 2));
-    const mediaPayload = buildXYMediaPayload(downloadedFiles);
+    // File download — only for real user messages, steer injections have no files
+    let mediaPayload: ReturnType<typeof buildXYMediaPayload> = {};
+    if (!skipReg) {
+      const fileParts = extractFileParts(parsed.parts);
+      const downloadedFiles = await downloadFilesFromParts(fileParts);
+      logger.log("Downloaded files:", JSON.stringify(downloadedFiles, null, 2));
+      mediaPayload = buildXYMediaPayload(downloadedFiles);
+    }
 
     // Resolve envelope format options (following feishu pattern)
     const envelopeOptions = core.channel.reply.resolveEnvelopeFormatOptions(cfg);
@@ -322,7 +329,17 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
       ...mediaPayload,
     });
 
-    // 🔑 创建dispatcher（dispatcher会自动使用动态taskId）
+    // 🔑 Dynamic steer state: when isUpdate (second message), start as steered=true
+    // so the dispatcher skips all user-facing callbacks (deliver, onIdle, etc.)
+    // and onSettled skips cleanup.
+    const steerState = { steered: isUpdate };
+
+    // 🔑 第一条消息创建 streaming 信号（provider.ts 的 wrapStreamFn 触发）
+    if (!isUpdate) {
+      createStreamingSignal(parsed.sessionId);
+    }
+
+    // 🔑 创建dispatcher
     logger.log(`[BOT-DISPATCHER] 🎯 Creating reply dispatcher`);
     logger.log(`[BOT-DISPATCHER]   - taskId: ${parsed.taskId}`);
 
@@ -333,15 +350,13 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
       taskId: parsed.taskId,
       messageId: parsed.messageId,
       accountId: route.accountId,
-      isSteerFollower: isSecondMessage,  // 🔑 标记第二条消息
+      steerState,
     });
 
-    // 🔑 只有第一条消息启动状态定时器
-    // 第二条消息会很快返回，不需要定时器
-    if (!isSecondMessage) {
+    // Steer injections don't need status intervals
+    if (!skipReg) {
       startStatusInterval();
-      logger.log(`[BOT-DISPATCHER] ✅ Status interval started for first message`);
-    } 
+    }
 
     // Build session context for AsyncLocalStorage
     const sessionContext = {
@@ -360,20 +375,16 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
       dispatcher,
       onSettled: () => {
         logger.log(`[BOT] 🏁 onSettled called for session: ${route.sessionKey}`);
-        logger.log(`[BOT]   - isSecondMessage: ${isSecondMessage}`);
+        logger.log(`[BOT]   - steered: ${steerState.steered}`);
 
-        // 🔑 减少引用计数
-        decrementTaskIdRef(parsed.sessionId);
-
-        // 🔑 如果是第一条消息完成，解锁
-        if (!isSecondMessage) {
-          unlockTaskId(parsed.sessionId);
-          logger.log(`[BOT] 🔓 Unlocked taskId (first message completed)`);
+        // 🔑 When steered, skip heavy cleanup — the first message's dispatcher is still running
+        if (steerState.steered) {
+          logger.log(`[BOT] ✅ Steered dispatch settled (skipping cleanup)`);
+          return;
         }
 
-        // 减少session引用计数
+        decrementTaskIdRef(parsed.sessionId);
         unregisterSession(route.sessionKey);
-
         logger.log(`[BOT] ✅ Cleanup completed`);
       },
       run: () => {
@@ -396,8 +407,10 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
               dispatcher,
               replyOptions,
             });
+
             logger.log(`[BOT-DISPATCH] ✅ dispatchReplyFromConfig returned`);
             logger.log(`[BOT-DISPATCH]   - result: ${JSON.stringify(result)}`);
+
             return result;
           } catch (dispatchErr) {
             logger.error(`[BOT-DISPATCH] ❌ dispatchReplyFromConfig threw`);
@@ -414,6 +427,20 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
         return dispatchPromise;
       },
     });
+
+    // 🔑 Steer 串行队列：等待 streaming 信号后 dispatch，多个 steer 按顺序处理
+    if (isUpdate) {
+      await enqueueSteer({
+        sessionId: parsed.sessionId,
+        sessionKey: route.sessionKey,
+        steerText: textForAgent,
+        cfg,
+        runtime,
+        parsed,
+        route,
+        deviceType,
+      });
+    }
 
     logger.log(`[BOT] ✅ Dispatcher completed for session: ${parsed.sessionId}`);
     logger.log(`xy: dispatch complete (session=${parsed.sessionId})`);
@@ -433,7 +460,6 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
 
         // 清理 taskId
         decrementTaskIdRef(sessionId);
-        unlockTaskId(sessionId);
 
         // 清理 session
         const core = getXYRuntime() as any;
@@ -482,4 +508,174 @@ function buildXYMediaPayload(
     MediaPaths: mediaPaths.length > 0 ? mediaPaths : undefined,
     MediaTypes: mediaTypes.length > 0 ? mediaTypes : undefined,
   };
+}
+
+// ─────────────────────────────────────────────────────────────
+// Steer 串行队列 + streaming 信号
+// ─────────────────────────────────────────────────────────────
+
+/** Per-session streaming 信号 */
+interface StreamingSignal {
+  promise: Promise<void>;
+  notify: () => void;
+}
+
+const streamingSignals = new Map<string, StreamingSignal>();
+
+/**
+ * 由 provider.ts 在 wrapStreamFn 调用时触发。
+ * 这是模型 API 被调用的精确时刻，此时 isStreaming 一定为 true。
+ */
+export function notifyModelStreaming(sessionId: string): void {
+  const signal = streamingSignals.get(sessionId);
+  if (signal) {
+    streamingSignals.delete(sessionId);
+    signal.notify();
+    logger.log(`[STEER-QUEUE] 📡 Model streaming signal fired for session=${sessionId}`);
+  }
+}
+
+function createStreamingSignal(sessionId: string): StreamingSignal {
+  let resolve!: () => void;
+  const promise = new Promise<void>(r => { resolve = r; });
+  const signal: StreamingSignal = { promise, notify: resolve };
+  streamingSignals.set(sessionId, signal);
+  logger.log(`[STEER-QUEUE] 🟢 Streaming signal created for session ${sessionId}`);
+  return signal;
+}
+
+/** Per-session 串行队列：保证同一 session 的 steer 消息按顺序处理 */
+const steerQueues = new Map<string, Promise<void>>();
+
+interface EnqueueSteerParams {
+  sessionId: string;
+  sessionKey: string;
+  steerText: string;
+  cfg: ClawdbotConfig;
+  runtime: RuntimeEnv;
+  parsed: ReturnType<typeof parseA2AMessage>;
+  route: { accountId: string; sessionKey: string };
+  deviceType: string;
+}
+
+/**
+ * 将 steer 消息放入 per-session 串行队列。
+ * 等待第一条消息的 streaming 信号（deliver 首次触发），然后 dispatch。
+ * 多个 steer 按到达顺序串行处理，无需重试。
+ */
+function enqueueSteer(params: EnqueueSteerParams): Promise<void> {
+  const { sessionId } = params;
+
+  // 取出当前队列尾部（或 undefined），然后链上新的 Promise
+  const prev = steerQueues.get(sessionId);
+  const next = (prev ?? Promise.resolve()).then(() => dispatchSteerWhenReady(params));
+  steerQueues.set(sessionId, next);
+
+  // 链条结束后清理
+  next.catch(() => {}).finally(() => {
+    if (steerQueues.get(sessionId) === next) {
+      steerQueues.delete(sessionId);
+    }
+  });
+
+  return next;
+}
+
+async function dispatchSteerWhenReady(params: EnqueueSteerParams): Promise<void> {
+  const { sessionId, sessionKey, steerText } = params;
+
+  // 1. 等待第一条消息开始 streaming
+  const signal = streamingSignals.get(sessionId);
+  if (signal) {
+    logger.log(`[STEER-QUEUE] ⏳ Waiting for streaming signal, session=${sessionId}`);
+    await signal.promise;
+    streamingSignals.delete(sessionId);
+    logger.log(`[STEER-QUEUE] ✅ Streaming signal received, session=${sessionId}`);
+  }
+
+  // 2. 第一条消息已结束 → 放弃
+  if (!hasActiveTask(sessionId)) {
+    logger.log(`[STEER-QUEUE] ℹ️ First message completed, skip steer`);
+    return;
+  }
+
+  // 3. 构建 dispatch 上下文并 dispatch /steer
+  const core = getXYRuntime() as any;
+  const speaker = sessionId;
+  const messageBody = `${speaker}: ${steerText}`;
+  const envelopeOptions = core.channel.reply.resolveEnvelopeFormatOptions(params.cfg);
+  const body = core.channel.reply.formatAgentEnvelope({
+    channel: "xiaoyi-channel",
+    from: speaker,
+    timestamp: new Date(),
+    envelope: envelopeOptions,
+    body: messageBody,
+  });
+
+  const ctxPayload = core.channel.reply.finalizeInboundContext({
+    Body: body,
+    RawBody: steerText,
+    CommandBody: steerText,
+    From: sessionId,
+    To: sessionId,
+    SessionKey: params.route.sessionKey,
+    AccountId: params.route.accountId,
+    ChatType: "direct" as const,
+    GroupSubject: undefined,
+    SenderName: sessionId,
+    SenderId: sessionId,
+    Provider: "xiaoyi-channel" as const,
+    Surface: "xiaoyi-channel" as const,
+    MessageSid: `${params.parsed.taskId}_${params.deviceType}`,
+    Timestamp: Date.now(),
+    WasMentioned: false,
+    CommandAuthorized: true,
+    OriginatingChannel: "xiaoyi-channel" as const,
+    OriginatingTo: sessionId,
+    ReplyToBody: undefined,
+  });
+
+  const steerState = { steered: true };
+
+  const { dispatcher, replyOptions } = createXYReplyDispatcher({
+    cfg: params.cfg,
+    runtime: params.runtime,
+    sessionId,
+    taskId: params.parsed.taskId,
+    messageId: params.parsed.messageId,
+    accountId: params.route.accountId,
+    steerState,
+  });
+
+  const sessionContext = {
+    config: resolveXYConfig(params.cfg),
+    sessionId,
+    taskId: params.parsed.taskId,
+    messageId: params.parsed.messageId,
+    agentId: params.route.accountId,
+    deviceType: params.deviceType,
+  };
+
+  logger.log(`[STEER-QUEUE] 🚀 Dispatching steer for session=${sessionId}`);
+
+  await core.channel.reply.withReplyDispatcher({
+    dispatcher,
+    onSettled: () => {
+      logger.log(`[STEER-QUEUE] 🏁 Steer dispatch settled for session=${sessionId}`);
+    },
+    run: () => {
+      return runWithSessionContext(sessionContext, async () => {
+        const result = await core.channel.reply.dispatchReplyFromConfig({
+          ctx: ctxPayload,
+          cfg: params.cfg,
+          dispatcher,
+          replyOptions,
+        });
+        logger.log(`[STEER-QUEUE] dispatch result: ${JSON.stringify(result)}`);
+        return result;
+      });
+    },
+  });
+
+  logger.log(`[STEER-QUEUE] ✅ Steer dispatch completed for session=${sessionId}`);
 }

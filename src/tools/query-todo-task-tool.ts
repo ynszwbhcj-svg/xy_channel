@@ -2,6 +2,8 @@
 import { getXYWebSocketManager } from "../client.js";
 import { sendCommand } from "../formatter.js";
 import type { SessionContext } from "./session-manager.js";
+import { getCurrentTaskId } from "../task-manager.js";
+import { logger } from "../utils/logger.js";
 import type { A2ADataEvent } from "../types.js";
 
 class ToolInputError extends Error {
@@ -96,6 +98,7 @@ d. 当只传入 startTime 时，返回该时间点之后的所有任务；当只
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
         wsManager.off("data-event", handler);
+        logger.error("超时: 查询待办任务超时（60秒）", { sessionId, toolCallId: _toolCallId });
         reject(new Error("查询待办任务超时（60秒）"));
       }, 60000);
 
@@ -121,10 +124,11 @@ d. 当只传入 startTime 时，返回该时间点之后的所有任务；当只
 
       wsManager.on("data-event", handler);
 
+      const currentTaskId = getCurrentTaskId(sessionId) ?? taskId;
       sendCommand({
         config,
         sessionId,
-        taskId,
+        taskId: currentTaskId,
         messageId,
         command,
       })

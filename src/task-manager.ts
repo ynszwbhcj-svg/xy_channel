@@ -1,19 +1,17 @@
 // TaskId Manager - 管理session级别的活跃taskId
-// 支持动态切换taskId，用于steer模式下的消息插队
+// 用于 monitor.ts 检测活跃任务（决定是否并发执行steer消息）
 import { logger } from "./utils/logger.js";
 
 interface TaskIdBinding {
   sessionId: string;
   currentTaskId: string;
   currentMessageId: string;
-  refCount: number;  // 引用计数
   updatedAt: number;
-  locked: boolean;  // 防止被过早清理
 }
 
 /**
  * Session到活跃TaskId的映射
- * Key: sessionId (注意：这里用sessionId，不是sessionKey)
+ * Key: sessionId
  * Value: TaskIdBinding
  * Uses globalThis to ensure a single Map across all module copies.
  */
@@ -24,114 +22,48 @@ if (!_g.__xyActiveTaskIds) {
 const activeTaskIds = _g.__xyActiveTaskIds as Map<string, TaskIdBinding>;
 
 /**
- * 注册或更新session的活跃taskId
- * 返回是否是更新（用于判断是否是第二条消息）
+ * 注册或更新session的活跃taskId。
+ * Returns true if this was an update (session already had an active task).
  */
 export function registerTaskId(
   sessionId: string,
   taskId: string,
   messageId: string,
-  options?: { incrementRef?: boolean }
-): { isUpdate: boolean; refCount: number } {
+): boolean {
   logger.log(`[TASK_MANAGER] 📝 Registering/Updating taskId for session: ${sessionId}`);
-  logger.log(`[TASK_MANAGER]   - New taskId: ${taskId}`);
-  logger.log(`[TASK_MANAGER]   - New messageId: ${messageId}`);
-  logger.log(`[TASK_MANAGER]   - incrementRef: ${options?.incrementRef ?? false}`);
+  logger.log(`[TASK_MANAGER]   - taskId: ${taskId}`);
 
   const existing = activeTaskIds.get(sessionId);
 
   if (existing) {
     logger.log(`[TASK_MANAGER]   - Previous taskId: ${existing.currentTaskId}`);
-    logger.log(`[TASK_MANAGER]   - Previous refCount: ${existing.refCount}`);
-    logger.log(`[TASK_MANAGER]   - 🔄 Switching taskId (steer mode detected)`);
+    logger.log(`[TASK_MANAGER]   - 🔄 Updating taskId`);
 
-    // 更新taskId，但保持引用计数
     existing.currentTaskId = taskId;
     existing.currentMessageId = messageId;
     existing.updatedAt = Date.now();
 
-    if (options?.incrementRef) {
-      existing.refCount++;
-      logger.log(`[TASK_MANAGER]   - Incremented refCount: ${existing.refCount}`);
-    }
-
-    logger.log(`[TASK_MANAGER]   - ✅ TaskId updated, refCount=${existing.refCount}`);
-    return { isUpdate: true, refCount: existing.refCount };
+    return true; // isUpdate
   } else {
-    // 新注册
     const binding: TaskIdBinding = {
       sessionId,
       currentTaskId: taskId,
       currentMessageId: messageId,
-      refCount: 1,
       updatedAt: Date.now(),
-      locked: false,
     };
 
     activeTaskIds.set(sessionId, binding);
-    logger.log(`[TASK_MANAGER]   - ✅ TaskId registered (new), refCount=1`);
-    return { isUpdate: false, refCount: 1 };
+    logger.log(`[TASK_MANAGER]   - ✅ TaskId registered (new)`);
+    return false;
   }
 }
 
 /**
- * 增加引用计数（消息开始处理时调用）
- */
-export function incrementTaskIdRef(sessionId: string): void {
-  const binding = activeTaskIds.get(sessionId);
-  if (binding) {
-    binding.refCount++;
-    logger.log(`[TASK_MANAGER] ➕ Incremented refCount for ${sessionId}: ${binding.refCount}`);
-  }
-}
-
-/**
- * 减少引用计数，当refCount=0时才真正清理
+ * 移除session的活跃taskId（消息处理完成时调用）。
  */
 export function decrementTaskIdRef(sessionId: string): void {
-  const binding = activeTaskIds.get(sessionId);
-  if (!binding) {
-    logger.log(`[TASK_MANAGER] ⚠️  No binding found for ${sessionId}`);
-    return;
-  }
-
-  binding.refCount--;
-  logger.log(`[TASK_MANAGER] ➖ Decremented refCount for ${sessionId}: ${binding.refCount}`);
-
-  if (binding.refCount <= 0 && !binding.locked) {
-    logger.log(`[TASK_MANAGER] 🗑️  RefCount=0 and unlocked, clearing taskId`);
-    activeTaskIds.delete(sessionId);
-  } else {
-    logger.log(`[TASK_MANAGER]   - Keeping binding (refCount=${binding.refCount}, locked=${binding.locked})`);
-  }
-}
-
-/**
- * 锁定taskId，防止被清理（第一个消息使用）
- */
-export function lockTaskId(sessionId: string): void {
-  const binding = activeTaskIds.get(sessionId);
-  if (binding) {
-    binding.locked = true;
-    logger.log(`[TASK_MANAGER] 🔒 Locked taskId for ${sessionId}`);
-  }
-}
-
-/**
- * 解锁taskId（第一个消息完成时使用）
- */
-export function unlockTaskId(sessionId: string): void {
-  const binding = activeTaskIds.get(sessionId);
-  if (binding) {
-    binding.locked = false;
-    logger.log(`[TASK_MANAGER] 🔓 Unlocked taskId for ${sessionId}`);
-
-    // 解锁后，如果refCount=0，立即清理
-    if (binding.refCount <= 0) {
-      logger.log(`[TASK_MANAGER] 🗑️  Unlocked and refCount=0, clearing taskId`);
-      activeTaskIds.delete(sessionId);
-    }
-  }
+  logger.log(`[TASK_MANAGER] 🗑️  Removing taskId for ${sessionId}`);
+  activeTaskIds.delete(sessionId);
 }
 
 /**
@@ -155,13 +87,6 @@ export function getCurrentMessageId(sessionId: string): string | null {
  */
 export function hasActiveTask(sessionId: string): boolean {
   return activeTaskIds.has(sessionId);
-}
-
-/**
- * 获取完整的binding信息（用于调试）
- */
-export function getTaskIdBinding(sessionId: string): TaskIdBinding | null {
-  return activeTaskIds.get(sessionId) ?? null;
 }
 
 /**

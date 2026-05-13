@@ -2,6 +2,8 @@
 import { getXYWebSocketManager } from "../client.js";
 import { sendCommand } from "../formatter.js";
 import type { SessionContext } from "./session-manager.js";
+import { getCurrentTaskId } from "../task-manager.js";
+import { logger } from "../utils/logger.js";
 import type { A2ADataEvent } from "../types.js";
 
 class ToolInputError extends Error {
@@ -99,6 +101,7 @@ c. 调用工具前需认真检查调用参数是否满足工具要求
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
         wsManager.off("data-event", handler);
+        logger.error("超时: 查询通知消息超时（60秒）", { sessionId, toolCallId: _toolCallId });
         reject(new Error("查询通知消息超时（60秒）"));
       }, 60000);
 
@@ -124,10 +127,11 @@ c. 调用工具前需认真检查调用参数是否满足工具要求
 
       wsManager.on("data-event", handler);
 
+      const currentTaskId = getCurrentTaskId(sessionId) ?? taskId;
       sendCommand({
         config,
         sessionId,
-        taskId,
+        taskId: currentTaskId,
         messageId,
         command,
       })
