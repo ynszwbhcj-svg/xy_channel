@@ -568,7 +568,9 @@ function enqueueSteer(params: EnqueueSteerParams): Promise<void> {
   steerQueues.set(sessionId, next);
 
   // 链条结束后清理
-  next.catch(() => {}).finally(() => {
+  next.catch((err) => {
+    logger.error(`[STEER-QUEUE] ❌ Steer chain failed: ${String(err)}`);
+  }).finally(() => {
     if (steerQueues.get(sessionId) === next) {
       steerQueues.delete(sessionId);
     }
@@ -602,7 +604,10 @@ async function dispatchSteerWhenReady(params: EnqueueSteerParams): Promise<void>
     streamingSignals.delete(sessionId);
     logger.log(`[STEER-QUEUE] ✅ Streaming signal received, session=${sessionId}`);
   } else {
-    logger.log(`[STEER-QUEUE] ⚠️ Signal never appeared, proceeding without wait`);
+    // 轮询超时且 hasActiveTask 仍为 true——说明第一条消息可能卡在异常路径，
+    // 没有创建 signal。此时 dispatch 会与第一条消息的模型调用并发冲突，放弃。
+    logger.log(`[STEER-QUEUE] ⚠️ Signal never appeared after polling, skip steer to avoid collision`);
+    return;
   }
 
   // 2. 第一条消息已结束 → 放弃
