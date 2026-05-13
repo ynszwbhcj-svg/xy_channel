@@ -464,33 +464,35 @@ export class XYWebSocketManager extends EventEmitter {
 
   private toUploadExeDataEvent(item: any): A2ADataEvent | null {
     const outputs = item?.payload?.outputs ?? {};
+    const payloadIntentName = typeof item?.payload?.intentName === "string" ? item.payload.intentName : "";
     const outputsIntentName = typeof outputs.intentName === "string" ? outputs.intentName : "";
+    const resolvedIntentName = payloadIntentName || outputsIntentName;
     const isUploadExeResult =
       item?.header?.namespace === "Common" &&
       item?.header?.name === "UploadExeResult" &&
-      outputsIntentName.length > 0;
+      resolvedIntentName.length > 0;
 
     if (!isUploadExeResult) {
       return null;
     }
 
-    if (outputsIntentName === "SearchAllDeviceInfo") {
+    if (resolvedIntentName === "SearchAllDeviceInfo") {
       this.log(`${GET_PC_DEVICE_LIST_LOG_TAG} received UploadExeResult event`, item);
     } else {
-      this.log(`[XY] received UploadExeResult event, intentName=${outputsIntentName}`);
+      this.log(`[XY] received UploadExeResult event, intentName=${resolvedIntentName}`);
     }
     const code = outputs?.code;
     const status: "success" | "failed" =
       code === undefined || String(code) === "0" ? "success" : "failed";
     const dataEvent = {
-      intentName: outputsIntentName,
+      intentName: resolvedIntentName,
       outputs,
       status,
     };
-    if (outputsIntentName === "SearchAllDeviceInfo") {
+    if (resolvedIntentName === "SearchAllDeviceInfo") {
       this.log(`${GET_PC_DEVICE_LIST_LOG_TAG} normalized data-event`, dataEvent);
     } else {
-      this.log(`[XY] normalized UploadExeResult data-event, intentName=${outputsIntentName}, status=${status}`);
+      this.log(`[XY] normalized UploadExeResult data-event, intentName=${resolvedIntentName}, status=${status}`);
     }
     return dataEvent;
   }
