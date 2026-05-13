@@ -261,9 +261,12 @@ export function getActiveSessionCount(): number {
   return activeSessions.size;
 }
 
-export function appendRunCrossTaskFileUrls(fileUrls: string[]): string[] {
+export function appendRunCrossTaskFileUrls(
+  fileUrls: string[],
+  explicitRunCrossTaskContext?: RunCrossTaskContext,
+): string[] {
   const context = asyncLocalStorage.getStore() ?? null;
-  const runCrossTaskContext = context?.runCrossTaskContext;
+  const runCrossTaskContext = explicitRunCrossTaskContext ?? context?.runCrossTaskContext;
   if (!runCrossTaskContext || fileUrls.length === 0) {
     return runCrossTaskContext?.fileUrls ?? [];
   }

@@ -228,7 +228,6 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
 
       // 🔑 发送初始状态更新
       logger.log(`[STATUS] Sending initial status update for session ${parsed.sessionId}`);
-      logger.log(`[STATUS] Sending initial status update for session ${parsed.sessionId}`);
       void sendStatusUpdate({
         config,
         sessionId: parsed.sessionId,
