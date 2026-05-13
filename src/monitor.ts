@@ -43,28 +43,6 @@ function createSessionQueue() {
 }
 
 /**
- * Per-session serial queue for steer messages only.
- * Steer messages must run concurrently with the main query (which may block for
- * minutes inside the Pi agent loop), but must be serialized among themselves to
- * prevent concurrent dispatchReplyFromConfig calls that can drop mid-stream
- * steer messages under race conditions.
- */
-function createSteerQueue() {
-  const queues = new Map<string, Promise<void>>();
-  return (sessionId: string, task: () => Promise<void>): Promise<void> => {
-    const prev = queues.get(sessionId) ?? Promise.resolve();
-    const next = prev.then(task, task);
-    queues.set(sessionId, next);
-    void next.finally(() => {
-      if (queues.get(sessionId) === next) {
-        queues.delete(sessionId);
-      }
-    });
-    return next;
-  };
-}
-
-/**
  * Monitor XY channel WebSocket connections.
  * Keeps the connection alive until abortSignal is triggered.
  */
@@ -110,10 +88,6 @@ export async function monitorXYProvider(opts: MonitorXYOpts = {}): Promise<void>
 
   // Create session queue for ordered message processing
   const enqueue = createSessionQueue();
-
-  // Steer-only serial queue: keeps steer messages concurrent with the main
-  // query but serialized among themselves to avoid race conditions.
-  const enqueueSteer = createSteerQueue();
 
   // Global gate that serializes dispatch initialization across sessions.
   // When a new session starts dispatching, it acquires this gate and holds it
@@ -176,12 +150,11 @@ export async function monitorXYProvider(opts: MonitorXYOpts = {}): Promise<void>
         const hasActiveRun = hasActiveTask(parsed.sessionId);
 
         if (steerMode && hasActiveRun) {
-          // Steer模式且有活跃任务：通过 steer 专用队列串行执行，与主消息并发但
-          // 避免多个 steer 同时进入 dispatchReplyFromConfig 导致中间消息丢失
-          logger.log(`[MONITOR-HANDLER] 🔄 STEER MODE: Enqueuing steer for messageKey=${messageKey}`);
+          // Steer模式且有活跃任务：不入队列，直接并发执行
+          logger.log(`[MONITOR-HANDLER] 🔄 STEER MODE: Executing concurrently for messageKey=${messageKey}`);
           logger.log(`[MONITOR-HANDLER]   - sessionId: ${parsed.sessionId}`);
-          void enqueueSteer(parsed.sessionId, task).catch((err) => {
-            logger.error(`XY gateway: steer queue processing failed for ${messageKey}: ${String(err)}`);
+          void task().catch((err) => {
+            logger.error(`XY gateway: concurrent steer task failed for ${messageKey}: ${String(err)}`);
             activeMessages.delete(messageKey);
           });
         } else {
