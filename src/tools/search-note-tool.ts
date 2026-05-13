@@ -2,7 +2,7 @@
 import type { ChannelAgentTool } from "openclaw/plugin-sdk";
 import { getXYWebSocketManager } from "../client.js";
 import { sendCommand } from "../formatter.js";
-import { getCurrentSessionContext } from "./session-manager.js";
+import type { SessionContext } from "./session-manager.js";
 import { logger } from "../utils/logger.js";
 import type { A2ADataEvent } from "../types.js";
 
@@ -10,7 +10,9 @@ import type { A2ADataEvent } from "../types.js";
  * XY search note tool - searches notes on user's device.
  * Returns matching notes based on query string.
  */
-export const searchNoteTool: any = {
+export function createSearchNoteTool(ctx: SessionContext): any {
+  const { config, sessionId, taskId, messageId } = ctx;
+  return {
   name: "search_notes",
   label: "Search Notes",
   description: "搜索用户设备上的备忘录内容。根据关键词在备忘录的标题、内容和附件名称中进行检索。注意:操作超时时间为60秒,请勿重复调用此工具,如果超时或失败,最多重试一次。回复约束：如果工具返回没有授权或者其他报错，只需要完整描述没有授权或者其他报错内容即可，不需要主动给用户提供解决方案，例如告诉用户如何授权，如何解决报错等都是不需要的，请严格遵守。",
@@ -31,14 +33,6 @@ export const searchNoteTool: any = {
     if (!params.query) {
       throw new Error("Missing required parameter: query is required");
     }
-
-    // Get session context
-    const sessionContext = getCurrentSessionContext();
-    if (!sessionContext) {
-      throw new Error("No active XY session found. Search note tool can only be used during an active conversation.");
-    }
-
-    const { config, sessionId, taskId, messageId } = sessionContext;
 
     // Get WebSocket manager
     const wsManager = getXYWebSocketManager(config);
@@ -129,3 +123,4 @@ export const searchNoteTool: any = {
     });
   },
 };
+}

@@ -2,7 +2,7 @@
 import type { ChannelAgentTool } from "openclaw/plugin-sdk";
 import { getXYWebSocketManager } from "../client.js";
 import { sendCommand } from "../formatter.js";
-import { getCurrentSessionContext } from "./session-manager.js";
+import type { SessionContext } from "./session-manager.js";
 import { logger } from "../utils/logger.js";
 import type { A2ADataEvent } from "../types.js";
 
@@ -18,17 +18,12 @@ const DAYS_OF_WAKE_TYPE_VALUES = [0, 1, 2, 3, 4];
  * At least one search criterion must be provided.
  * Multiple criteria can be combined.
  */
-export const searchAlarmTool: any = {
+export function createSearchAlarmTool(ctx: SessionContext): any {
+  const { config, sessionId, taskId, messageId } = ctx;
+  return {
   name: "search_alarm",
   label: "Search Alarm",
-  description: `检索用户设备上的闹钟。支持多种检索条件，至少需要提供一个检索条件，多个条件可以组合使用。
-
-检索条件（至少提供一个）：
-- rangeType: 查询范围，枚举值：all=查询所有闹钟，next=查找下一个响铃闹钟，current=一小时内最近一次增查改的闹钟
-- alarmState: 闹钟开启状态，0=关闭，1=开启
-- daysOfWakeType: 闹钟响铃类型，0=单次响铃，1=法定节假日，2=每天，3=自定义时间，4=法定工作日
-- startTime: 时间间隔开始，格式 YYYYMMDD hhmmss（例如：20240315 000000），需要与 endTime 一起使用
-- endTime: 时间间隔结束，格式 YYYYMMDD hhmmss（例如：20240315 235959），需要与 startTime 一起使用
+  description: `检索用户设备上的闹钟。至少需要提供一个检索条件，多个条件可以组合使用。
 
 使用示例：
 - 查询所有闹钟：{"rangeType": "all"}
@@ -47,25 +42,25 @@ b. 使用该工具之前需获取当前真实时间
       rangeType: {
         type: "string",
         enum: ["all", "next", "current"],
-        description: "查询范围：all=所有闹钟，next=下一个响铃闹钟，current=一小时内最近修改的闹钟",
+        description: "（检索条件之一）查询范围，枚举值：all=查询所有闹钟，next=查找下一个响铃闹钟，current=一小时内最近一次增查改的闹钟",
       },
       alarmState: {
         type: "number",
         enum: [0, 1],
-        description: "闹钟开启状态：0=关闭，1=开启",
+        description: "（检索条件之一）闹钟开启状态，枚举值：0=关闭，1=开启",
       },
       daysOfWakeType: {
         type: "number",
         enum: [0, 1, 2, 3, 4],
-        description: "闹钟响铃类型：0=单次，1=法定节假日，2=每天，3=自定义，4=法定工作日",
+        description: "（检索条件之一）闹钟响铃类型，枚举值：0=单次响铃，1=法定节假日，2=每天，3=自定义时间，4=法定工作日",
       },
       startTime: {
         type: "string",
-        description: "时间间隔开始，格式 YYYYMMDD hhmmss（例如：20240315 000000），必须与 endTime 一起使用",
+        description: "（检索条件之一）时间间隔开始，格式 YYYYMMDD hhmmss（例如：20240315 000000），必须与 endTime 一起使用",
       },
       endTime: {
         type: "string",
-        description: "时间间隔结束，格式 YYYYMMDD hhmmss（例如：20240315 235959），必须与 startTime 一起使用",
+        description: "（检索条件之一）时间间隔结束，格式 YYYYMMDD hhmmss（例如：20240315 235959），必须与 startTime 一起使用",
       },
     },
   },
@@ -138,16 +133,6 @@ b. 使用该工具之前需获取当前真实时间
 
       timeInterval = [startTimeMs, endTimeMs];
     }
-
-    // Get session context
-    const sessionContext = getCurrentSessionContext();
-
-    if (!sessionContext) {
-      throw new Error("No active XY session found. Search alarm tool can only be used during an active conversation.");
-    }
-
-
-    const { config, sessionId, taskId, messageId } = sessionContext;
 
     // Get WebSocket manager
     const wsManager = getXYWebSocketManager(config);
@@ -254,8 +239,9 @@ b. 使用该工具之前需获取当前真实时间
           reject(error);
         });
     });
-  },
-};
+    },
+  };
+}
 
 /**
  * Parse alarmTime string (YYYYMMDD hhmmss) to timestamp in milliseconds

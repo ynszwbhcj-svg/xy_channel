@@ -74,7 +74,7 @@ export async function tryInjectSteer(
     },
   };
 
-  console.log(`[STEER] Injecting steer for sessionId=${sessionId}, taskId=${syntheticMessage.params.id}`);
+  logger.log(`[STEER] Injecting steer for sessionId=${sessionId}, taskId=${syntheticMessage.params.id}`);
 
   try {
     await handleXYMessage({

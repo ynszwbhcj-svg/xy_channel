@@ -1,8 +1,10 @@
 // WebSocket connection manager (Single connection)
+import os from "os";
 import WebSocket from "ws";
 import { EventEmitter } from "events";
 import type { RuntimeEnv } from "openclaw/plugin-sdk";
 import { HeartbeatManager } from "./heartbeat.js";
+import { MessageQueue } from "./message-queue.js";
 import type {
   XYChannelConfig,
   ServerConnectionState,
@@ -63,6 +65,11 @@ export class XYWebSocketManager extends EventEmitter {
   private reconnectTimer: NodeJS.Timeout | null = null;
   private isShuttingDown = false;
 
+  // Message queue for buffering during disconnection/reconnection
+  private messageQueue: MessageQueue;
+  private isBuffering = false;
+  private reconnectBufferTimer: NodeJS.Timeout | null = null;
+
   // Logging functions
   private log: (msg: string, ...args: any[]) => void;
   private error: (msg: string, ...args: any[]) => void;
@@ -77,6 +84,7 @@ export class XYWebSocketManager extends EventEmitter {
     super();
     this.log = runtime?.log ?? console.log;
     this.error = runtime?.error ?? console.error;
+    this.messageQueue = new MessageQueue(this.log);
   }
 
   /**
@@ -132,6 +140,14 @@ export class XYWebSocketManager extends EventEmitter {
       this.reconnectTimer = null;
     }
 
+    // Clear message queue on explicit disconnect (not during reconnection)
+    if (this.reconnectBufferTimer) {
+      clearTimeout(this.reconnectBufferTimer);
+      this.reconnectBufferTimer = null;
+    }
+    this.messageQueue.clear();
+    this.isBuffering = false;
+
     this.cleanupConnection();
 
     this.log("Disconnected from XY WebSocket server");
@@ -141,6 +157,11 @@ export class XYWebSocketManager extends EventEmitter {
    * Send a message to the server.
    */
   async sendMessage(sessionId: string, message: OutboundWebSocketMessage): Promise<void> {
+
+    if (this.isBuffering) {
+      this.messageQueue.enqueue(message);
+      return;
+    }
 
     if (!this.ws || !this.state.ready || this.ws.readyState !== WebSocket.OPEN) {
       throw new Error("WebSocket not ready");
@@ -249,6 +270,12 @@ export class XYWebSocketManager extends EventEmitter {
       this.reconnectTimer = null;
     }
 
+    // Clear reconnect buffer timer (but keep message queue for reconnection)
+    if (this.reconnectBufferTimer) {
+      clearTimeout(this.reconnectBufferTimer);
+      this.reconnectBufferTimer = null;
+    }
+
     // Clean up WebSocket
     if (this.ws) {
       // Remove all event listeners
@@ -349,20 +376,40 @@ export class XYWebSocketManager extends EventEmitter {
       return;
     }
 
+    const hostname = os.hostname();
     const initMessage: OutboundWebSocketMessage = {
       msgType: "clawd_bot_init",
       agentId: this.config.agentId,
-      msgDetail: JSON.stringify({ agentId: this.config.agentId }),
+      msgDetail: JSON.stringify({ agentId: this.config.agentId, hostname }),
     };
 
     const initMessageStr = JSON.stringify(initMessage);
-    console.log("[WS-SEND] Sending init message frame:", JSON.stringify(initMessage, null, 2));
+    this.log("[WS-SEND] Sending init message frame:", JSON.stringify(initMessage, null, 2));
     this.ws.send(initMessageStr);
-    console.log(`[WS-SEND] Init message sent successfully, size: ${initMessageStr.length} bytes`);
+    this.log(`[WS-SEND] Init message sent successfully, size: ${initMessageStr.length} bytes`);
 
     // Mark as ready after init
     this.state.ready = true;
     this.emit("ready");
+
+    // Start 10-second buffer period after reconnection
+    if (this.isBuffering) {
+      this.log("[MessageQueue] Reconnected, starting 10s buffer period before flushing queue");
+      // Clear any existing buffer timer
+      if (this.reconnectBufferTimer) {
+        clearTimeout(this.reconnectBufferTimer);
+      }
+      this.reconnectBufferTimer = setTimeout(() => {
+        this.reconnectBufferTimer = null;
+        this.messageQueue.flush((msg) => {
+          if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+            this.ws.send(JSON.stringify(msg));
+          }
+        });
+        this.isBuffering = false;
+        this.log("[MessageQueue] Buffer period ended, resumed direct sending");
+      }, 10000);
+    }
 
     // Start heartbeat
     this.startHeartbeat();
@@ -410,34 +457,37 @@ export class XYWebSocketManager extends EventEmitter {
    * Handle incoming message from server.
    */
   private handleMessage(data: WebSocket.Data): void {
-    console.log("[WEBSOCKET-HANDLE] >>>>>>> Receiving message... <<<<<<<");
 
     try {
       const messageStr = data.toString();
-      console.log(`[WS-RECV] Raw message frame, size: ${messageStr.length} bytes`);
-
+      this.log(`[WS-RECV] Raw message frame, size: ${messageStr.length} characters`);
       const parsed = JSON.parse(messageStr);
-
       // 提取并打印消息内容（只显示 text，data 只打印提示）
       const parts = parsed.params?.message?.parts;
       if (parts && Array.isArray(parts) && parts.length > 0) {
         const textParts = parts.filter((p: any) => p?.kind === "text");
         const dataParts = parts.filter((p: any) => p?.kind === "data");
 
-        // 打印 text 内容
+        // 打印 text 内容（隐藏敏感信息）
         if (textParts.length > 0) {
           const textContents = textParts
             .map((p: any) => p?.text || "")
             .filter((text: string) => text.length > 0)
             .join(" ");
           if (textContents.length > 0) {
-            console.log("[WS-RECV] Text:", textContents);
+            // 隐藏中间内容，只保留前后各5个字符
+            let maskedText: string;
+            if (textContents.length <= 8) {
+              // 如果长度 <= 8，显示前2个 + *** + 后2个
+              maskedText = textContents.length >= 4
+                ? `${textContents.slice(0, 2)}***${textContents.slice(-2)}`
+                : `${textContents.slice(0, 1)}***${textContents.slice(-1)}`;
+            } else {
+              // 如果长度 > 8，显示前5个 + *** + 后5个
+              maskedText = `${textContents.slice(0, 5)}***${textContents.slice(-5)}`;
+            }
+            this.log("[WS-RECV] Text:", maskedText);
           }
-        }
-
-        // 打印 data 提示
-        if (dataParts.length > 0) {
-          console.log("[WS-RECV] Data: received data message(s)");
         }
       }
 
@@ -448,7 +498,7 @@ export class XYWebSocketManager extends EventEmitter {
         // Extract sessionId from params
         const sessionId = a2aRequest.params?.sessionId;
         if (!sessionId) {
-          console.error("[XY] Message missing sessionId");
+          this.error("[XY] Message missing sessionId");
           return;
         }
 
@@ -461,11 +511,11 @@ export class XYWebSocketManager extends EventEmitter {
           for (const dataPart of dataParts) {
             const events = dataPart.data?.events;
             if (!Array.isArray(events)) {
-              console.warn("[XY] dataPart.data.events is not an array, skipping");
+              this.log("[XY] dataPart.data.events is not an array, skipping");
               continue;
             }
 
-            console.log(`[XY] Processing ${events.length} events from data.events`);
+            this.log(`[XY] Processing ${events.length} events from data.events`);
             for (const item of events) {
               if (item.header?.name === "UploadExeResult" && item.payload?.intentName) {
                 const dataEvent = {
@@ -473,18 +523,36 @@ export class XYWebSocketManager extends EventEmitter {
                   outputs: item.payload.outputs || {},
                   status: "success" as const,
                 };
-                console.log(`[XY] Emitting data-event, intentName: ${item.payload.intentName}, size: ${JSON.stringify(dataEvent).length} bytes`);
+                this.log(`[XY] Emitting data-event, intentName: ${item.payload.intentName}, size: ${JSON.stringify(dataEvent).length} bytes`);
                 this.emit("data-event", dataEvent);
               } else if (item.header?.namespace === "ClawAgent" && item.header?.name === "InvokeJarvisGUIAgentResponse") {
-                console.log(`[XY] Emitting gui-agent-response, size: ${JSON.stringify(item).length} bytes`);
+                this.log(`[XY] Emitting gui-agent-response, size: ${JSON.stringify(item).length} bytes`);
                 this.emit("gui-agent-response", item);
               } else if (item.header?.namespace === "Common" && item.header?.name === "Trigger") {
-                console.log("[XY] Trigger event detected, emitting trigger-event with context");
+                this.log("[XY] Trigger event detected, emitting trigger-event with context");
                 // 传递完整上下文：event、sessionId、taskId
                 this.emit("trigger-event", {
                   event: item,
                   sessionId: sessionId,
                   taskId: a2aRequest.params?.id, // 新的 taskId（点击推送时生成）
+                });
+              } else if (item.header?.namespace === "AgentEvent" && item.header?.name === "ClawSelfEvolutionState") {
+                this.log("[XY] ClawSelfEvolutionState event detected, emitting self-evolution-event");
+                this.emit("self-evolution-event", {
+                  event: item,
+                });
+              } else if (item.header?.namespace === "AgentEvent" && item.header?.name === "ClawSelfEvolutionStateGet") {
+                this.log("[XY] ClawSelfEvolutionStateGet event detected, emitting self-evolution-state-get-event");
+                this.emit("self-evolution-state-get-event", {
+                  event: item,
+                  sessionId: sessionId,
+                  taskId: a2aRequest.params?.id,
+                  messageId: a2aRequest.id,
+                });
+              } else if (item.header?.namespace === "LoginTokenEvent" && item.header?.name === "ClawAutoLogin") {
+                this.log("[XY] LoginTokenEvent.ClawAutoLogin detected, emitting login-token-event");
+                this.emit("login-token-event", {
+                  event: item,
                 });
               }
             }
@@ -493,25 +561,24 @@ export class XYWebSocketManager extends EventEmitter {
         }
 
         // Emit message event for non-data-only messages
-        console.log("[XY] *** EMITTING message event (Direct A2A path) ***");
         this.emit("message", a2aRequest, sessionId);
         return;
       }
 
       // Wrapped format (InboundWebSocketMessage)
       const inboundMsg: InboundWebSocketMessage = parsed;
-      console.log(`[XY] Message type: Wrapped, msgType: ${inboundMsg.msgType}`);
+      this.log(`[XY] Message type: Wrapped, msgType: ${inboundMsg.msgType}`);
 
       // Handle heartbeat responses
       if (inboundMsg.msgType === "heartbeat") {
-        console.log("[XY] Received heartbeat response");
+        this.log("[XY] Received heartbeat response");
         this.onHealthEvent?.();
         return;
       }
 
       // Handle data messages
       if (inboundMsg.msgType === "data") {
-        console.log("[XY] Processing data message");
+        this.log("[XY] Processing data message");
         try {
           const a2aRequest: A2AJsonRpcRequest = JSON.parse(inboundMsg.msgDetail);
           const dataParts = a2aRequest.params?.message?.parts?.filter((p): p is { kind: "data"; data: any } => p.kind === "data");
@@ -520,11 +587,11 @@ export class XYWebSocketManager extends EventEmitter {
             for (const dataPart of dataParts) {
               const events = dataPart.data?.events;
               if (!Array.isArray(events)) {
-                console.warn("[XY] dataPart.data.events is not an array, skipping");
+                this.log("[XY] dataPart.data.events is not an array, skipping");
                 continue;
               }
 
-              console.log(`[XY] Processing ${events.length} events from data.events`);
+              this.log(`[XY] Processing ${events.length} events from data.events`);
               for (const item of events) {
                 if (item.header?.name === "UploadExeResult" && item.payload?.intentName) {
                   const dataEvent = {
@@ -532,41 +599,46 @@ export class XYWebSocketManager extends EventEmitter {
                     outputs: item.payload.outputs || {},
                     status: "success" as const,
                   };
-                  console.log(`[XY] Emitting data-event, intentName: ${item.payload.intentName}, size: ${JSON.stringify(dataEvent).length} bytes`);
+                  this.log(`[XY] Emitting data-event, intentName: ${item.payload.intentName}, size: ${JSON.stringify(dataEvent).length} bytes`);
                   this.emit("data-event", dataEvent);
                 } else if (item.header?.namespace === "ClawAgent" && item.header?.name === "InvokeJarvisGUIAgentResponse") {
-                  console.log(`[XY] Emitting gui-agent-response, size: ${JSON.stringify(item).length} bytes`);
+                  this.log(`[XY] Emitting gui-agent-response, size: ${JSON.stringify(item).length} bytes`);
                   this.emit("gui-agent-response", item);
                 } else if (item.header?.namespace === "Common" && item.header?.name === "Trigger") {
-                  console.log("[XY] Trigger event detected (wrapped format), emitting trigger-event with context");
+                  this.log("[XY] Trigger event detected (wrapped format), emitting trigger-event with context");
                   // 传递完整上下文：event、sessionId、taskId
                   this.emit("trigger-event", {
                     event: item,
                     sessionId: inboundMsg.sessionId || a2aRequest.params?.sessionId,
                     taskId: inboundMsg.taskId || a2aRequest.params?.id,
                   });
+                } else if (item.header?.namespace === "LoginTokenEvent" && item.header?.name === "ClawAutoLogin") {
+                  this.log("[XY] LoginTokenEvent.ClawAutoLogin detected (wrapped format), emitting login-token-event");
+                  this.emit("login-token-event", {
+                    event: item,
+                  });
                 }
               }
             }
           }
         } catch (error) {
-          console.error("[XY] Failed to process data message:", error);
+          this.error("[XY] Failed to process data message:", error);
         }
         return;
       }
 
       // Parse msgDetail as A2AJsonRpcRequest
       const a2aRequest: A2AJsonRpcRequest = JSON.parse(inboundMsg.msgDetail);
-      console.log(`[XY] Parsed A2A request, method: ${a2aRequest.method}`);
+      this.log(`[XY] Parsed A2A request, method: ${a2aRequest.method}`);
 
       const sessionId = inboundMsg.sessionId;
-      console.log(`[XY] Session ID: ${sessionId}`);
+      this.log(`[XY] Session ID: ${sessionId}`);
 
       // Emit message event
-      console.log("[XY] *** EMITTING message event (Wrapped path) ***");
+      this.log("[XY] *** EMITTING message event (Wrapped path) ***");
       this.emit("message", a2aRequest, sessionId);
     } catch (error) {
-      console.error("[XY] Failed to parse message:", error);
+      this.error("[XY] Failed to parse message:", error);
     }
   }
 
@@ -574,7 +646,7 @@ export class XYWebSocketManager extends EventEmitter {
    * Handle connection close.
    */
   private handleClose(code: number, reason: string): void {
-    console.warn(`WebSocket disconnected: code=${code}, reason=${reason}`);
+    this.log(`WebSocket disconnected: code=${code}, reason=${reason}`);
 
     // Only process if this is the current connection
     if (!this.ws) {
@@ -584,6 +656,9 @@ export class XYWebSocketManager extends EventEmitter {
 
     this.state.connected = false;
     this.state.ready = false;
+
+    // Start buffering messages during disconnection
+    this.isBuffering = true;
 
     this.emit("disconnected");
 

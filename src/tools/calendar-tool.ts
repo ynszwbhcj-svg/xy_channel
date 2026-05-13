@@ -2,7 +2,7 @@
 import type { ChannelAgentTool } from "openclaw/plugin-sdk";
 import { getXYWebSocketManager } from "../client.js";
 import { sendCommand } from "../formatter.js";
-import { getCurrentSessionContext } from "./session-manager.js";
+import type { SessionContext } from "./session-manager.js";
 import { logger } from "../utils/logger.js";
 import type { A2ADataEvent } from "../types.js";
 
@@ -11,7 +11,9 @@ import type { A2ADataEvent } from "../types.js";
  * Requires title, dtStart (start time), and dtEnd (end time) parameters.
  * Time format must be: yyyy-mm-dd hh:mm:ss
  */
-export const calendarTool: any = {
+export function createCalendarTool(ctx: SessionContext): any {
+  const { config, sessionId, taskId, messageId } = ctx;
+  return {
   name: "create_calendar_event",
   label: "Create Calendar Event",
   description: `在用户设备上创建日程。需要提供日程标题、开始时间和结束时间。时间格式必须为：yyyy-mm-dd hh:mm:ss（例如：2024-01-15 14:30:00）。注意：该工具执行时间较长（最多60秒），请勿重复调用，超时或失败时最多重试一次。
@@ -54,16 +56,6 @@ export const calendarTool: any = {
       throw new Error("Invalid time format. Required format: yyyy-mm-dd hh:mm:ss (e.g., 2024-01-15 14:30:00)");
     }
 
-
-    // Get session context
-    const sessionContext = getCurrentSessionContext();
-
-    if (!sessionContext) {
-      throw new Error("No active XY session found. Calendar tool can only be used during an active conversation.");
-    }
-
-
-    const { config, sessionId, taskId, messageId } = sessionContext;
 
     // Get WebSocket manager
     const wsManager = getXYWebSocketManager(config);
@@ -157,3 +149,4 @@ export const calendarTool: any = {
     });
   },
 };
+}

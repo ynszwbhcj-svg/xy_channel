@@ -2,7 +2,7 @@
 import type { ChannelAgentTool } from "openclaw/plugin-sdk";
 import { getXYWebSocketManager } from "../client.js";
 import { sendCommand } from "../formatter.js";
-import { getCurrentSessionContext } from "./session-manager.js";
+import type { SessionContext } from "./session-manager.js";
 import { logger } from "../utils/logger.js";
 import type { A2ADataEvent } from "../types.js";
 
@@ -18,17 +18,19 @@ import type { A2ADataEvent } from "../types.js";
  * - After getting public URLs, if further processing is needed, download the file first
  * - URLs returned are publicly accessible
  */
-export const uploadFileTool: any = {
+export function createUploadFileTool(ctx: SessionContext): any {
+  const { config, sessionId, taskId, messageId } = ctx;
+  return {
   name: "upload_file",
   label: "Upload File",
-  description: `工具能力描述：将手机本地文件上传并获取可公网访问的 URL。
+  description: `工具能力描述：将用户本地设备文件上传并获取可公网访问的 URL。
 
-  前置工具调用：此工具使用前必须先调用 search_file 工具获取文件的 uri
+  前置工具调用：此工具使用前必须先通过call_device_tool调用 search_file 或者 query_collection 工具获取文件的 uri
 
   工具参数说明：
-  a. 入参中的fileInfos数组，每个元素必须包含mediaUri字段（对应于search_file工具返回结果中的uri），必须与search_file结果中对应的uri完全保持一致，不要自行修改。
+  a. 入参中的fileInfos数组，每个元素必须包含mediaUri字段（对应于search_file工具或者query_collection返回结果中的uri），必须与search_file或者query_collection结果中对应的uri完全保持一致，不要自行修改。
   b. fileInfos中的timeout字段是可选的，表示上传文件超时时间，单位是毫秒，默认是20000（20秒）。
-  c. fileInfos 是文件在手机本地的信息数组（从 search_file 工具响应中获取）。限制：每次最多支持传入 5 条文件信息。
+  c. fileInfos 是文件在用户设备本地的信息数组（从 search_file 工具或者query_collection 工具响应中获取）。限制：每次最多支持传入 5 条文件信息。
 
   注意事项：
   a. 操作超时时间为60秒,请勿重复调用此工具,如果超时或失败,最多重试一次。
@@ -103,16 +105,6 @@ export const uploadFileTool: any = {
     }
 
 
-    // Get session context
-    const sessionContext = getCurrentSessionContext();
-
-    if (!sessionContext) {
-      throw new Error("No active XY session found. Upload file tool can only be used during an active conversation.");
-    }
-
-
-    const { config, sessionId, taskId, messageId } = sessionContext;
-
     // Get WebSocket manager
     const wsManager = getXYWebSocketManager(config);
 
@@ -134,6 +126,7 @@ export const uploadFileTool: any = {
     };
   },
 };
+}
 
 /**
  * Get public URLs for files using fileInfos

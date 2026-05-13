@@ -2,7 +2,7 @@
 import type { ChannelAgentTool } from "openclaw/plugin-sdk";
 import { getXYWebSocketManager } from "../client.js";
 import { sendCommand } from "../formatter.js";
-import { getCurrentSessionContext } from "./session-manager.js";
+import type { SessionContext } from "./session-manager.js";
 import { logger } from "../utils/logger.js";
 import type { A2ADataEvent } from "../types.js";
 
@@ -14,17 +14,19 @@ import type { A2ADataEvent } from "../types.js";
  * 1. Call search_photo_gallery tool first to get mediaUris of photos
  * 2. Use the mediaUris (maximum 5 at a time) to get public URLs
  */
-export const uploadPhotoTool: any = {
+export function createUploadPhotoTool(ctx: SessionContext): any {
+  const { config, sessionId, taskId, messageId } = ctx;
+  return {
   name: "upload_photo",
   label: "Upload Photo",
-  description: `工具能力描述：将手机本地文件回传并获取可公网访问的 URL。
-  
-  前置工具调用：此工具使用前必须先调用 search_photo_gallery 工具获取照片的 mediaUri或者thumbnailUri
+  description: `工具能力描述：将用户本地设备文件回传并获取可公网访问的 URL。
+
+  前置工具调用：此工具使用前必须先通过call_device_tool工具调用 search_photo_gallery 工具获取照片的 mediaUri或者thumbnailUri
   工具参数说明：
   a. 入参中的mediaUris中的mediaUri必须与search_photo_gallery结果中对应的mediaUri或者thumbnailUri完全保持一致，不要自行修改，必须是file:://开头的路径。
   b. 优先使用search_photo_gallery结果中的thumbnailUri作为入参，thumbnailUri是缩略图，清晰度与文件大小都非常合适展示给用户，如果thumbnailUri不存在或者用户要求使用原图，则使用search_photo_gallery结果中对应的mediaUri
   c. mediaUris 是照片在手机本地的 URI 数组（从 search_photo_gallery 工具响应中获取）。限制：每次最多支持传入 3 条 mediaUri。
-  
+
   注意事项：
   a. 操作超时时间为60秒,请勿重复调用此工具,如果超时或失败,最多重试一次。
   b. 此工具返回的图片链接为用户公网可访问的链接，如果需要后续操作需要下载到本地，如果需要返回给用户查看则直接以图片markdown的形式返回给用户`,
@@ -83,16 +85,6 @@ export const uploadPhotoTool: any = {
     }
 
 
-    // Get session context
-    const sessionContext = getCurrentSessionContext();
-
-    if (!sessionContext) {
-      throw new Error("No active XY session found. Upload photo tool can only be used during an active conversation.");
-    }
-
-
-    const { config, sessionId, taskId, messageId } = sessionContext;
-
     // Get WebSocket manager
     const wsManager = getXYWebSocketManager(config);
 
@@ -114,6 +106,7 @@ export const uploadPhotoTool: any = {
     };
   },
 };
+}
 
 /**
  * Get public URLs for photos using mediaUris

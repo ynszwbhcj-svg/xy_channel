@@ -2,7 +2,7 @@
 import type { ChannelAgentTool } from "openclaw/plugin-sdk";
 import { getXYWebSocketManager } from "../client.js";
 import { sendCommand } from "../formatter.js";
-import { getCurrentSessionContext } from "./session-manager.js";
+import type { SessionContext } from "./session-manager.js";
 import { logger } from "../utils/logger.js";
 import type { A2ADataEvent } from "../types.js";
 
@@ -10,7 +10,9 @@ import type { A2ADataEvent } from "../types.js";
  * XY search contact tool - searches contacts on user's device.
  * Returns matching contact information based on name.
  */
-export const searchContactTool: any = {
+export function createSearchContactTool(ctx: SessionContext): any {
+  const { config, sessionId, taskId, messageId } = ctx;
+  return {
   name: "search_contact",
   label: "Search Contact",
   description: "搜索用户设备上的联系人信息。根据姓名在通讯录中检索联系人详细信息（包括姓名、电话号码、邮箱、组织、职位等）。注意:操作超时时间为60秒,请勿重复调用此工具,如果超时或失败,最多重试一次。",
@@ -31,16 +33,6 @@ export const searchContactTool: any = {
     if (!params.name) {
       throw new Error("Missing required parameter: name is required");
     }
-
-    // Get session context
-    const sessionContext = getCurrentSessionContext();
-
-    if (!sessionContext) {
-      throw new Error("No active XY session found. Search contact tool can only be used during an active conversation.");
-    }
-
-
-    const { config, sessionId, taskId, messageId } = sessionContext;
 
     // Get WebSocket manager
     const wsManager = getXYWebSocketManager(config);
@@ -132,5 +124,6 @@ export const searchContactTool: any = {
           reject(error);
         });
     });
-  },
-};
+    },
+  };
+}

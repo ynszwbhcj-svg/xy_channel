@@ -1,34 +1,13 @@
 // ChannelPlugin main implementation
 // Following feishu/channel.ts pattern
 import type { ChannelPlugin } from "openclaw/plugin-sdk";
-import { setXYRuntime } from "./runtime.js";
 import { resolveXYConfig, listXYAccountIds, getDefaultXYAccountId } from "./config.js";
 import { xyConfigSchema } from "./config-schema.js";
 import { xyOutbound } from "./outbound.js";
 import { xyOnboardingAdapter } from "./onboarding.js";
-import { locationTool } from "./tools/location-tool.js";
-import { noteTool } from "./tools/note-tool.js";
-import { searchNoteTool } from "./tools/search-note-tool.js";
-import { modifyNoteTool } from "./tools/modify-note-tool.js";
-import { calendarTool } from "./tools/calendar-tool.js";
-import { searchCalendarTool } from "./tools/search-calendar-tool.js";
-import { searchContactTool } from "./tools/search-contact-tool.js";
-import { searchPhotoGalleryTool } from "./tools/search-photo-gallery-tool.js";
-import { uploadPhotoTool } from "./tools/upload-photo-tool.js";
-import { xiaoyiGuiTool } from "./tools/xiaoyi-gui-tool.js";
-import { callPhoneTool } from "./tools/call-phone-tool.js";
-import { searchMessageTool } from "./tools/search-message-tool.js";
-import { sendMessageTool } from "./tools/send-message-tool.js";
-import { searchFileTool } from "./tools/search-file-tool.js";
-import { uploadFileTool } from "./tools/upload-file-tool.js";
-import { createAlarmTool } from "./tools/create-alarm-tool.js";
-import { searchAlarmTool } from "./tools/search-alarm-tool.js";
-import { modifyAlarmTool } from "./tools/modify-alarm-tool.js";
-import { deleteAlarmTool } from "./tools/delete-alarm-tool.js";
-import { sendFileToUserTool } from "./tools/send-file-to-user-tool.js";
-import { xiaoyiCollectionTool } from "./tools/xiaoyi-collection-tool.js";
-import { viewPushResultTool } from "./tools/view-push-result-tool.js";
-import { imageReadingTool } from "./tools/image-reading-tool.js";
+import { filterToolsByDevice } from "./tools/device-tool-map.js";
+import { getCurrentSessionContext } from "./tools/session-manager.js";
+import { createAllTools } from "./tools/create-all-tools.js";
 import { getXYWebSocketManager } from "./client.js";
 import { handleXYMessage } from "./bot.js";
 import { logger } from "./utils/logger.js";
@@ -77,8 +56,13 @@ export const xyPlugin: ChannelPlugin = {
   },
 
   outbound: xyOutbound,
-  onboarding: xyOnboardingAdapter,
-  agentTools: [locationTool, noteTool, searchNoteTool, modifyNoteTool, calendarTool, searchCalendarTool, searchContactTool, searchPhotoGalleryTool, uploadPhotoTool, xiaoyiGuiTool, xiaoyiCollectionTool, callPhoneTool, searchMessageTool, sendMessageTool, searchFileTool, uploadFileTool, createAlarmTool, searchAlarmTool, modifyAlarmTool, deleteAlarmTool, sendFileToUserTool, viewPushResultTool, imageReadingTool],
+  agentTools: () => {
+    const ctx = getCurrentSessionContext();
+    const allTools = createAllTools(ctx);
+    const filtered = filterToolsByDevice(allTools, ctx?.deviceType);
+    logger.log(`[DEVICE-FILTER] deviceType=${ctx?.deviceType ?? "(none)"}, tools: ${allTools.length} → ${filtered.length} (${filtered.map(t => t.name).join(", ")})`);
+    return filtered;
+  },
 
   messaging: {
     normalizeTarget: (raw) => {
@@ -93,6 +77,21 @@ export const xyPlugin: ChannelPlugin = {
         return trimmed.length > 0;
       },
       hint: "<sessionId>",
+    },
+  },
+  bindings: {
+    compileConfiguredBinding: ({ conversationId }) => {
+      const sessionId = conversationId.trim();
+      if (!sessionId) return null;
+      return {
+        conversationId: sessionId,
+        parentConversationId: undefined,
+      };
+    },
+    matchInboundConversation: ({ compiledBinding, conversationId }) => {
+      return compiledBinding.conversationId === conversationId
+        ? { conversationId, matchPriority: 2 }
+        : null;
     },
   },
 

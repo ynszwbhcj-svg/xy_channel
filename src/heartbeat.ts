@@ -79,7 +79,7 @@ export class HeartbeatManager {
    */
   private sendHeartbeat(): void {
     if (this.ws.readyState !== WebSocket.OPEN) {
-      console.warn(`Cannot send heartbeat for ${this.serverName}: WebSocket not open`);
+      this.log(`Cannot send heartbeat for ${this.serverName}: WebSocket not open`);
       return;
     }
 

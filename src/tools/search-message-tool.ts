@@ -2,7 +2,7 @@
 import type { ChannelAgentTool } from "openclaw/plugin-sdk";
 import { getXYWebSocketManager } from "../client.js";
 import { sendCommand } from "../formatter.js";
-import { getCurrentSessionContext } from "./session-manager.js";
+import type { SessionContext } from "./session-manager.js";
 import { logger } from "../utils/logger.js";
 import type { A2ADataEvent } from "../types.js";
 
@@ -10,7 +10,9 @@ import type { A2ADataEvent } from "../types.js";
  * XY search message tool - searches SMS messages on user's device.
  * Returns matching messages based on content keyword search.
  */
-export const searchMessageTool: any = {
+export function createSearchMessageTool(ctx: SessionContext): any {
+  const { config, sessionId, taskId, messageId } = ctx;
+  return {
   name: "search_message",
   label: "Search Message",
   description: "搜索手机短信。根据关键词搜索短信内容。注意:操作超时时间为60秒,请勿重复调用此工具,如果超时或失败,最多重试一次。",
@@ -33,16 +35,6 @@ export const searchMessageTool: any = {
     }
 
 
-    // Get session context
-    const sessionContext = getCurrentSessionContext();
-
-    if (!sessionContext) {
-      throw new Error("No active XY session found. Search message tool can only be used during an active conversation.");
-    }
-
-
-    const { config, sessionId, taskId, messageId } = sessionContext;
-
     // Get WebSocket manager
     const wsManager = getXYWebSocketManager(config);
 
@@ -64,6 +56,7 @@ export const searchMessageTool: any = {
           timeOut: 5,
           intentParam: {
             content: params.content.trim(),
+            size: 50
           },
           permissionId: [],
           achieveType: "INTENT",
@@ -138,3 +131,4 @@ export const searchMessageTool: any = {
     });
   },
 };
+}

@@ -2,7 +2,7 @@
 import type { ChannelAgentTool } from "openclaw/plugin-sdk";
 import { getXYWebSocketManager } from "../client.js";
 import { sendCommand } from "../formatter.js";
-import { getCurrentSessionContext } from "./session-manager.js";
+import type { SessionContext } from "./session-manager.js";
 import { logger } from "../utils/logger.js";
 import type { A2ADataEvent } from "../types.js";
 
@@ -11,7 +11,7 @@ const ALARM_SNOOZE_DURATION_VALUES = [5, 10, 15, 20, 25, 30];
 const ALARM_SNOOZE_TOTAL_VALUES = [0, 1, 3, 5, 10];
 const ALARM_RING_DURATION_VALUES = [1, 5, 10, 15, 20, 30];
 const DAYS_OF_WAKE_TYPE_VALUES = [0, 1, 2, 3, 4];
-const DAYS_OF_WEEK_VALUES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+const DAYS_OF_WEEK_VALUES = ["Mon", "Tues", "Wed", "Thur", "Fri", "Sat", "Sun"];
 
 /**
  * XY create alarm tool - creates an alarm on user's device.
@@ -19,21 +19,12 @@ const DAYS_OF_WEEK_VALUES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
  *
  * Time format: YYYYMMDD hhmmss (e.g., 20240315 143000)
  */
-export const createAlarmTool: any = {
+export function makeAlarmTool(ctx: SessionContext): any {
+  const { config, sessionId, taskId, messageId } = ctx;
+  return {
   name: "create_alarm",
   label: "Create Alarm",
   description: `在用户设备上创建闹钟。
-
-必需参数：
-- alarmTime: 闹钟时间，格式必须为：YYYYMMDD hhmmss（例如：20240315 143000，表示2024年3月15日14:30:00）
-
-可选参数（针对用户没有提及的参数，如果有默认参数，则发送请求时使用默认参数）：
-- alarmTitle: 闹钟名称/标题，默认为"闹钟"
-- alarmSnoozeDuration: 小睡间隔（分钟），枚举值：5,10,15,20,25,30，默认10
-- alarmSnoozeTotal: 再响次数，枚举值：0,1,3,5,10，默认0（表示不再响）
-- alarmRingDuration: 响铃时长（分钟），枚举值：1,5,10,15,20,30，默认5
-- daysOfWakeType: 闹钟响铃类型，枚举值：0=单次响铃，1=法定节假日，2=每天，3=自定义时间，4=法定工作日，默认0
-- daysOfWeek: 自定义响铃星期，仅当daysOfWakeType=3（自定义时间）时必需且有效，其他情况不要传递此参数。数组或JSON字符串，枚举值：Mon,Tue,Wed,Thu,Fri,Sat,Sun。注意：仅支持长度为1的数组，如果需要一周中不同的几天，需要多次调用此工具
 
 注意事项：
 a. 操作超时时间为60秒，请勿重复调用此工具，如果超时或失败，最多重试一次。
@@ -45,7 +36,7 @@ b. 使用该工具之前需获取当前真实时间
     properties: {
       alarmTime: {
         type: "string",
-        description: "闹钟时间，格式必须为：YYYYMMDD hhmmss（例如：20240315 143000）",
+        description: "闹钟时间，格式必须为：YYYYMMDD hhmmss（例如：20240315 143000，表示2024年3月15日14:30:00）",
       },
       alarmTitle: {
         type: "string",
@@ -57,7 +48,7 @@ b. 使用该工具之前需获取当前真实时间
       },
       alarmSnoozeTotal: {
         type: "number",
-        description: "再响次数，枚举值：0,1,3,5,10，默认0",
+        description: "再响次数，枚举值：0,1,3,5,10，默认0（表示不再响）",
       },
       alarmRingDuration: {
         type: "number",
@@ -65,12 +56,12 @@ b. 使用该工具之前需获取当前真实时间
       },
       daysOfWakeType: {
         type: "number",
-        description: "闹钟响铃类型：0=单次，1=法定节假日，2=每天，3=自定义，4=法定工作日，默认0",
+        description: "闹钟响铃类型，枚举值：0=单次响铃，1=法定节假日，2=每天，3=自定义时间，4=法定工作日，默认0",
       },
       daysOfWeek: {
         // 不指定 type，允许传入数组或 JSON 字符串
         // 具体的类型验证和转换在 execute 函数内部进行
-        description: "自定义响铃星期（仅当daysOfWakeType=3时需要，其他情况不要传递），数组或JSON字符串，枚举值：Mon,Tue,Wed,Thu,Fri,Sat,Sun。注意：仅支持长度为1的数组，如果需要一周中不同的几天，需要多次调用此工具",
+        description: "自定义响铃星期，仅当daysOfWakeType=3（自定义时间）时必需且有效，其他情况不要传递此参数。数组或JSON字符串，枚举值：Mon,Tues,Wed,Thur,Fri,Sat,Sun。",
       },
     },
     required: ["alarmTime"],
@@ -183,11 +174,6 @@ b. 使用该工具之前需获取当前真实时间
         throw new Error("daysOfWeek array cannot be empty");
       }
 
-      // 验证数组长度必须为1
-      if (normalizedDaysOfWeek.length !== 1) {
-        throw new Error("daysOfWeek 仅支持长度为1的数组。如果需要一周中不同的几天，需要多次调用此工具");
-      }
-
       // Validate each day
       for (const day of normalizedDaysOfWeek) {
         if (typeof day !== "string" || !DAYS_OF_WEEK_VALUES.includes(day)) {
@@ -203,16 +189,6 @@ b. 使用该工具之前需获取当前真实时间
       // Explicitly set to empty array
       daysOfWeek = [];
     }
-
-    // Get session context
-    const sessionContext = getCurrentSessionContext();
-
-    if (!sessionContext) {
-      throw new Error("No active XY session found. Create alarm tool can only be used during an active conversation.");
-    }
-
-
-    const { config, sessionId, taskId, messageId } = sessionContext;
 
     // Get WebSocket manager
     const wsManager = getXYWebSocketManager(config);
@@ -322,6 +298,7 @@ b. 使用该工具之前需获取当前真实时间
     });
   },
 };
+}
 
 /**
  * Parse alarmTime string (YYYYMMDD hhmmss) to timestamp in milliseconds

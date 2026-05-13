@@ -1,6 +1,5 @@
 // Reply dispatcher - completely following feishu/reply-dispatcher.ts pattern
 import type { ClawdbotConfig, RuntimeEnv, ReplyPayload } from "openclaw/plugin-sdk";
-import { createReplyPrefixContext } from "openclaw/plugin-sdk";
 import { getXYRuntime } from "./runtime.js";
 import { sendA2AResponse, sendStatusUpdate, sendReasoningTextUpdate } from "./formatter.js";
 import { resolveXYConfig } from "./config.js";
@@ -8,6 +7,7 @@ import { getCurrentTaskId, getCurrentMessageId } from "./task-manager.js";
 import type { XYChannelConfig } from "./types.js";
 import fs from "fs/promises";
 import path from "path";
+import { logger } from "./utils/logger.js";
 
 export interface CreateXYReplyDispatcherParams {
   cfg: ClawdbotConfig;
@@ -19,34 +19,40 @@ export interface CreateXYReplyDispatcherParams {
   isSteerFollower?: boolean;  // 🔑 新增：标记是否是steer模式的第二条消息
 }
 
+const TEMP_FILE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+
 /**
- * 清理 /tmp/xy_channel 目录中的所有文件
+ * 清理 /tmp/xy_channel 目录中超过 24 小时的旧文件
  */
-async function cleanupTempDir(tempDir: string = "/tmp/xy_channel"): Promise<void> {
+export async function cleanupStaleTempFiles(tempDir: string = "/tmp/xy_channel"): Promise<void> {
   try {
     const stats = await fs.stat(tempDir).catch(() => null);
     if (!stats?.isDirectory()) {
-      return; // 目录不存在，直接返回
+      return;
     }
 
     const files = await fs.readdir(tempDir);
+    const now = Date.now();
     let cleanedCount = 0;
 
     for (const file of files) {
       const filePath = path.join(tempDir, file);
       try {
-        await fs.unlink(filePath);
-        cleanedCount++;
+        const fileStat = await fs.stat(filePath);
+        if (now - fileStat.mtimeMs > TEMP_FILE_TTL_MS) {
+          await fs.unlink(filePath);
+          cleanedCount++;
+        }
       } catch (err) {
-        // 忽略单个文件删除失败，继续处理其他文件
+        // 忽略单个文件处理失败
       }
     }
 
     if (cleanedCount > 0) {
-      console.log(`[CLEANUP] 🧹 Cleaned ${cleanedCount} files from ${tempDir}`);
+      logger.log(`[CLEANUP] 🧹 Cleaned ${cleanedCount} stale files (>${TEMP_FILE_TTL_MS / 1000 / 3600}h) from ${tempDir}`);
     }
   } catch (err) {
-    console.error(`[CLEANUP] ❌ Failed to cleanup temp dir:`, err);
+    logger.error(`[CLEANUP] ❌ Failed to cleanup temp dir:`, err);
   }
 }
 
@@ -61,9 +67,7 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
   const error = runtime?.error ?? console.error;
 
   log(`[DISPATCHER-CREATE] ******* Creating dispatcher *******`);
-  log(`[DISPATCHER-CREATE]   - sessionId: ${sessionId}`);
   log(`[DISPATCHER-CREATE]   - taskId: ${taskId}`);
-  log(`[DISPATCHER-CREATE]   - messageId: ${messageId}`);
   log(`[DISPATCHER-CREATE]   - isSteerFollower: ${isSteerFollower ?? false}`);
 
   // 初始taskId和messageId（作为fallback）
@@ -84,7 +88,12 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
 
   const core = getXYRuntime();
   const config: XYChannelConfig = resolveXYConfig(cfg);
-  const prefixContext = createReplyPrefixContext({ cfg, agentId: accountId });
+  // Simplified prefix context for single-account Xiaoyi channel
+  const prefixContext = {
+    responsePrefix: undefined,
+    responsePrefixContextProvider: undefined,
+    onModelSelected: undefined,
+  };
 
   let statusUpdateInterval: NodeJS.Timeout | null = null;
   let hasSentResponse = false;
@@ -113,6 +122,7 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
         messageId: currentMessageId,  // 🔑 动态messageId
         text: "任务正在处理中，请稍候~",
         state: "working",
+        runtime,
       }).catch((err) => {
         error(`Failed to send status update:`, err);
       });
@@ -191,6 +201,7 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
               messageId: currentMessageId,
               text: "处理失败，请稍后重试",
               state: "failed",
+              runtime,
             });
           } catch (statusError) {
             error(`Failed to send error status:`, statusError);
@@ -229,6 +240,7 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
               messageId: currentMessageId,
               text: "任务处理已完成~",
               state: "completed",
+              runtime,
             });
             log(`[ON_IDLE] ✅ Sent completion status update`);
 
@@ -241,6 +253,7 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
               text: accumulatedText,
               append: false,
               final: true,
+              runtime,
             });
             finalSent = true;
             log(`[ON_IDLE] ✅ Sent final response with taskId=${currentTaskId}`);
@@ -258,6 +271,7 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
               messageId: currentMessageId,
               text: "任务处理中断了~",
               state: "failed",
+              runtime,
             });
             log(`[ON_IDLE] ✅ Sent failure status update`);
 
@@ -269,16 +283,18 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
               text: "任务执行异常，请重试~",
               append: false,
               final: true,
+              errorCode: 99921111,
+              errorMessage: "任务执行异常，请重试",
+              runtime,
             });
             finalSent = true;
-            log(`[ON_IDLE] ✅ Sent error response`);
+            log(`[ON_IDLE] ✅ Sent error response with code: 99921111`);
           } catch (err) {
             error(`[ON_IDLE] Failed to send error response:`, err);
           }
         }
 
         stopStatusInterval();
-        void cleanupTempDir();
       },
 
       onCleanup: () => {
@@ -306,6 +322,14 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
 
         if (phase === "start") {
           const toolName = name || "unknown";
+
+          // call_device_tool 由自身 execute() 内部发送具体子工具名的状态更新
+          // get_xxx_tool_schema 是给 LLM 查 schema 用的，无需向用户展示
+          if (toolName === "call_device_tool" || toolName.endsWith("_tool_schema") || toolName === "huawei_id_tool") {
+            log(`[TOOL START] Skipping generic status for ${toolName}`);
+            return;
+          }
+
           try {
             await sendStatusUpdate({
               config,
@@ -314,6 +338,7 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
               messageId: currentMessageId,
               text: `正在使用工具: ${toolName}...`,
               state: "working",
+              runtime,
             });
             log(`[TOOL START] ✅ Sent status update for tool start: ${toolName}`);
           } catch (err) {
@@ -346,6 +371,7 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
               messageId: currentMessageId,
               text: resultText,
               state: "working",
+              runtime,
             });
             log(`[TOOL RESULT] ✅ Sent tool result as status update`);
           }

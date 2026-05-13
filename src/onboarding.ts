@@ -1,10 +1,12 @@
 // XY Channel Onboarding Adapter
-// Implements OpenClaw's ChannelOnboardingAdapter interface for Xiaoyi A2A protocol
+// NOTE: Onboarding/Setup not implemented for Xiaoyi (single-account, simple config)
+// This file is kept for future reference but not currently used
 import type {
-  ChannelOnboardingAdapter,
   ClawdbotConfig,
-  WizardPrompter,
 } from "openclaw/plugin-sdk";
+
+// Simplified types for future use
+type WizardPrompter = any;
 
 const channel = "xiaoyi-channel" as const;
 
@@ -201,10 +203,10 @@ async function configure({
 }
 
 /**
- * XY Channel Onboarding Adapter
- * Implements the ChannelOnboardingAdapter interface for OpenClaw's onboarding system
+ * XY Channel Onboarding Adapter (DISABLED - not currently used)
+ * NOTE: This is kept for future reference. Xiaoyi uses simple single-account config.
  */
-export const xyOnboardingAdapter: ChannelOnboardingAdapter = {
+export const xyOnboardingAdapter: any = {
   channel,
 
   getStatus,

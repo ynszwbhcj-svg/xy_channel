@@ -8,7 +8,6 @@ import { logger } from "./utils/logger.js";
  * Download a file from URL to local path.
  */
 export async function downloadFile(url: string, destPath: string): Promise<void> {
-  logger.debug(`Downloading file from ${url} to ${destPath}`);
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 30000); // 30 seconds timeout
@@ -23,13 +22,12 @@ export async function downloadFile(url: string, destPath: string): Promise<void>
     const buffer = Buffer.from(arrayBuffer);
     await fs.writeFile(destPath, buffer);
 
-    logger.debug(`File downloaded successfully: ${destPath}`);
   } catch (error) {
     if (error.name === 'AbortError') {
-      logger.error(`Download timeout (30s) for ${url}`);
+      logger.log(`Download timeout (30s) for ${url}`);
       throw new Error(`Download timeout after 30 seconds`);
     }
-    logger.error(`Failed to download file from ${url}:`, error);
+    logger.log(`Failed to download file from ${url}:`);
     throw error;
   } finally {
     clearTimeout(timeout);
@@ -64,7 +62,7 @@ export async function downloadFilesFromParts(
         mimeType,
       });
     } catch (error) {
-      logger.error(`Failed to download file ${name}:`, error);
+      logger.log(`Failed to download file ${name}:`);
       // Continue with other files
     }
   }

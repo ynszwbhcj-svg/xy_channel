@@ -2,7 +2,7 @@
 import type { ChannelAgentTool } from "openclaw/plugin-sdk";
 import { getXYWebSocketManager } from "../client.js";
 import { sendCommand } from "../formatter.js";
-import { getCurrentSessionContext } from "./session-manager.js";
+import type { SessionContext } from "./session-manager.js";
 import { logger } from "../utils/logger.js";
 import type { A2ADataEvent } from "../types.js";
 
@@ -23,7 +23,9 @@ class ToolInputError extends Error {
  * XY note tool - creates a note on user's device.
  * Requires title and content parameters.
  */
-export const noteTool: any = {
+export function createNoteTool(ctx: SessionContext): any {
+  const { config, sessionId, taskId, messageId } = ctx;
+  return {
   name: "create_note",
   label: "Create Note",
   description: `在用户设备上创建备忘录。需要提供备忘录标题和内容。
@@ -59,14 +61,6 @@ export const noteTool: any = {
     if (typeof params.content !== "string" || !params.content) {
       throw new ToolInputError("缺少必填参数 content（备忘录内容）");
     }
-
-    // Get session context
-    const sessionContext = getCurrentSessionContext();
-    if (!sessionContext) {
-      throw new Error("No active XY session found. Note tool can only be used during an active conversation.");
-    }
-
-    const { config, sessionId, taskId, messageId } = sessionContext;
 
     // Get WebSocket manager
     const wsManager = getXYWebSocketManager(config);
@@ -155,3 +149,4 @@ export const noteTool: any = {
     });
   },
 };
+}

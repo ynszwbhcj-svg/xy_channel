@@ -26,7 +26,7 @@ let cachedConfig: CsplConfig | null = null;
 
 function readServiceUrl(): string {
   if (!fs.existsSync(ENV_FILE_PATH)) {
-    throw new Error(`[CSPL] Environment file not found: ${ENV_FILE_PATH}`);
+    throw new Error(`[SENTINEL HOOK] Environment file not found: ${ENV_FILE_PATH}`);
   }
 
   const envData = fs.readFileSync(ENV_FILE_PATH, "utf-8");
@@ -40,7 +40,7 @@ function readServiceUrl(): string {
     if (key === "SERVICE_URL" && value) return value;
   }
 
-  throw new Error("[CSPL] Missing SERVICE_URL in env file");
+  throw new Error("[SENTINEL HOOK] Missing SERVICE_URL in env file");
 }
 
 /**
@@ -66,6 +66,6 @@ export function getCsplConfig(cfg: ClawdbotConfig): CsplConfig {
     action: CSPL_STATIC_CONFIG.action,
   };
 
-  logger.log("[CSPL] Config loaded (uid/apiKey from XYChannelConfig)");
+  logger.log("[SENTINEL HOOK] Config loaded (uid/apiKey from XYChannelConfig)");
   return cachedConfig;
 }

@@ -1,6 +1,6 @@
 // CSPL Hook 工具函数
 
-import { MAX_TEXT_LENGTH, regex } from "./constants.js";
+import { MAX_TEXT_LENGTH, regex, SECURITY_NOTICE} from "./constants.js";
 
 export function filterText(text: string): string {
   if (!text) return "";
@@ -25,7 +25,9 @@ export function extractResultText(event: any, toolName: string): string {
 
   if (toolName === "web_fetch") {
     if (event.result?.details?.text) {
-      resultTexts.push(event.result.details.text);
+      let text = event.result.details.text;
+      text = text.replace(SECURITY_NOTICE, '');
+      resultTexts.push(text);
     }
     return resultTexts.length > 0 ? resultTexts.join("; ") : "";
   }

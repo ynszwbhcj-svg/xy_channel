@@ -2,7 +2,7 @@
 import type { ChannelAgentTool } from "openclaw/plugin-sdk";
 import { getXYWebSocketManager } from "../client.js";
 import { sendCommand } from "../formatter.js";
-import { getCurrentSessionContext } from "./session-manager.js";
+import type { SessionContext } from "./session-manager.js";
 import { logger } from "../utils/logger.js";
 import type { A2ADataEvent } from "../types.js";
 
@@ -10,18 +10,20 @@ import type { A2ADataEvent } from "../types.js";
  * XY search file tool - searches files on user's device file system.
  * Returns matching files based on keyword search in file name or content.
  */
-export const searchFileTool: any = {
+export function createSearchFileTool(ctx: SessionContext): any {
+  const { config, sessionId, taskId, messageId } = ctx;
+  return {
   name: "search_file",
   label: "Search File",
-  description: `搜索手机文件系统的文件。
+  description: `搜索用户设备文件系统的文件。
 
-【重要】使用约束：此工具仅在用户显著说明要从手机搜索时才执行，例如：
-- "从我手机里面搜索xxxx"
+【重要】使用约束：此工具仅在用户显著说明要从手机/PC等用户设备搜索时才执行，例如：
+- "从我手机/鸿蒙PC里面搜索xxxx"
 - "从手机文件系统找一下xxxx"
 - "在手机上查找文件xxxx"
 - "搜索手机里的文件"
 
-如果用户没有明确说明从手机搜索（如仅说"搜索文件"、"找一下xxxx"），应默认从 openclaw 本地的文件系统查询，不要调用此工具。
+如果用户没有明确说明从手机或者PC搜索（如仅说"搜索文件"、"找一下xxxx"），应默认从当前runtime运行环境的本地的文件系统查询，不要调用此工具。
 
 功能说明：根据关键词搜索文件名称或内容，返回匹配的文件列表（包括文件名、路径、大小、修改时间等信息）。
 
@@ -44,16 +46,6 @@ export const searchFileTool: any = {
       throw new Error("Missing required parameter: query must be a non-empty string");
     }
 
-
-    // Get session context
-    const sessionContext = getCurrentSessionContext();
-
-    if (!sessionContext) {
-      throw new Error("No active XY session found. Search file tool can only be used during an active conversation.");
-    }
-
-
-    const { config, sessionId, taskId, messageId } = sessionContext;
 
     // Get WebSocket manager
     const wsManager = getXYWebSocketManager(config);
@@ -148,5 +140,6 @@ export const searchFileTool: any = {
           reject(error);
         });
     });
-  },
-};
+    },
+  };
+}

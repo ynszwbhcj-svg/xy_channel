@@ -2,7 +2,7 @@
 import type { ChannelAgentTool } from "openclaw/plugin-sdk";
 import { getXYWebSocketManager } from "../client.js";
 import { sendCommand } from "../formatter.js";
-import { getCurrentSessionContext } from "./session-manager.js";
+import type { SessionContext } from "./session-manager.js";
 import { logger } from "../utils/logger.js";
 import type { A2ADataEvent } from "../types.js";
 
@@ -10,7 +10,9 @@ import type { A2ADataEvent } from "../types.js";
  * XY send message tool - sends SMS message on user's device.
  * Requires phoneNumber (with +86 prefix) and content parameters.
  */
-export const sendMessageTool: any = {
+export function createSendMessageTool(ctx: SessionContext): any {
+  const { config, sessionId, taskId, messageId } = ctx;
+  return {
   name: "send_message",
   label: "Send Message",
   description: "通过手机发送短信。需要提供接收方手机号码和短信内容。手机号码会自动添加+86前缀（如果没有的话）。注意:操作超时时间为60秒,请勿重复调用此工具,如果超时或失败,最多重试一次。回复约束：如果工具返回没有授权或者其他报错，只需要完整描述没有授权或者其他报错内容即可，不需要主动给用户提供解决方案，例如告诉用户如何授权，如何解决报错等都是不需要的，请严格遵守。",
@@ -55,16 +57,6 @@ export const sendMessageTool: any = {
       phoneNumber = `+86${phoneNumber}`;
     }
 
-
-    // Get session context
-    const sessionContext = getCurrentSessionContext();
-
-    if (!sessionContext) {
-      throw new Error("No active XY session found. Send message tool can only be used during an active conversation.");
-    }
-
-
-    const { config, sessionId, taskId, messageId } = sessionContext;
 
     // Get WebSocket manager
     const wsManager = getXYWebSocketManager(config);
@@ -161,3 +153,4 @@ export const sendMessageTool: any = {
     });
   },
 };
+}

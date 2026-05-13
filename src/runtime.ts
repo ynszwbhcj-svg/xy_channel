@@ -1,23 +1,11 @@
-// Global runtime management - completely following feishu pattern
-import type { PluginRuntime } from "openclaw/plugin-sdk";
+// Global runtime management - using createPluginRuntimeStore for cross-module safety
+import type { PluginRuntime } from "openclaw/plugin-sdk/core";
+import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
 
-let runtime: PluginRuntime | null = null;
+const { setRuntime: setXYRuntime, getRuntime: getXYRuntime } =
+  createPluginRuntimeStore<PluginRuntime>({
+    pluginId: "xiaoyi-channel",
+    errorMessage: "Xiaoyi runtime not initialized. Call setXYRuntime() first.",
+  });
 
-/**
- * Set the Xiaoyi channel runtime instance.
- * This should be called once during plugin initialization.
- */
-export function setXYRuntime(next: PluginRuntime): void {
-  runtime = next;
-}
-
-/**
- * Get the current Xiaoyi channel runtime instance.
- * Throws an error if the runtime has not been initialized.
- */
-export function getXYRuntime(): PluginRuntime {
-  if (!runtime) {
-    throw new Error("Xiaoyi runtime not initialized. Call setXYRuntime() first.");
-  }
-  return runtime;
-}
+export { getXYRuntime, setXYRuntime };

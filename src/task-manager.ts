@@ -15,8 +15,13 @@ interface TaskIdBinding {
  * Session到活跃TaskId的映射
  * Key: sessionId (注意：这里用sessionId，不是sessionKey)
  * Value: TaskIdBinding
+ * Uses globalThis to ensure a single Map across all module copies.
  */
-const activeTaskIds = new Map<string, TaskIdBinding>();
+const _g = globalThis as Record<string, unknown>;
+if (!_g.__xyActiveTaskIds) {
+  _g.__xyActiveTaskIds = new Map<string, TaskIdBinding>();
+}
+const activeTaskIds = _g.__xyActiveTaskIds as Map<string, TaskIdBinding>;
 
 /**
  * 注册或更新session的活跃taskId
@@ -157,6 +162,13 @@ export function hasActiveTask(sessionId: string): boolean {
  */
 export function getTaskIdBinding(sessionId: string): TaskIdBinding | null {
   return activeTaskIds.get(sessionId) ?? null;
+}
+
+/**
+ * 获取所有活跃的 task bindings（用于 gateway_stop 通知等场景）
+ */
+export function getAllActiveTaskBindings(): TaskIdBinding[] {
+  return Array.from(activeTaskIds.values());
 }
 
 /**

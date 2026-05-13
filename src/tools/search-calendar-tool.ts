@@ -2,7 +2,7 @@
 import type { ChannelAgentTool } from "openclaw/plugin-sdk";
 import { getXYWebSocketManager } from "../client.js";
 import { sendCommand } from "../formatter.js";
-import { getCurrentSessionContext } from "./session-manager.js";
+import type { SessionContext } from "./session-manager.js";
 import { logger } from "../utils/logger.js";
 import type { A2ADataEvent } from "../types.js";
 
@@ -17,7 +17,9 @@ import type { A2ADataEvent } from "../types.js";
  * - For evening: 18:00:00 to 24:00:00
  * - For a specific time: use ±1 hour range (e.g., for 3PM, use 14:00:00 to 16:00:00)
  */
-export const searchCalendarTool: any = {
+export function createSearchCalendarTool(ctx: SessionContext): any {
+  const { config, sessionId, taskId, messageId } = ctx;
+  return {
   name: "search_calendar_event",
   label: "Search Calendar Event",
   description: `检索用户日历中的日程安排。根据时间范围和可选的日程标题进行检索。时间格式必须为：YYYYMMDD hhmmss（例如：20240115 143000）。
@@ -32,6 +34,8 @@ export const searchCalendarTool: any = {
 注意：
 a. 该工具执行时间较长（最多60秒），请勿重复调用，超时或失败时最多重试一次。
 b. 使用该工具之前需获取当前真实时间
+c. 该工具仅支持不超过28天时间范围的日程查询，如果时间区间大于该窗口需要拆分多个时间窗口进行多次查询
+d. 如果查询结果返回-303，代表查询结果为空
 
 回复约束：如果工具返回没有授权或者其他报错，只需要完整描述没有授权或者其他报错内容即可，不需要主动给用户提供解决方案，例如告诉用户如何授权，如何解决报错等都是不需要的，请严格遵守。
 `,
@@ -105,16 +109,6 @@ b. 使用该工具之前需获取当前真实时间
       throw new Error("Invalid time format. Required format: YYYYMMDD hhmmss (e.g., 20240115 143000)");
     }
 
-
-    // Get session context
-    const sessionContext = getCurrentSessionContext();
-
-    if (!sessionContext) {
-      throw new Error("No active XY session found. Search calendar tool can only be used during an active conversation.");
-    }
-
-
-    const { config, sessionId, taskId, messageId } = sessionContext;
 
     // Get WebSocket manager
     const wsManager = getXYWebSocketManager(config);
@@ -215,5 +209,6 @@ b. 使用该工具之前需获取当前真实时间
           reject(error);
         });
     });
-  },
-};
+    },
+  };
+}

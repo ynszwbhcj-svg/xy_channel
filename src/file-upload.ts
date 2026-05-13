@@ -2,6 +2,8 @@
 // OSMS file upload implementation
 import fetch from "node-fetch";
 import fs from "fs/promises";
+import os from "os";
+import { logger } from "./utils/logger.js";
 import path from "path";
 import { calculateSHA256 } from "./utils/crypto.js";
 import type {
@@ -10,6 +12,24 @@ import type {
   FileUploadCompleteRequest,
   FileUploadCompleteResponse,
 } from "./types.js";
+
+function isRemoteUrl(filePath: string): boolean {
+  return filePath.startsWith("http://") || filePath.startsWith("https://");
+}
+
+async function downloadToTempFile(url: string): Promise<string> {
+  logger.log(`[XY File Upload] Downloading remote file: ${url}`);
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`Failed to download remote file: HTTP ${response.status}`);
+  }
+  const buffer = await response.buffer();
+  const urlFileName = path.basename(new URL(url).pathname) || "download";
+  const tempPath = path.join(os.tmpdir(), `xy-upload-${Date.now()}-${urlFileName}`);
+  await fs.writeFile(tempPath, buffer);
+  logger.log(`[XY File Upload] Downloaded to temp file: ${tempPath}`);
+  return tempPath;
+}
 
 /**
  * Service for uploading files to XY file storage.
@@ -27,17 +47,26 @@ export class XYFileUploadService {
    * Returns the objectId (as fileId) for use in A2A messages.
    */
   async uploadFile(filePath: string, objectType: string = "TEMPORARY_MATERIAL_DOC"): Promise<string> {
-    console.log(`[XY File Upload] Starting file upload: ${filePath}`);
+    logger.log(`[XY File Upload] Starting file upload: ${filePath}`);
+
+    let localFilePath = filePath;
+    let isTempFile = false;
 
     try {
+      // Handle remote URLs by downloading first
+      if (isRemoteUrl(filePath)) {
+        localFilePath = await downloadToTempFile(filePath);
+        isTempFile = true;
+      }
+
       // Read file
-      const fileBuffer = await fs.readFile(filePath);
-      const fileName = path.basename(filePath);
+      const fileBuffer = await fs.readFile(localFilePath);
+      const fileName = path.basename(localFilePath);
       const fileSha256 = calculateSHA256(fileBuffer);
       const fileSize = fileBuffer.length;
 
       // Phase 1: Prepare
-      console.log(`[XY File Upload] Phase 1: Prepare upload for ${fileName}`);
+      logger.log(`[XY File Upload] Phase 1: Prepare upload for ${fileName}`);
       const prepareResp = await fetch(`${this.baseUrl}/osms/v1/file/manager/prepare`, {
         method: "POST",
         headers: {
@@ -64,17 +93,15 @@ export class XYFileUploadService {
       }
 
       const prepareData = await prepareResp.json() as FileUploadPrepareResponse;
-      console.log(`[XY File Upload] Prepare response:`, JSON.stringify(prepareData, null, 2));
 
       if (prepareData.code !== "0") {
         throw new Error(`Prepare failed: ${prepareData.desc}`);
       }
 
       const { objectId, draftId, uploadInfos } = prepareData;
-      console.log(`[XY File Upload] Prepare complete: objectId=${objectId}, draftId=${draftId}`);
 
       // Phase 2: Upload
-      console.log(`[XY File Upload] Phase 2: Upload file data`);
+      logger.log(`[XY File Upload] Phase 2: Upload file data`);
       const uploadInfo = uploadInfos[0]; // Single-part upload
 
       const uploadResp = await fetch(uploadInfo.url, {
@@ -83,19 +110,15 @@ export class XYFileUploadService {
         body: fileBuffer,
       });
 
-      console.log(`[XY File Upload] Upload response status: ${uploadResp.status}, url: ${uploadInfo.url}`);
-      console.log(`[XY File Upload] Upload response headers:`, JSON.stringify(Object.fromEntries(uploadResp.headers.entries()), null, 2));
-
       if (!uploadResp.ok) {
         const uploadErrorText = await uploadResp.text();
-        console.log(`[XY File Upload] Upload error response:`, uploadErrorText);
         throw new Error(`Upload failed: HTTP ${uploadResp.status}`);
       }
 
-      console.log(`[XY File Upload] Upload complete`);
+      logger.log(`[XY File Upload] Upload complete`);
 
       // Phase 3: Complete
-      console.log(`[XY File Upload] Phase 3: Complete upload`);
+      logger.log(`[XY File Upload] Phase 3: Complete upload`);
       const completeResp = await fetch(`${this.baseUrl}/osms/v1/file/manager/complete`, {
         method: "POST",
         headers: {
@@ -115,13 +138,16 @@ export class XYFileUploadService {
       }
 
       const completeData = await completeResp.json();
-      console.log(`[XY File Upload] Complete response:`, JSON.stringify(completeData, null, 2));
 
-      console.log(`[XY File Upload] File upload successful: ${fileName} → objectId=${objectId}`);
+      logger.log(`[XY File Upload] File upload successful: ${fileName} → objectId=${objectId}`);
       return objectId;
     } catch (error) {
-      console.error(`[XY File Upload] File upload failed for ${filePath}:`, error);
-      return "";
+      logger.error(`[XY File Upload] File upload failed for ${filePath}:`, error);
+      throw error;
+    } finally {
+      if (isTempFile) {
+        try { await fs.unlink(localFilePath); } catch {}
+      }
     }
   }
 
@@ -130,17 +156,24 @@ export class XYFileUploadService {
    * Uses completeAndQuery endpoint to get the file URL directly.
    */
   async uploadFileAndGetUrl(filePath: string, objectType: string = "TEMPORARY_MATERIAL_DOC"): Promise<string> {
-    console.log(`[XY File Upload] Starting file upload with URL retrieval: ${filePath}`);
+    let localFilePath = filePath;
+    let isTempFile = false;
 
     try {
+      // Handle remote URLs by downloading first
+      if (isRemoteUrl(filePath)) {
+        localFilePath = await downloadToTempFile(filePath);
+        isTempFile = true;
+      }
+
       // Read file
-      const fileBuffer = await fs.readFile(filePath);
-      const fileName = path.basename(filePath);
+      const fileBuffer = await fs.readFile(localFilePath);
+      const fileName = path.basename(localFilePath);
       const fileSha256 = calculateSHA256(fileBuffer);
       const fileSize = fileBuffer.length;
 
       // Phase 1: Prepare
-      console.log(`[XY File Upload] Phase 1: Prepare upload for ${fileName}`);
+      logger.log(`[XY File Upload] Phase 1: Prepare upload for ${fileName}`);
       const prepareResp = await fetch(`${this.baseUrl}/osms/v1/file/manager/prepare`, {
         method: "POST",
         headers: {
@@ -167,17 +200,16 @@ export class XYFileUploadService {
       }
 
       const prepareData = await prepareResp.json() as FileUploadPrepareResponse;
-      console.log(`[XY File Upload] Prepare response:`, JSON.stringify(prepareData, null, 2));
 
       if (prepareData.code !== "0") {
         throw new Error(`Prepare failed: ${prepareData.desc}`);
       }
 
       const { objectId, draftId, uploadInfos } = prepareData;
-      console.log(`[XY File Upload] Prepare complete: objectId=${objectId}, draftId=${draftId}`);
+      logger.log(`[XY File Upload] Prepare complete: objectId=${objectId}, draftId=${draftId}`);
 
       // Phase 2: Upload
-      console.log(`[XY File Upload] Phase 2: Upload file data`);
+      logger.log(`[XY File Upload] Phase 2: Upload file data`);
       const uploadInfo = uploadInfos[0]; // Single-part upload
 
       const uploadResp = await fetch(uploadInfo.url, {
@@ -186,18 +218,17 @@ export class XYFileUploadService {
         body: fileBuffer,
       });
 
-      console.log(`[XY File Upload] Upload response status: ${uploadResp.status}`);
+      logger.log(`[XY File Upload] Upload response status: ${uploadResp.status}`);
 
       if (!uploadResp.ok) {
         const uploadErrorText = await uploadResp.text();
-        console.log(`[XY File Upload] Upload error response:`, uploadErrorText);
         throw new Error(`Upload failed: HTTP ${uploadResp.status}`);
       }
 
-      console.log(`[XY File Upload] Upload complete`);
+      logger.log(`[XY File Upload] Upload complete`);
 
       // Phase 3: CompleteAndQuery - get file URL
-      console.log(`[XY File Upload] Phase 3: CompleteAndQuery to get file URL`);
+      logger.log(`[XY File Upload] Phase 3: CompleteAndQuery to get file URL`);
       const completeResp = await fetch(`${this.baseUrl}/osms/v1/file/manager/completeAndQuery`, {
         method: "POST",
         headers: {
@@ -216,8 +247,7 @@ export class XYFileUploadService {
         throw new Error(`CompleteAndQuery failed: HTTP ${completeResp.status}`);
       }
 
-      const completeData = await completeResp.json();
-      console.log(`[XY File Upload] CompleteAndQuery response:`, JSON.stringify(completeData, null, 2));
+      const completeData = await completeResp.json() as any;
 
       // Extract file URL from response
       const fileUrl = completeData?.fileDetailInfo?.url || "";
@@ -225,11 +255,15 @@ export class XYFileUploadService {
         throw new Error("No file URL returned from completeAndQuery");
       }
 
-      console.log(`[XY File Upload] File upload successful: ${fileName} → URL=${fileUrl}`);
+      logger.log(`[XY File Upload] File upload successful`);
       return fileUrl;
     } catch (error) {
-      console.error(`[XY File Upload] File upload with URL retrieval failed for ${filePath}:`, error);
+      logger.error(`[XY File Upload] File upload with URL retrieval failed for ${filePath}:`, error);
       throw error;
+    } finally {
+      if (isTempFile) {
+        try { await fs.unlink(localFilePath); } catch {}
+      }
     }
   }
 
@@ -251,7 +285,7 @@ export class XYFileUploadService {
           fileName: path.basename(filePath),
         });
       } catch (error) {
-        console.error(`[XY File Upload] Failed to upload ${filePath}, skipping:`, error);
+        logger.error(`[XY File Upload] Failed to upload ${filePath}, skipping:`, error);
         // Continue with other files
       }
     }
