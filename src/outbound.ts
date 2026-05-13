@@ -187,6 +187,7 @@ export const xyOutbound: ChannelOutboundAdapter = {
     // Parse to: "sessionId::taskId"
     const parts = to.split("::");
     if (parts.length !== 2) {
+      logger.error(`Invalid to format: "${to}". Expected "sessionId::taskId"`);
       throw new Error(`Invalid to format: "${to}". Expected "sessionId::taskId"`);
     }
     const [sessionId, taskId] = parts;
@@ -203,6 +204,7 @@ export const xyOutbound: ChannelOutboundAdapter = {
 
     // Validate mediaUrl
     if (!mediaUrl) {
+      logger.error("mediaUrl is required for sendMedia");
       throw new Error("mediaUrl is required for sendMedia");
     }
 
@@ -211,6 +213,7 @@ export const xyOutbound: ChannelOutboundAdapter = {
 
     // Check if fileId is empty (should not happen if uploadFile throws on failure)
     if (!fileId) {
+      logger.error(`File upload returned empty fileId for: ${mediaUrl}`);
       throw new Error(`File upload returned empty fileId for: ${mediaUrl}`);
     }
 

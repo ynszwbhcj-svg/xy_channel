@@ -1,4 +1,5 @@
 import type { OutboundWebSocketMessage } from "./types.js";
+import { logger } from "./utils/logger.js";
 
 const MAX_QUEUE_SIZE = 1000;
 
@@ -11,7 +12,7 @@ export class MessageQueue {
   private log: (msg: string, ...args: any[]) => void;
 
   constructor(log?: (msg: string, ...args: any[]) => void) {
-    this.log = log ?? console.log;
+    this.log = log ?? ((msg, ...args) => logger.log(msg, ...args));
   }
 
   /** Enqueue a message. Drops oldest if over limit. */

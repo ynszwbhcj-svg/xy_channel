@@ -35,7 +35,7 @@ const _g = globalThis as Record<string, unknown>;
 if (!_g.__xyActiveSessions) {
   _g.__xyActiveSessions = new Map<string, SessionContextWithRef>();
 }
-const activeSessions = _g.__xyActiveSessions as Map<string, SessionContextWithRef>;
+export const activeSessions = _g.__xyActiveSessions as Map<string, SessionContextWithRef>;
 
 // Track the most recently registered sessionKey for reliable fallback
 // when AsyncLocalStorage context is lost across openclaw's embedded runner boundary.
@@ -46,7 +46,7 @@ const getLastRegisteredKey = () => _g.__xyLastRegisteredSessionKey as string;
 const setLastRegisteredKey = (key: string) => { _g.__xyLastRegisteredSessionKey = key; };
 
 // AsyncLocalStorage for thread-safe session context isolation
-const asyncLocalStorage = new AsyncLocalStorage<SessionContext>();
+export const asyncLocalStorage = new AsyncLocalStorage<SessionContext>();
 
 /**
  * Register a session context for tool access.
@@ -142,7 +142,6 @@ export function runWithSessionContext<T>(
   context: SessionContext,
   callback: () => Promise<T>
 ): Promise<T> {
-  logger.log(`[SESSION-MGR] 🔵 ALS SET: sessionId=${context.sessionId} taskId=${context.taskId}`);
   return asyncLocalStorage.run(context, callback);
 }
 
@@ -163,10 +162,6 @@ export function getCurrentSessionContext(sessionKey?: string): SessionContext | 
     return enrichWithLatestTaskInfo(alsContext);
   }
 
-  // ALS not available — logging to understand when/why
-  const stack = new Error().stack?.split("\n").slice(2, 5).map(s => s.trim()).join(" | ");
-  logger.log(`[SESSION-MGR] ⚠️ ALS miss, falling back to Map (size=${activeSessions.size}), callers: ${stack}`);
-
   // 2. Fallback: look up from global activeSessions Map
   if (activeSessions.size === 0) {
     return null;
@@ -180,7 +175,6 @@ export function getCurrentSessionContext(sessionKey?: string): SessionContext | 
       return enrichWithLatestTaskInfo(context);
     }
     // sessionKey provided but not found — don't fall back to heuristics
-    logger.log(`[SESSION-MGR] sessionKey "${sessionKey}" not found in activeSessions (size=${activeSessions.size})`);
     return null;
   }
 
@@ -190,7 +184,6 @@ export function getCurrentSessionContext(sessionKey?: string): SessionContext | 
     if (entry) {
       // Check if session is stale
       if (Date.now() - entry.createdAt > SESSION_TTL_MS) {
-        logger.log(`[SESSION-MGR] single session expired, createdAt=${entry.createdAt}, cleaning up`);
         activeSessions.clear();
         return null;
       }
@@ -210,7 +203,6 @@ export function getCurrentSessionContext(sessionKey?: string): SessionContext | 
   if (lastKey) {
     const lastEntry = activeSessions.get(lastKey);
     if (lastEntry) {
-      logger.log(`[SESSION-MGR] 🎯 using lastRegistered session: ${lastKey}`);
       const { refCount, createdAt, ...context } = lastEntry;
       return enrichWithLatestTaskInfo(context);
     }
@@ -241,7 +233,6 @@ export function cleanupAllSessions(): void {
     toolCallNudgeManager.clearSession(key);
   }
   activeSessions.clear();
-  logger.log("[SESSION-MGR] all sessions cleaned up");
 }
 
 /**
@@ -258,9 +249,6 @@ export function cleanupStaleSessions(): number {
       activeSessions.delete(key);
       cleaned++;
     }
-  }
-  if (cleaned > 0) {
-    logger.log(`[SESSION-MGR] cleaned ${cleaned} stale session(s)`);
   }
   return cleaned;
 }

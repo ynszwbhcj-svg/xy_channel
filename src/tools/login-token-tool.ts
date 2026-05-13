@@ -111,19 +111,28 @@ export function createLoginTokenTool(ctx: SessionContext): any {
         try {
           if (existsSync(TOKEN_FILE_PATH)) {
             const content = readFileSync(TOKEN_FILE_PATH, "utf-8");
-            const tokens: Array<{ clientId: string; timestamp: string }> = JSON.parse(content);
+            const tokens: Array<{ clientId: string; timestamp: string; code: string; message: string }> = JSON.parse(content);
             const match = tokens.find((t) => t.clientId === clientId.trim());
             if (match) {
               const tokenTime = Number(match.timestamp);
               const diff = Date.now() - tokenTime;
               if (diff <= TOKEN_VALIDITY_MS) {
                 // (3) Found valid token
-                logger.log(`[LOGIN_TOKEN] Successfully got login token for clientId=${clientId}`);
+                const code = match.code ?? "";
+                let resultText: string;
+                if (code === "0" || code === "") {
+                  resultText = "获取用户授权成功";
+                } else if (code === "400") {
+                  resultText = "小艺App版本较低，获取用户授权失败";
+                } else {
+                  resultText = "获取用户授权失败";
+                }
+                logger.log(`[LOGIN_TOKEN] Got login token for clientId=${clientId}, code=${code}`);
                 resolve({
                   content: [
                     {
                       type: "text",
-                      text: "获取用户授权成功",
+                      text: resultText,
                     },
                   ],
                 });

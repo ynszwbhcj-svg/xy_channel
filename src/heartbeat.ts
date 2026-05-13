@@ -1,5 +1,6 @@
 // Heartbeat management for WebSocket connections
 import WebSocket from "ws";
+import { logger } from "./utils/logger.js";
 
 export interface HeartbeatConfig {
   interval: number; // Heartbeat interval in milliseconds
@@ -29,8 +30,8 @@ export class HeartbeatManager {
     errorFn?: (msg: string, ...args: any[]) => void,
     private onHeartbeatSuccess?: () => void  // ✅ 新增：心跳成功回调
   ) {
-    this.log = logFn ?? console.log;
-    this.error = errorFn ?? console.error;
+    this.log = logFn ?? ((msg, ...args) => logger.log(msg, ...args));
+    this.error = errorFn ?? ((msg, ...args) => logger.error(msg, ...args));
   }
 
   /**

@@ -3,6 +3,7 @@ import type { ChannelAgentTool } from "openclaw/plugin-sdk";
 import { getXYWebSocketManager } from "../client.js";
 import { sendCommand } from "../formatter.js";
 import type { SessionContext } from "./session-manager.js";
+import { getCurrentTaskId } from "../task-manager.js";
 import { logger } from "../utils/logger.js";
 import type { A2ADataEvent } from "../types.js";
 
@@ -82,7 +83,8 @@ export function createSearchPhotoGalleryTool(ctx: SessionContext): any {
     const wsManager = getXYWebSocketManager(config);
 
     // Search for photos
-    const outputs = await searchPhotos(wsManager, config, sessionId, taskId, messageId, params.query);
+    const currentTaskId = getCurrentTaskId(sessionId) ?? taskId;
+    const outputs = await searchPhotos(wsManager, config, sessionId, currentTaskId, messageId, params.query);
 
 
     return {
@@ -147,6 +149,7 @@ async function searchPhotos(
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {
       wsManager.off("data-event", handler);
+      logger.error("超时: 搜索照片超时（60秒）", { sessionId });
       reject(new Error("搜索照片超时（60秒）"));
     }, 60000);
 

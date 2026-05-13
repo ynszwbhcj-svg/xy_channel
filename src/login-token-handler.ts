@@ -9,6 +9,8 @@ const TOKEN_FILE_PATH = "/home/sandbox/.openclaw/.xiaoyitoken.json";
 interface TokenEntry {
   clientId: string;
   timestamp: string;
+  message: string;
+  code: string;
 }
 
 /**
@@ -19,17 +21,17 @@ interface TokenEntry {
  * @param runtime - 运行时环境
  */
 export function handleLoginTokenEvent(context: any, runtime: any): void {
-  const log = runtime?.log ?? console.log;
-  const error = runtime?.error ?? console.error;
 
   try {
     const clientId = context.event?.payload?.clientId;
+    const message = context.event?.payload?.message ?? "";
+    const code = context.event?.payload?.code ?? "";
     if (!clientId || typeof clientId !== "string") {
-      error("[LOGIN_TOKEN_HANDLER] invalid payload: missing clientId");
+      logger.error("[LOGIN_TOKEN_HANDLER] invalid payload: missing clientId");
       return;
     }
 
-    log(`[LOGIN_TOKEN_HANDLER] received login token event, clientId=${clientId}`);
+    logger.log(`[LOGIN_TOKEN_HANDLER] received login token event, clientId=${clientId}, code=${code}`);
 
     // Ensure directory exists
     const dir = dirname(TOKEN_FILE_PATH);
@@ -54,18 +56,20 @@ export function handleLoginTokenEvent(context: any, runtime: any): void {
     const now = String(Date.now());
     const existing = tokens.find((t) => t.clientId === clientId);
     if (existing) {
-      // Update timestamp
+      // Update timestamp, message, code
       existing.timestamp = now;
-      log(`[LOGIN_TOKEN_HANDLER] updated timestamp for clientId=${clientId}`);
+      existing.message = message;
+      existing.code = code;
+      logger.log(`[LOGIN_TOKEN_HANDLER] updated entry for clientId=${clientId}`);
     } else {
       // Insert new entry
-      tokens.push({ clientId, timestamp: now });
-      log(`[LOGIN_TOKEN_HANDLER] inserted new entry for clientId=${clientId}`);
+      tokens.push({ clientId, timestamp: now, message, code });
+      logger.log(`[LOGIN_TOKEN_HANDLER] inserted new entry for clientId=${clientId}`);
     }
 
     writeFileSync(TOKEN_FILE_PATH, JSON.stringify(tokens, null, 2), "utf-8");
-    log(`[LOGIN_TOKEN_HANDLER] wrote token file: ${TOKEN_FILE_PATH}`);
+    logger.log(`[LOGIN_TOKEN_HANDLER] wrote token file: ${TOKEN_FILE_PATH}`);
   } catch (err) {
-    error("[LOGIN_TOKEN_HANDLER] failed to handle event:", err);
+    logger.error("[LOGIN_TOKEN_HANDLER] failed to handle event:", err);
   }
 }

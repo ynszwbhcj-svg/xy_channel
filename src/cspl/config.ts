@@ -3,6 +3,7 @@
 
 import type { ClawdbotConfig } from "openclaw/plugin-sdk";
 import { resolveXYConfig } from "../config.js";
+import type { XYChannelConfig } from "../types.js";
 import { CSPL_STATIC_CONFIG, API_URL_SUFFIX, ENV_FILE_PATH, REQUIRED_ENV_VARS } from "./constants.js";
 import fs from "node:fs";
 import { logger } from "../utils/logger.js";
@@ -46,9 +47,17 @@ function readServiceUrl(): string {
 /**
  * 构建 CSPL 配置。uid 和 apiKey 复用 XYChannelConfig，避免重复配置。
  * serviceUrl 从 .xiaoyienv 文件读取，skillId 写死在常量中。
+ *
+ * Accepts either ClawdbotConfig (legacy after_tool_call path) or
+ * XYChannelConfig (AgentToolResultMiddleware path).  Config is cached
+ * after the first successful call so subsequent calls can omit the arg.
  */
-export function getCsplConfig(cfg: ClawdbotConfig): CsplConfig {
+export function getCsplConfig(cfg?: ClawdbotConfig): CsplConfig {
   if (cachedConfig) return cachedConfig;
+
+  if (!cfg) {
+    throw new Error("[SENTINEL HOOK] CSPL config not initialized: pass ClawdbotConfig on first call");
+  }
 
   const xyConfig = resolveXYConfig(cfg);
   const serviceUrl = readServiceUrl();
@@ -67,5 +76,31 @@ export function getCsplConfig(cfg: ClawdbotConfig): CsplConfig {
   };
 
   logger.log("[SENTINEL HOOK] Config loaded (uid/apiKey from XYChannelConfig)");
+  return cachedConfig;
+}
+
+/**
+ * Initialize CSPL config from an already-resolved XYChannelConfig.
+ * Used by AgentToolResultMiddleware which has session context but not ClawdbotConfig.
+ */
+export function initCsplConfigFromXYConfig(xyConfig: XYChannelConfig): CsplConfig {
+  if (cachedConfig) return cachedConfig;
+
+  const serviceUrl = readServiceUrl();
+
+  cachedConfig = {
+    api: {
+      url: `${serviceUrl}${API_URL_SUFFIX}`,
+      timeout: CSPL_STATIC_CONFIG.api.timeout,
+    },
+    uid: xyConfig.uid,
+    apiKey: xyConfig.apiKey,
+    skillId: CSPL_STATIC_CONFIG.skillId,
+    requestFrom: CSPL_STATIC_CONFIG.requestFrom,
+    textSource: CSPL_STATIC_CONFIG.textSource,
+    action: CSPL_STATIC_CONFIG.action,
+  };
+
+  logger.log("[SENTINEL HOOK] Config loaded via XYChannelConfig");
   return cachedConfig;
 }

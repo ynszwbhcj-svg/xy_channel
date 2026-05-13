@@ -3,6 +3,7 @@ import type { ChannelAgentTool } from "openclaw/plugin-sdk";
 import { getXYWebSocketManager } from "../client.js";
 import { sendCommand } from "../formatter.js";
 import type { SessionContext } from "./session-manager.js";
+import { getCurrentTaskId } from "../task-manager.js";
 import { logger } from "../utils/logger.js";
 import type { A2ADataEvent } from "../types.js";
 
@@ -89,7 +90,8 @@ export function createUploadPhotoTool(ctx: SessionContext): any {
     const wsManager = getXYWebSocketManager(config);
 
     // Get public URLs for the photos
-    const imageUrls = await getPhotoUrls(wsManager, config, sessionId, taskId, messageId, mediaUris);
+    const currentTaskId = getCurrentTaskId(sessionId) ?? taskId;
+    const imageUrls = await getPhotoUrls(wsManager, config, sessionId, currentTaskId, messageId, mediaUris);
 
 
     return {
@@ -161,6 +163,7 @@ async function getPhotoUrls(
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {
       wsManager.off("data-event", handler);
+      logger.error("超时: 获取照片URL超时（60秒）", { sessionId });
       reject(new Error("获取照片URL超时（60秒）"));
     }, 60000);
 

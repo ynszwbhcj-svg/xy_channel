@@ -3,16 +3,7 @@
 import { XYWebSocketManager } from "./websocket.js";
 import type { XYChannelConfig } from "./types.js";
 import type { RuntimeEnv } from "openclaw/plugin-sdk";
-
-// Runtime reference for logging
-let runtime: RuntimeEnv | undefined;
-
-/**
- * Set the runtime for logging in client module.
- */
-export function setClientRuntime(rt: RuntimeEnv | undefined): void {
-  runtime = rt;
-}
+import { logger } from "./utils/logger.js";
 
 /**
  * Global cache for WebSocket managers.
@@ -30,21 +21,19 @@ const wsManagerCache = _g.__xyWsManagerCache as Map<string, XYWebSocketManager>;
  * Get or create a WebSocket manager for the given configuration.
  * Reuses existing managers if config matches.
  */
-export function getXYWebSocketManager(config: XYChannelConfig): XYWebSocketManager {
+export function getXYWebSocketManager(config: XYChannelConfig, runtime?: RuntimeEnv): XYWebSocketManager {
   const cacheKey = `${config.apiKey}-${config.agentId}`;
   let cached = wsManagerCache.get(cacheKey);
 
   if (cached && cached.isConfigMatch(config)) {
-    const log = runtime?.log ?? console.log;
     return cached;
   }
 
   // Create new manager
-  const log = runtime?.log ?? console.log;
-  log(`[WS-MANAGER-CACHE] 🆕 Creating new WebSocket manager: ${cacheKey}, total managers before: ${wsManagerCache.size}`);
+  logger.log(`[WS-MANAGER-CACHE] 🆕 Creating new WebSocket manager: ${cacheKey}, total managers before: ${wsManagerCache.size}`);
   cached = new XYWebSocketManager(config, runtime);
   wsManagerCache.set(cacheKey, cached);
-  log(`[WS-MANAGER-CACHE] 📊 Total managers after creation: ${wsManagerCache.size}`);
+  logger.log(`[WS-MANAGER-CACHE] 📊 Total managers after creation: ${wsManagerCache.size}`);
 
   return cached;
 }
@@ -54,17 +43,16 @@ export function getXYWebSocketManager(config: XYChannelConfig): XYWebSocketManag
  * Disconnects the manager and removes it from the cache.
  */
 export function removeXYWebSocketManager(config: XYChannelConfig): void {
-  const log = runtime?.log ?? console.log;
   const cacheKey = `${config.apiKey}-${config.agentId}`;
   const manager = wsManagerCache.get(cacheKey);
 
   if (manager) {
-    log(`🗑️  [WS-MANAGER-CACHE] Removing manager from cache: ${cacheKey}`);
+    logger.log(`🗑️  [WS-MANAGER-CACHE] Removing manager from cache: ${cacheKey}`);
     manager.disconnect();
     wsManagerCache.delete(cacheKey);
-    log(`🗑️  [WS-MANAGER-CACHE] Manager removed, remaining managers: ${wsManagerCache.size}`);
+    logger.log(`🗑️  [WS-MANAGER-CACHE] Manager removed, remaining managers: ${wsManagerCache.size}`);
   } else {
-    log(`⚠️  [WS-MANAGER-CACHE] Manager not found in cache: ${cacheKey}`);
+    logger.log(`⚠️  [WS-MANAGER-CACHE] Manager not found in cache: ${cacheKey}`);
   }
 }
 
@@ -72,8 +60,7 @@ export function removeXYWebSocketManager(config: XYChannelConfig): void {
  * Clear all cached WebSocket managers.
  */
 export function clearXYWebSocketManagers(): void {
-  const log = runtime?.log ?? console.log;
-  log("Clearing all WebSocket manager caches");
+  logger.log("Clearing all WebSocket manager caches");
   for (const manager of wsManagerCache.values()) {
     manager.disconnect();
   }
@@ -92,11 +79,10 @@ export function getCachedManagerCount(): number {
  * Helps identify connection issues and orphan connections.
  */
 export function diagnoseAllManagers(): void {
-  const log = runtime?.log ?? console.log;
-  log(`Total cached managers: ${wsManagerCache.size}`);
+  logger.log(`Total cached managers: ${wsManagerCache.size}`);
 
   if (wsManagerCache.size === 0) {
-    log("ℹ️  No managers in cache");
+    logger.log("ℹ️  No managers in cache");
     return;
   }
 
@@ -104,30 +90,28 @@ export function diagnoseAllManagers(): void {
 
   wsManagerCache.forEach((manager, key) => {
     const diag = manager.getConnectionDiagnostics();
-    log(`   Total event listeners on manager: ${diag.totalEventListeners}`);
+    logger.log(`   Total event listeners on manager: ${diag.totalEventListeners}`);
 
     // Connection
-    log(`   🔌 Connection:`);
-    log(`      - Exists: ${diag.connection.exists}`);
-    log(`      - ReadyState: ${diag.connection.readyState}`);
-    log(`      - State connected/ready: ${diag.connection.stateConnected}/${diag.connection.stateReady}`);
-    log(`      - Reconnect attempts: ${diag.connection.reconnectAttempts}`);
-    log(`      - Listeners on WebSocket: ${diag.connection.listenerCount}`);
-    log(`      - Heartbeat active: ${diag.connection.heartbeatActive}`);
-    log(`      - Has reconnect timer: ${diag.connection.hasReconnectTimer}`);
+    logger.log(`   🔌 Connection:`);
+    logger.log(`      - Exists: ${diag.connection.exists}`);
+    logger.log(`      - ReadyState: ${diag.connection.readyState}`);
+    logger.log(`      - State connected/ready: ${diag.connection.stateConnected}/${diag.connection.stateReady}`);
+    logger.log(`      - Reconnect attempts: ${diag.connection.reconnectAttempts}`);
+    logger.log(`      - Listeners on WebSocket: ${diag.connection.listenerCount}`);
+    logger.log(`      - Heartbeat active: ${diag.connection.heartbeatActive}`);
+    logger.log(`      - Has reconnect timer: ${diag.connection.hasReconnectTimer}`);
     if (diag.connection.isOrphan) {
-      log(`      ⚠️  ORPHAN CONNECTION DETECTED!`);
+      logger.log(`      ⚠️  ORPHAN CONNECTION DETECTED!`);
       orphanCount++;
     }
-
-    log("");
   });
 
   if (orphanCount > 0) {
-    log(`⚠️  Total orphan connections found: ${orphanCount}`);
-    log(`💡 Suggestion: These connections should be cleaned up`);
+    logger.log(`⚠️  Total orphan connections found: ${orphanCount}`);
+    logger.log(`💡 Suggestion: These connections should be cleaned up`);
   } else {
-    log(`✅ No orphan connections found`);
+    logger.log(`✅ No orphan connections found`);
   }
 }
 
@@ -136,21 +120,20 @@ export function diagnoseAllManagers(): void {
  * Returns the number of managers that had orphan connections.
  */
 export function cleanupOrphanConnections(): number {
-  const log = runtime?.log ?? console.log;
   let cleanedCount = 0;
 
   wsManagerCache.forEach((manager, key) => {
     const diag = manager.getConnectionDiagnostics();
 
     if (diag.connection.isOrphan) {
-      log(`🧹 Cleaning up orphan connections in manager: ${key}`);
+      logger.log(`🧹 Cleaning up orphan connections in manager: ${key}`);
       manager.disconnect();
       cleanedCount++;
     }
   });
 
   if (cleanedCount > 0) {
-    log(`🧹 Cleaned up ${cleanedCount} manager(s) with orphan connections`);
+    logger.log(`🧹 Cleaned up ${cleanedCount} manager(s) with orphan connections`);
   }
 
   return cleanedCount;

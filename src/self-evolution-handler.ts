@@ -2,30 +2,29 @@ import { readFileSync, writeFileSync } from "fs";
 import { v4 as uuidv4 } from "uuid";
 import type { XYWebSocketManager } from "./websocket.js";
 import type { OutboundWebSocketMessage } from "./types.js";
+import { logger } from "./utils/logger.js";
 
 const XIAOYIRUNTIME_PATH = "/home/sandbox/.openclaw/.xiaoyiruntime";
 
 export function handleSelfEvolutionEvent(context: any, runtime: any): void {
-  const log = runtime?.log ?? console.log;
-  const error = runtime?.error ?? console.error;
 
   try {
     const state = context.event?.payload?.selfEvolutionState;
     if (typeof state !== "string") {
-      error("[SELF_EVOLUTION] invalid payload: missing selfEvolutionState");
+      logger.error("[SELF_EVOLUTION] invalid payload: missing selfEvolutionState");
       return;
     }
 
-    log(`[SELF_EVOLUTION] received state: ${state}`);
+    logger.log(`[SELF_EVOLUTION] received state: ${state}`);
 
     let content: string;
     try {
       content = readFileSync(XIAOYIRUNTIME_PATH, "utf-8");
     } catch {
       // File doesn't exist yet — create it
-      log(`[SELF_EVOLUTION] ${XIAOYIRUNTIME_PATH} not found, creating new file`);
+      logger.log(`[SELF_EVOLUTION] ${XIAOYIRUNTIME_PATH} not found, creating new file`);
       writeFileSync(XIAOYIRUNTIME_PATH, `selfEvolutionState=${state}\n`, "utf-8");
-      log(`[SELF_EVOLUTION] wrote selfEvolutionState=${state}`);
+      logger.log(`[SELF_EVOLUTION] wrote selfEvolutionState=${state}`);
       return;
     }
 
@@ -49,9 +48,9 @@ export function handleSelfEvolutionEvent(context: any, runtime: any): void {
       writeFileSync(XIAOYIRUNTIME_PATH, updated.join("\n"), "utf-8");
     }
 
-    log(`[SELF_EVOLUTION] updated selfEvolutionState=${state} in ${XIAOYIRUNTIME_PATH}`);
+    logger.log(`[SELF_EVOLUTION] updated selfEvolutionState=${state} in ${XIAOYIRUNTIME_PATH}`);
   } catch (err) {
-    error("[SELF_EVOLUTION] failed to handle event:", err);
+    logger.error("[SELF_EVOLUTION] failed to handle event:", err);
   }
 }
 
@@ -65,8 +64,6 @@ export async function handleSelfEvolutionStateGetEvent(
   runtime: any,
   wsManager: XYWebSocketManager
 ): Promise<void> {
-  const log = runtime?.log ?? console.log;
-  const error = runtime?.error ?? console.error;
 
   try {
     const { sessionId, taskId } = context;
@@ -87,7 +84,7 @@ export async function handleSelfEvolutionStateGetEvent(
       // 文件不存在，使用默认值 false
     }
 
-    log(`[SELF_EVOLUTION_GET] read selfEvolutionState=${state}, sending command back`);
+    logger.log(`[SELF_EVOLUTION_GET] read selfEvolutionState=${state}, sending command back`);
 
     const command = {
       header: {
@@ -150,10 +147,10 @@ export async function handleSelfEvolutionStateGetEvent(
       msgDetail: JSON.stringify(jsonRpcResponse),
     };
 
-    log(`[A2A_COMMAND] 📤 Sending A2A command: taskId: ${taskId}`);
+    logger.log(`[A2A_COMMAND] 📤 Sending A2A command: taskId: ${taskId}`);
     await wsManager.sendMessage(sessionId, outboundMessage);
-    log(`[SELF_EVOLUTION_GET] command sent successfully`);
+    logger.log(`[SELF_EVOLUTION_GET] command sent successfully`);
   } catch (err) {
-    error("[SELF_EVOLUTION_GET] failed to handle event:", err);
+    logger.error("[SELF_EVOLUTION_GET] failed to handle event:", err);
   }
 }

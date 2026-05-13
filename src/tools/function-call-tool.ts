@@ -8,20 +8,18 @@ import type { SessionContext } from './session-manager.js';
 import { logger } from "../utils/logger.js";
 
 // ============ Logger ============
+// 时间戳由 pino 自动注入，无需手动拼接。
+// data 直接作为第二个参数传入，formatMessage 会通过 JSON.stringify 序列化。
 
-const LOG_PREFIX = '[FCT]'; // function-call-tool
+const LOG_PREFIX = '[FCT]';
 
 function log(level: 'DEBUG' | 'INFO' | 'WARN' | 'ERROR', tag: string, msg: string, data?: any): void {
-  const prefix = `${LOG_PREFIX}[${tag}]`;
-  const formatted = `${prefix} ${msg}`;
-  if (level === 'ERROR') {
-    data !== undefined ? logger.error(formatted, data) : logger.error(formatted);
-  } else if (level === 'WARN') {
-    data !== undefined ? logger.warn(formatted, data) : logger.warn(formatted);
-  } else if (level === 'DEBUG') {
-    data !== undefined ? logger.debug(formatted, data) : logger.debug(formatted);
-  } else {
-    data !== undefined ? logger.log(formatted, data) : logger.log(formatted);
+  const message = `${LOG_PREFIX}[${tag}] ${msg}`;
+  switch (level) {
+    case 'ERROR': logger.error(message, ...(data !== undefined ? [data] : [])); break;
+    case 'WARN':  logger.warn(message,  ...(data !== undefined ? [data] : [])); break;
+    case 'DEBUG': logger.debug(message, ...(data !== undefined ? [data] : [])); break;
+    default:      logger.log(message,   ...(data !== undefined ? [data] : [])); break;
   }
 }
 

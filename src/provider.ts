@@ -8,9 +8,9 @@
 //   models.providers.xiaoyiprovider.api = "openai-completions"
 //   models.providers.xiaoyiprovider.models = [...]
 import { createHash } from "crypto";
+import { logger } from "./utils/logger.js";
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 import { getCurrentSessionContext } from "./tools/session-manager.js";
-import { getCurrentTaskId } from "./task-manager.js";
 import { selfEvolutionManager } from "./utils/self-evolution-manager.js";
 
 // ── Retry config ──────────────────────────────────────────────
@@ -138,7 +138,7 @@ function createRetryingStream(
         if (!hasContent && !isContent) {
           // ── Buffer phase (no content yet) ──
           if (event.type === "done") {
-            console.log(
+            logger.log(
               `[xiaoyiprovider] stream completed (no content), usage: input=${event.message?.usage?.input} output=${event.message?.usage?.output}`,
             );
             for (const b of buffer) yield b;
@@ -153,7 +153,7 @@ function createRetryingStream(
         } else {
           // ── Streaming phase ──
           if (!hasContent) {
-            console.log("[xiaoyiprovider] first content event received, switching to streaming mode");
+            logger.log("[xiaoyiprovider] first content event received, switching to streaming mode");
             hasContent = true;
             for (const b of buffer) yield b;
           }
@@ -161,7 +161,7 @@ function createRetryingStream(
           // The SDK calls result() when it sees done/error — if we yield first, the generator
           // suspends and can never reach resolve, causing a permanent deadlock.
           if (event.type === "done") {
-            console.log(
+            logger.log(
               `[xiaoyiprovider] stream completed, usage: input=${event.message?.usage?.input} output=${event.message?.usage?.output}`,
             );
             resultResolve(event.message);
@@ -169,7 +169,7 @@ function createRetryingStream(
             return;
           }
           if (event.type === "error") {
-            console.log(`[xiaoyiprovider] stream error after content: ${event.error?.errorMessage}`);
+            logger.log(`[xiaoyiprovider] stream error after content: ${event.error?.errorMessage}`);
             errorResult = event.error;
             break; // break inner loop, proceed to retry decision
           }
@@ -181,16 +181,16 @@ function createRetryingStream(
       if (errorResult?.stopReason === "error" && isRetryableProviderError(errorResult.errorMessage)) {
         if (attempt < MAX_RETRY_ATTEMPTS - 1) {
           const delayMs = getRetryDelayMs(attempt + 1, cronJob);
-          console.log(
+          logger.log(
             `[xiaoyiprovider] retryable error (attempt ${attempt + 1}/${MAX_RETRY_ATTEMPTS}): ` +
             `${errorResult.errorMessage} — retrying in ${delayMs}ms`,
           );
           await sleep(delayMs);
           continue; // discard buffer, retry with a new stream
         }
-        console.log(`[xiaoyiprovider] all ${MAX_RETRY_ATTEMPTS} retries exhausted, surfacing last error`);
+        logger.log(`[xiaoyiprovider] all ${MAX_RETRY_ATTEMPTS} retries exhausted, surfacing last error`);
       } else if (errorResult) {
-        console.log(`[xiaoyiprovider] non-retryable error: ${errorResult.errorMessage}`);
+        logger.log(`[xiaoyiprovider] non-retryable error: ${errorResult.errorMessage}`);
       }
 
       // Non-retryable or retries exhausted — yield buffered events.
@@ -211,7 +211,7 @@ function createRetryingStream(
     }
 
     // Safety: final fallback attempt
-    console.log("[xiaoyiprovider] entering final fallback attempt");
+    logger.log("[xiaoyiprovider] entering final fallback attempt");
     const lastStream = await createStream();
     for await (const event of lastStream) {
       if (event.type === "done") {
@@ -424,6 +424,20 @@ function trimUserMetadata(text: string): string {
   return text.replace(/\n{3,}/g, "\n\n");
 }
 
+/**
+ * Extract A2A taskId and deviceType from Conversation info JSON.
+ * bot.ts stores them as MessageSid = "taskId_deviceType".
+ */
+function extractA2AFromConversationInfo(text: string): { taskId: string; deviceType: string } | null {
+  const match = text.match(/Conversation info \(untrusted metadata\):\n```json\n([\s\S]*?)\n```/);
+  if (!match) return null;
+  const msgIdMatch = match[1].match(/"message_id"\s*:\s*"([^"]+)"/);
+  if (!msgIdMatch) return null;
+  const parts = msgIdMatch[1].split("_");
+  if (parts.length < 2) return null;
+  return { taskId: parts[0], deviceType: parts[1] };
+}
+
 export const xiaoyiProvider: ProviderPlugin = {
   id: "xiaoyiprovider",
   label: "Xiaoyi Provider",
@@ -478,23 +492,38 @@ export const xiaoyiProvider: ProviderPlugin = {
    * since the default agent timeout is 48 hours).
    */
   wrapStreamFn: (ctx) => {
-    console.log("[xiaoyiprovider] wrapStreamFn CALLED — provider resolved by openclaw");
+    logger.log("[xiaoyiprovider] wrapStreamFn CALLED — provider resolved by openclaw");
     const underlying = ctx.streamFn;
     if (!underlying) return underlying;
 
-    // Capture A2A sessionId at agent setup time for multi-session isolation.
-    // openclaw calls wrapStreamFn per-agent (per session), so this runs inside
-    // the correct runWithSessionContext() ALS scope.  When multiple sessions are
-    // active concurrently, getCurrentSessionContext() may later return the WRONG
-    // session (lastRegisteredKey fallback).  The captured sessionId lets us
-    // bypass that fallback and look up the correct taskId directly from
-    // task-manager.
-    const capturedA2ASessionId = getCurrentSessionContext()?.sessionId ?? null;
-
     return async (model, context, options) => {
-      // 每次请求时从 ctx.extraParams 动态读取 header
       const dynamicHeaders: Record<string, string> = {};
 
+      // ── Extract A2A taskId/deviceType from Conversation info ──
+      // bot.ts stores taskId_deviceType as MessageSid, which the framework
+      // renders as message_id in the Conversation info JSON block.
+      let extractedTaskId: string | null = null;
+      let extractedDeviceType: string | null = null;
+      if (context.messages) {
+        for (let i = context.messages.length - 1; i >= 0; i--) {
+          const msg = context.messages[i];
+          if (msg.role !== "user") continue;
+          const text = typeof msg.content === "string"
+            ? msg.content
+            : Array.isArray(msg.content)
+              ? (msg.content.find((b: any) => b.type === "text") as any)?.text ?? ""
+              : "";
+          if (!text) continue;
+          const extracted = extractA2AFromConversationInfo(text);
+          if (extracted) {
+            extractedTaskId = extracted.taskId;
+            extractedDeviceType = extracted.deviceType;
+            break;
+          }
+        }
+      }
+
+      // ── Build dynamic headers ────────────────────────────
       if (ctx.extraParams) {
         const fallbackPrefix = ctx.extraParams[FALLBACK_PREFIX_KEY];
 
@@ -510,57 +539,42 @@ export const xiaoyiProvider: ProviderPlugin = {
             if (cronTitle) dynamicHeaders["x-cron-title"] = encodeURIComponent(cronTitle);
             if (context.messages?.length === 1) dynamicHeaders["x-cron-flag"] = "begin";
           }
+        } else if (extractedTaskId) {
+          // Session mode: taskId extracted from Conversation info
+          const traceId = extractedTaskId;
+          const sessionId = traceId.split("&")[0];
+          const interactionId = traceId.split("&")[1] ?? "";
+
+          const isCron = isCronTriggered(context.messages);
+          dynamicHeaders[HEADER_TRACE_ID] = isCron ? `cron_${traceId}_${Date.now()}` : traceId;
+          if (isCron) {
+            const cronTitle = extractCronTitle(context.messages);
+            if (cronTitle) dynamicHeaders["x-cron-title"] = encodeURIComponent(cronTitle);
+            if (context.messages?.length === 1) dynamicHeaders["x-cron-flag"] = "begin";
+          }
+          dynamicHeaders[HEADER_SESSION_ID] = sessionId;
+          dynamicHeaders[HEADER_INTERACTION_ID] = interactionId;
         } else {
-          // Session mode: resolve taskId for the correct session.
-          //
-          // Priority:
-          //   1. capturedA2ASessionId → getCurrentTaskId()  (most reliable,
-          //      bypasses lastRegisteredKey fallback)
-          //   2. getCurrentSessionContext()?.taskId           (works when ALS
-          //      is intact)
-          //   3. ctx.extraParams cached values                (last resort,
-          //      may be stale / from wrong session)
-          let resolvedTaskId: string | null = null;
-          if (capturedA2ASessionId) {
-            resolvedTaskId = getCurrentTaskId(capturedA2ASessionId);
-          }
-          if (!resolvedTaskId) {
-            resolvedTaskId = getCurrentSessionContext()?.taskId ?? null;
-          }
-
-          const traceId = resolvedTaskId ?? ctx.extraParams[HEADER_TRACE_ID];
-          const sessionId = resolvedTaskId?.split("&")[0]
-            ?? ctx.extraParams[HEADER_SESSION_ID];
-          const interactionId = resolvedTaskId?.split("&")[1]
-            ?? ctx.extraParams[HEADER_INTERACTION_ID]
-            ?? "";
-
-          if (typeof traceId === "string") {
-            const isCron = isCronTriggered(context.messages);
-            dynamicHeaders[HEADER_TRACE_ID] = isCron ? `cron_${traceId}_${Date.now()}` : traceId;
-            if (isCron) {
-              const cronTitle = extractCronTitle(context.messages);
-              if (cronTitle) dynamicHeaders["x-cron-title"] = encodeURIComponent(cronTitle);
-              if (context.messages?.length === 1) dynamicHeaders["x-cron-flag"] = "begin";
-            }
-          }
+          // Fallback: use extraParams cached values
+          const traceId = ctx.extraParams[HEADER_TRACE_ID];
+          const sessionId = ctx.extraParams[HEADER_SESSION_ID];
+          const interactionId = ctx.extraParams[HEADER_INTERACTION_ID];
+          if (typeof traceId === "string") dynamicHeaders[HEADER_TRACE_ID] = traceId;
           if (typeof sessionId === "string") dynamicHeaders[HEADER_SESSION_ID] = sessionId;
           if (typeof interactionId === "string") dynamicHeaders[HEADER_INTERACTION_ID] = interactionId;
         }
       }
 
       // 记录输入
-      console.log(`[xiaoyiprovider] input messages count: ${context.messages?.length ?? 0}`);
+      logger.log(`[xiaoyiprovider] input messages count: ${context.messages?.length ?? 0}`);
       if (context.systemPrompt) {
-        console.log(`[xiaoyiprovider] system prompt length: ${context.systemPrompt.length}`);
+        logger.log(`[xiaoyiprovider] system prompt length: ${context.systemPrompt.length}`);
       }
-      // Prefer deviceType from extraParams (set by prepareExtraParams).
-      // Fall back to getCurrentSessionContext() because OpenClaw caches
-      // resolvePreparedExtraParams by provider/modelId – the cache key does
-      // not include session-specific data, so deviceType may be missing
-      // from the cached extraParams even when a session is active.
+      // deviceType: prefer value extracted from Conversation info,
+      // then extraParams, then ALS fallback.
       const extraParamsDeviceType = (ctx.extraParams?.[DEVICE_TYPE_KEY] as string) || undefined;
-      const deviceType = extraParamsDeviceType ?? getCurrentSessionContext()?.deviceType;
+      const deviceType = (extractedDeviceType || extraParamsDeviceType)
+        ?? getCurrentSessionContext()?.deviceType;
 
       // 在发送给模型前，优化 systemPrompt 结构
       if (context.systemPrompt) {
@@ -595,16 +609,16 @@ export const xiaoyiProvider: ProviderPlugin = {
           }
         }
 
-        console.log(`[xiaoyiprovider] system prompt optimized: ${beforeLen} -> ${sp.length}`);
+        logger.log(`[xiaoyiprovider] system prompt optimized: ${beforeLen} -> ${sp.length}`);
         context.systemPrompt = sp;
       }
 
       const selfEvolutionEnabled = await selfEvolutionManager.isEnabled();
 
-      console.log(`[selfEvolution] selfEvolution flag: ${selfEvolutionEnabled}`);
+      logger.log(`[selfEvolution] selfEvolution flag: ${selfEvolutionEnabled}`);
       context.systemPrompt = applySelfEvolutionPrompt(context.systemPrompt, selfEvolutionEnabled);
 
-      // Append device context to systemPrompt (using pre-captured deviceType from prepareExtraParams)
+      // Append device context to systemPrompt
       if (deviceType) {
         const displayDevice = (deviceType === "2in1") ? "鸿蒙PC" : deviceType;
         const deviceSection = `\n\n## Current User Device Context\nThe current user is using the following device: ${displayDevice}\nYou need to be aware of the user's current device and provide guidance accordingly. If the response involves device-related tools or actions, you must tailor the reply based on the user's current device, using device-specific references such as "saved to the Notes/Calendar on your {deviceType}.\n"`;
@@ -629,7 +643,7 @@ export const xiaoyiProvider: ProviderPlugin = {
 
       // ── Retry-capable streaming ──────────────────────────────
       const cronJob = isCronTriggered(context.messages);
-      if (cronJob) console.log("[xiaoyiprovider] detected cron-triggered request, using extended retry delays");
+      if (cronJob) logger.log("[xiaoyiprovider] detected cron-triggered request, using extended retry delays");
 
       const makeStream = () => underlying(model, context, {
         ...options,

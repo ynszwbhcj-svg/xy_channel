@@ -114,7 +114,6 @@ async function downloadRemoteFile(url: string): Promise<string> {
  */
 export function createSendFileToUserTool(ctx: SessionContext): any {
   const { config, sessionId, taskId, messageId } = ctx;
-  logger.log(`[SEND-FILE-TO-USER] 🏭 CREATE: sessionId=${sessionId} taskId=${taskId}`);
   return {
   name: "send_file_to_user",
   label: "Send File to User",
