@@ -433,7 +433,9 @@ function trimUserMetadata(text: string): string {
 
 /**
  * Extract A2A taskId and deviceType from Conversation info JSON.
- * bot.ts stores them as MessageSid = "taskId_deviceType".
+ * bot.ts stores them as MessageSid = "xiaoyi_taskId_deviceType".
+ * The "xiaoyi_" prefix ensures extraction only happens for messages
+ * routed through xiaoyi-channel, not other channels sharing the provider.
  */
 function extractA2AFromConversationInfo(text: string): { taskId: string; deviceType: string } | null {
   const match = text.match(/Conversation info \(untrusted metadata\):\n```json\n([\s\S]*?)\n```/);
@@ -441,8 +443,8 @@ function extractA2AFromConversationInfo(text: string): { taskId: string; deviceT
   const msgIdMatch = match[1].match(/"message_id"\s*:\s*"([^"]+)"/);
   if (!msgIdMatch) return null;
   const parts = msgIdMatch[1].split("_");
-  if (parts.length < 2) return null;
-  return { taskId: parts[0], deviceType: parts[1] };
+  if (parts.length < 3 || parts[0] !== "xiaoyi") return null;
+  return { taskId: parts[1], deviceType: parts[2] };
 }
 
 export const xiaoyiProvider: ProviderPlugin = {
