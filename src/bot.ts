@@ -630,7 +630,14 @@ async function dispatchSteerWhenReady(params: EnqueueSteerParams): Promise<void>
   // 3. 构建 dispatch 上下文并 dispatch /steer
   const core = getXYRuntime() as any;
   const speaker = sessionId;
-  const steerCommand = `/steer ${steerText}`;
+
+  // 如果有文件附件，把路径拼到 steer 文本末尾，让模型通过工具读取
+  const mediaPaths = params.mediaPayload?.MediaPaths;
+  const fileHint =
+    mediaPaths && mediaPaths.length > 0
+      ? `\n【用户上传附件】：${JSON.stringify(mediaPaths)}`
+      : "";
+  const steerCommand = `/steer ${steerText}${fileHint}`;
   const messageBody = `${speaker}: ${steerCommand}`;
   const envelopeOptions = core.channel.reply.resolveEnvelopeFormatOptions(params.cfg);
   const body = core.channel.reply.formatAgentEnvelope({
