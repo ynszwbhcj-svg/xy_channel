@@ -17,6 +17,7 @@ import { getPushDataById } from "./utils/pushdata-manager.js";
 import { selfEvolutionManager } from "./utils/self-evolution-manager.js";
 import { saveRuntimeInfo } from "./utils/runtime-manager.js";
 import { toolCallNudgeManager } from "./utils/tool-call-nudge-manager.js";
+import { setCsplSteerContext } from "./cspl/steer-context.js";
 import {
   registerTaskId,
   decrementTaskIdRef,
@@ -45,6 +46,9 @@ export interface HandleXYMessageParams {
  */
 export async function handleXYMessage(params: HandleXYMessageParams): Promise<void> {
   const { cfg, runtime, message, accountId, webSocketSessionId } = params;
+
+  // Cache context for CSPL steer injection (after_tool_call hook)
+  setCsplSteerContext(cfg, runtime, accountId);
 
   // Get runtime (already validated in monitor.ts, but get reference for use)
   const core = getXYRuntime() as any;
