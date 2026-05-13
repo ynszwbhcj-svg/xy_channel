@@ -5,7 +5,7 @@ import * as os from 'os';
 import * as dotenv from 'dotenv';
 dotenv.config();
 import type { SessionContext } from './session-manager.js';
-import { logger } from './utils/logger.js';
+import { logger } from "../utils/logger.js";
 
 // ============ Logger ============
 
