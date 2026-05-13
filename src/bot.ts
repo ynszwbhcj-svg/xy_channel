@@ -279,6 +279,10 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
 
     // ── First message (non-steer) path below ──────────────────────
 
+    // 🔑 立即创建 streaming 信号——必须在文件下载等耗时操作之前，
+    // 否则 steer 消息的 dispatchSteerWhenReady 会找不到信号而跳过等待。
+    createStreamingSignal(parsed.sessionId);
+
     // File download — only for real user messages, steer injections have no files
     let mediaPayload: ReturnType<typeof buildXYMediaPayload> = {};
     if (!skipReg) {
@@ -333,9 +337,7 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
       ...mediaPayload,
     });
 
-    // 🔑 第一条消息创建 streaming 信号（provider.ts 的 wrapStreamFn 触发）
-    createStreamingSignal(parsed.sessionId);
-
+    // 🔑 Streaming 信号已在上方创建（在文件下载之前）
     const steerState = { steered: false };
 
     // 🔑 创建dispatcher
@@ -574,12 +576,28 @@ async function dispatchSteerWhenReady(params: EnqueueSteerParams): Promise<void>
   const { sessionId, sessionKey, steerText } = params;
 
   // 1. 等待第一条消息开始 streaming
-  const signal = streamingSignals.get(sessionId);
+  //    signal 可能尚未创建（第一条消息还在文件下载等耗时操作中），
+  //    轮询等待直到 signal 出现，最長等待 ~5 秒。
+  let signal = streamingSignals.get(sessionId);
+  if (!signal) {
+    logger.log(`[STEER-QUEUE] ⏳ Signal not yet created, polling for session=${sessionId}`);
+    for (let i = 0; i < 50; i++) {
+      await new Promise(r => setTimeout(r, 100));
+      signal = streamingSignals.get(sessionId);
+      if (signal) break;
+      if (!hasActiveTask(sessionId)) {
+        logger.log(`[STEER-QUEUE] ℹ️ First message completed while waiting, skip steer`);
+        return;
+      }
+    }
+  }
   if (signal) {
     logger.log(`[STEER-QUEUE] ⏳ Waiting for streaming signal, session=${sessionId}`);
     await signal.promise;
     streamingSignals.delete(sessionId);
     logger.log(`[STEER-QUEUE] ✅ Streaming signal received, session=${sessionId}`);
+  } else {
+    logger.log(`[STEER-QUEUE] ⚠️ Signal never appeared, proceeding without wait`);
   }
 
   // 2. 第一条消息已结束 → 放弃
