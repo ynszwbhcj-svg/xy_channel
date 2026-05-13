@@ -156,36 +156,36 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
     // Steer injections skip taskId registration to avoid overwriting the active taskId
     if (!skipReg) {
       registerTaskId(parsed.sessionId, parsed.taskId, parsed.messageId);
-    }
 
-    // Extract and update push_id if present
-    const pushId = extractPushId(parsed.parts);
-    if (pushId) {
-      logger.log(`[BOT] 📌 Extracted push_id from user message`);
-      configManager.updatePushId(parsed.sessionId, pushId);
+      // Extract and update push_id if present
+      const pushId = extractPushId(parsed.parts);
+      if (pushId) {
+        logger.log(`[BOT] 📌 Extracted push_id from user message`);
+        configManager.updatePushId(parsed.sessionId, pushId);
 
-      // 持久化 pushId 到本地文件（异步，不阻塞主流程）
-      addPushId(pushId).catch((err) => {
-        logger.error(`[BOT] Failed to persist pushId:`, err);
+        // 持久化 pushId 到本地文件（异步，不阻塞主流程）
+        addPushId(pushId).catch((err) => {
+          logger.error(`[BOT] Failed to persist pushId:`, err);
+        });
+      } else {
+        logger.log(`[BOT] ℹ️  No push_id found in message, will use config default`);
+      }
+
+      // 保存 runtime 信息到 .xiaoyiruntime 文件（异步，不阻塞主流程）
+      saveRuntimeInfo(
+        webSocketSessionId || parsed.sessionId, // SESSION_ID (WebSocket 层级，如果没有则 fallback)
+        parsed.sessionId, // CONVERSATION_ID (param 里的 sessionId)
+        parsed.taskId // TASK_ID (param.id)
+      ).catch((err) => {
+        logger.error(`[BOT] Failed to save runtime info:`, err);
       });
-    } else {
-      logger.log(`[BOT] ℹ️  No push_id found in message, will use config default`);
     }
 
-    // Extract deviceType if present (same level as push_id in systemVariables)
+    // Extract deviceType if present (always parse — used in ctxPayload.MessageSid)
     const deviceType = extractDeviceType(parsed.parts);
     if (deviceType) {
       logger.log(`[BOT] 📱 Extracted deviceType from user message: ${deviceType}`);
     }
-
-    // 保存 runtime 信息到 .xiaoyiruntime 文件（异步，不阻塞主流程）
-    saveRuntimeInfo(
-      webSocketSessionId || parsed.sessionId, // SESSION_ID (WebSocket 层级，如果没有则 fallback)
-      parsed.sessionId, // CONVERSATION_ID (param 里的 sessionId)
-      parsed.taskId // TASK_ID (param.id)
-    ).catch((err) => {
-      logger.error(`[BOT] Failed to save runtime info:`, err);
-    });
 
     // Resolve configuration (needed for status updates)
     const config = resolveXYConfig(cfg);
@@ -233,7 +233,8 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
     // Extract text and files from parts
     const text = extractTextFromParts(parsed.parts);
     let textForAgent = text || "";
-    if (route.sessionKey && textForAgent) {
+    // Self-evolution keyword nudge — only for real user messages, not steer injections
+    if (!skipReg && route.sessionKey && textForAgent) {
       try {
         const selfEvolutionEnabled = await selfEvolutionManager.isEnabled();
         if (selfEvolutionEnabled && shouldNudgeForSelfEvolutionKeyword(textForAgent)) {
@@ -263,12 +264,14 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
       logger.log(`[BOT] 🔄 Prepended /steer for steer injection`);
     }
 
-    const fileParts = extractFileParts(parsed.parts);
-
-    // Download files to local disk
-    const downloadedFiles = await downloadFilesFromParts(fileParts);
-    logger.log("Downloaded files:", JSON.stringify(downloadedFiles, null, 2));
-    const mediaPayload = buildXYMediaPayload(downloadedFiles);
+    // File download — only for real user messages, steer injections have no files
+    let mediaPayload: ReturnType<typeof buildXYMediaPayload> = {};
+    if (!skipReg) {
+      const fileParts = extractFileParts(parsed.parts);
+      const downloadedFiles = await downloadFilesFromParts(fileParts);
+      logger.log("Downloaded files:", JSON.stringify(downloadedFiles, null, 2));
+      mediaPayload = buildXYMediaPayload(downloadedFiles);
+    }
 
     // Resolve envelope format options (following feishu pattern)
     const envelopeOptions = core.channel.reply.resolveEnvelopeFormatOptions(cfg);
