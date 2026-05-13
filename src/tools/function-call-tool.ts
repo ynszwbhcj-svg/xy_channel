@@ -6,6 +6,22 @@ import * as dotenv from 'dotenv';
 dotenv.config();
 import type { SessionContext } from './session-manager.js';
 
+// ============ Logger ============
+
+const LOG_PREFIX = '[FCT]'; // function-call-tool
+
+function log(level: 'DEBUG' | 'INFO' | 'WARN' | 'ERROR', tag: string, msg: string, data?: any): void {
+  const ts = new Date().toISOString();
+  const prefix = `${ts} ${LOG_PREFIX}[${level}][${tag}]`;
+  if (data !== undefined) {
+    const fn = level === 'ERROR' ? console.error : level === 'WARN' ? console.warn : console.log;
+    fn(`${prefix} ${msg}`, data);
+  } else {
+    const fn = level === 'ERROR' ? console.error : level === 'WARN' ? console.warn : console.log;
+    fn(`${prefix} ${msg}`);
+  }
+}
+
 // ============ 类型定义 ============
 
 interface ToolDefinition {
@@ -162,6 +178,7 @@ function expandPath(filePath: string): string {
 async function loadXiaoyiConfig(): Promise<XiaoyiConfig> {
   const envFilePath = expandPath("~/.openclaw/.xiaoyienv");
   const defaults = { serviceUrl: '', apiKey: '', uid: '' };
+  log('INFO', 'CONFIG', `加载配置文件: ${envFilePath}`);
 
   try {
     const content = await fs.readFile(envFilePath, 'utf-8');
@@ -207,10 +224,12 @@ const XIAOYI_CONFIG: XiaoyiConfig = {
 };
 
 async function initXiaoyiConfig(): Promise<void> {
+  log('INFO', 'CONFIG', '初始化 XiaoyiConfig...');
   const loaded = await loadXiaoyiConfig();
   XIAOYI_CONFIG.serviceUrl = loaded.serviceUrl;
   XIAOYI_CONFIG.apiKey = loaded.apiKey;
   XIAOYI_CONFIG.uid = loaded.uid;
+  log('INFO', 'CONFIG', `XiaoyiConfig 初始化完成: serviceUrl=${XIAOYI_CONFIG.serviceUrl || '(空)'}, uid=${XIAOYI_CONFIG.uid || '(空)'}, apiKey=${XIAOYI_CONFIG.apiKey ? '******' : '(空)'}`);
 }
 
 // Runtime 标识
@@ -406,31 +425,40 @@ async function parseSkillMetadata(skillPath: string): Promise<SkillMetadata | nu
 
 async function loadToolDefinition(toolFilePath: string): Promise<ToolDefinition | null> {
   try {
+    log('DEBUG', 'SCAN', `加载工具定义: ${toolFilePath}`);
     const content = await fs.readFile(toolFilePath, 'utf-8');
     const toolDef = JSON.parse(content) as ToolDefinition;
 
     // [FIX #1] 验证必填字段时改用 `arguments` 而非 `args`
     if (!toolDef.schemaVersion || !toolDef.pluginId || !toolDef.toolName ||
         !toolDef.pluginType || !toolDef.description || !toolDef.arguments) {
-      console.error(`Invalid tool definition: missing required fields in ${toolFilePath}`);
+      log('ERROR', 'SCAN', `工具定义缺少必填字段，跳过: ${toolFilePath}`, {
+        hasSchemaVersion: !!toolDef.schemaVersion,
+        hasPluginId: !!toolDef.pluginId,
+        hasToolName: !!toolDef.toolName,
+        hasPluginType: !!toolDef.pluginType,
+        hasDescription: !!toolDef.description,
+        hasArguments: !!toolDef.arguments,
+      });
       return null;
     }
 
     // 验证 pluginType 相关的字段
     if ((toolDef.pluginType === 'Cloud' || toolDef.pluginType === 'MCP') &&
         !toolDef.protocol) {
-      console.error(`Cloud/MCP tool must have protocol field: ${toolFilePath}`);
+      log('ERROR', 'SCAN', `Cloud/MCP 工具缺少 protocol 字段: ${toolFilePath}`);
       return null;
     }
 
     if (toolDef.pluginType === 'Device' && !toolDef.deviceCommand) {
-      console.error(`Device tool must have deviceCommand field: ${toolFilePath}`);
+      log('ERROR', 'SCAN', `Device 工具缺少 deviceCommand 字段: ${toolFilePath}`);
       return null;
     }
 
+    log('DEBUG', 'SCAN', `工具定义加载成功: ${toolDef.pluginId}/${toolDef.toolName} [${toolDef.pluginType}]`);
     return toolDef;
   } catch (error) {
-    console.error(`Failed to load tool definition from ${toolFilePath}:`, error);
+    log('ERROR', 'SCAN', `解析工具定义文件失败: ${toolFilePath}`, error);
     return null;
   }
 }
@@ -454,6 +482,8 @@ async function hasDirectoryChanged(dirPath: string): Promise<boolean> {
 }
 
 async function scanSkills(): Promise<void> {
+  log('INFO', 'SCAN', `开始扫描 skills，根目录: ${JSON.stringify(SKILLS_ROOTS)}`);
+  const scanStart = Date.now();
   const newToolCache: ToolCache = {};
   const newSkillsMap: Map<string, SkillInfo> = new Map();
   // [FIX #5] 每次全量扫描时重置冲突集合
@@ -463,10 +493,12 @@ async function scanSkills(): Promise<void> {
     try {
       await fs.access(root);
     } catch {
+      log('DEBUG', 'SCAN', `根目录不存在，跳过: ${root}`);
       continue; // 目录不存在，跳过
     }
 
     const skillDirs = await fs.readdir(root);
+    log('INFO', 'SCAN', `发现 ${skillDirs.length} 个子目录: ${root}`);
 
     for (const skillDir of skillDirs) {
       const skillPath = path.join(root, skillDir);
@@ -476,8 +508,12 @@ async function scanSkills(): Promise<void> {
 
       // 解析 SKILL.md
       const metadata = await parseSkillMetadata(skillPath);
-      if (!metadata) continue;
+      if (!metadata) {
+        log('WARN', 'SCAN', `无法解析 SKILL.md，跳过: ${skillPath}`);
+        continue;
+      }
 
+      log('DEBUG', 'SCAN', `已加载 skill: ${metadata.name} (${skillPath})`);
       newSkillsMap.set(metadata.name, {
         name: metadata.name,
         path: skillPath,
@@ -489,10 +525,12 @@ async function scanSkills(): Promise<void> {
       try {
         await fs.access(toolsDir);
       } catch {
+        log('DEBUG', 'SCAN', `tools 目录不存在，跳过: ${toolsDir}`);
         continue;
       }
 
       const toolFiles = await fs.readdir(toolsDir);
+      log('DEBUG', 'SCAN', `skill [${metadata.name}] 发现 ${toolFiles.length} 个工具文件`);
 
       for (const toolFile of toolFiles) {
         if (!toolFile.endsWith('.json')) continue;
@@ -507,12 +545,18 @@ async function scanSkills(): Promise<void> {
         // [FIX #5] 检测冲突：不一致则记录到 conflictedKeys，调用时会返回 TOOL_CONFLICT
         if (newToolCache[key]) {
           if (!areToolsEqual(newToolCache[key], toolDef)) {
-            console.error(`Tool conflict detected: ${key} has inconsistent definitions`);
+            log('ERROR', 'SCAN', `工具定义冲突: ${key}，已标记为 TOOL_CONFLICT`, {
+              existing: { pluginId: newToolCache[key].pluginId, toolName: newToolCache[key].toolName },
+              incoming: { pluginId: toolDef.pluginId, toolName: toolDef.toolName, path: toolPath },
+            });
             conflictedKeys.add(key);
+          } else {
+            log('DEBUG', 'SCAN', `工具定义重复但一致，去重跳过: ${key}`);
           }
           // 一致则去重，不重复写入
         } else {
           newToolCache[key] = toolDef;
+          log('DEBUG', 'SCAN', `工具已加入缓存: ${key} [${toolDef.pluginType}/${toolDef.protocol ?? 'N/A'}]`);
         }
       }
     }
@@ -520,7 +564,8 @@ async function scanSkills(): Promise<void> {
 
   toolCache = newToolCache;
   skillsMap = newSkillsMap;
-  console.log(`Scanned ${skillsMap.size} skills, ${Object.keys(toolCache).length} tools`);
+  const elapsed = Date.now() - scanStart;
+  log('INFO', 'SCAN', `扫描完成: ${skillsMap.size} 个 skill，${Object.keys(toolCache).length} 个工具，${conflictedKeys.size} 个冲突，耗时 ${elapsed}ms`);
 }
 
 // 懒刷新检查
@@ -532,14 +577,23 @@ async function lazyRefresh(): Promise<void> {
   let directoryChanged = false;
   for (const root of SKILLS_ROOTS) {
     if (await hasDirectoryChanged(root)) {
+      log('INFO', 'REFRESH', `检测到目录变更，触发重新扫描: ${root}`);
       directoryChanged = true;
       break;
     }
   }
 
-  if (directoryChanged || now - lastScanTime > 300000) {
+  const timeSinceScan = now - lastScanTime;
+  const timedOut = timeSinceScan > 300000;
+  if (timedOut) {
+    log('INFO', 'REFRESH', `缓存超时（已 ${Math.round(timeSinceScan / 1000)}s），触发重新扫描`);
+  }
+
+  if (directoryChanged || timedOut) {
     await scanSkills();
     lastScanTime = now;
+  } else {
+    log('DEBUG', 'REFRESH', `缓存有效（${Math.round(timeSinceScan / 1000)}s 前扫描），跳过`);
   }
 }
 
@@ -551,20 +605,25 @@ async function executeCloudTool(
   toolName: string,
   args: Record<string, any>
 ): Promise<ToolResponse> {
+  log('INFO', 'CLOUD', `开始执行 Cloud/MCP 工具: ${pluginId}/${toolName} [${toolDef.protocol}]`, { args });
+
   // 检查配置
   if (!XIAOYI_CONFIG.serviceUrl || !XIAOYI_CONFIG.apiKey || !XIAOYI_CONFIG.uid) {
+    const missing = ['SERVICE_URL', 'PERSONAL_API_KEY', 'PERSONAL_UID'].filter(
+      key => !XIAOYI_CONFIG[key as keyof typeof XIAOYI_CONFIG]
+    );
+    log('ERROR', 'CLOUD', `配置缺失，无法执行: ${pluginId}/${toolName}`, { missing });
     return generateError(
       'CONFIG_MISSING',
       '缺少 Cloud/MCP 工具执行所需的配置',
       false,
-      { missing: ['SERVICE_URL', 'PERSONAL_API_KEY', 'PERSONAL_UID'].filter(
-        key => !XIAOYI_CONFIG[key as keyof typeof XIAOYI_CONFIG]
-      ) }
+      { missing }
     );
   }
 
   // 检查当前 skill 上下文
   if (!currentSkillName) {
+    log('ERROR', 'CLOUD', `没有 skill 上下文，无法执行: ${pluginId}/${toolName}`);
     return generateError(
       'TOOL_NOT_FOUND',
       '没有选中的 skill 上下文',
@@ -577,7 +636,10 @@ async function executeCloudTool(
     ? `${XIAOYI_CONFIG.serviceUrl}/celia-claw/v1/sse-api/skill/execute`
     : `${XIAOYI_CONFIG.serviceUrl}/celia-claw/v1/rest-api/skill/execute`;
 
+  log('DEBUG', 'CLOUD', `请求端点: ${endpoint}，skill 上下文: ${currentSkillName}`);
+
   // 构建请求体
+  const traceId = XIAOYI_CONFIG.traceId();
   const requestBody: PluginExecutorRequest = {
     version: '1.0',
     session: {
@@ -615,11 +677,13 @@ async function executeCloudTool(
     ],
   };
 
+  log('DEBUG', 'CLOUD', `请求体构建完成`, { traceId, sessionId: requestBody.session.sessionId, skillId: currentSkillName });
+
   // 发送请求
   try {
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
-      'x-hag-trace-id': XIAOYI_CONFIG.traceId(),
+      'x-hag-trace-id': traceId,
       'x-uid': XIAOYI_CONFIG.uid,
       'x-api-key': XIAOYI_CONFIG.apiKey,
       'x-request-from': RUNTIME_ID,
@@ -629,14 +693,20 @@ async function executeCloudTool(
 
     if (toolDef.protocol === 'REST') {
       headers['Accept'] = 'application/json';
+      log('INFO', 'CLOUD', `发送 REST 请求: ${endpoint}`, { traceId });
 
+      const fetchStart = Date.now();
       const response = await fetch(endpoint, {
         method: 'POST',
         headers,
         body: JSON.stringify(requestBody),
       });
+      const elapsed = Date.now() - fetchStart;
+
+      log('INFO', 'CLOUD', `REST 响应: status=${response.status}，耗时 ${elapsed}ms`, { traceId });
 
       if (!response.ok) {
+        log('ERROR', 'CLOUD', `PluginExecutor 返回错误: ${response.status}`, { traceId, pluginId, toolName });
         return generateError(
           'UPSTREAM_ERROR',
           `PluginExecutor 返回错误: ${response.status}`,
@@ -646,17 +716,25 @@ async function executeCloudTool(
       }
 
       const data = await response.json();
+      log('DEBUG', 'CLOUD', `REST 响应数据`, data);
+      log('INFO', 'CLOUD', `REST 工具执行成功: ${pluginId}/${toolName}`);
       return generateSuccess(data);
     } else if (toolDef.protocol === 'SSE') {
       headers['Accept'] = 'text/event-stream';
+      log('INFO', 'CLOUD', `发送 SSE 请求: ${endpoint}`, { traceId });
 
+      const fetchStart = Date.now();
       const response = await fetch(endpoint, {
         method: 'POST',
         headers,
         body: JSON.stringify(requestBody),
       });
+      const elapsed = Date.now() - fetchStart;
+
+      log('INFO', 'CLOUD', `SSE 响应: status=${response.status}，耗时 ${elapsed}ms`, { traceId });
 
       if (!response.ok) {
+        log('ERROR', 'CLOUD', `PluginExecutor SSE 返回错误: ${response.status}`, { traceId, pluginId, toolName });
         return generateError(
           'UPSTREAM_ERROR',
           `PluginExecutor 返回错误: ${response.status}`,
@@ -669,25 +747,35 @@ async function executeCloudTool(
       // Readme §4.5：忽略中间片段，只取最后完整结果
       const text = await response.text();
       const events = text.split('\n\n');
+      log('DEBUG', 'CLOUD', `SSE 流接收完毕，共 ${events.length} 个事件帧`, { traceId });
+
       let lastData: any = null;
+      let frameCount = 0;
 
       for (const event of events) {
         if (event.startsWith('data: ')) {
           const dataStr = event.substring(6).trim();
-          if (!dataStr || dataStr === '[DONE]') continue;
+          if (!dataStr || dataStr === '[DONE]') {
+            if (dataStr === '[DONE]') log('DEBUG', 'CLOUD', `SSE 收到 [DONE] 信号`);
+            continue;
+          }
           try {
             const data = JSON.parse(dataStr);
+            frameCount++;
+            log('DEBUG', 'CLOUD', `SSE 有效帧 #${frameCount}`, data);
             // 取最后一条有效 JSON 帧，不再依赖业务字段判断
             lastData = data;
           } catch {
-            // 忽略无效 JSON
+            log('WARN', 'CLOUD', `SSE 帧 JSON 解析失败，跳过: ${dataStr.substring(0, 100)}`);
           }
         }
       }
 
       if (lastData !== null) {
+        log('INFO', 'CLOUD', `SSE 工具执行成功: ${pluginId}/${toolName}，有效帧 ${frameCount} 个`);
         return generateSuccess(lastData);
       } else {
+        log('ERROR', 'CLOUD', `SSE 流结束但无有效结果: ${pluginId}/${toolName}`, { traceId, streamPreview: text.substring(0, 200) });
         return generateError(
           'UPSTREAM_ERROR',
           'SSE 流结束但未返回有效结果',
@@ -697,9 +785,10 @@ async function executeCloudTool(
       }
     }
 
+    log('ERROR', 'CLOUD', `不支持的协议: ${toolDef.protocol}`);
     return generateError('UNSUPPORTED_PROTOCOL', `不支持的协议: ${toolDef.protocol}`, false);
   } catch (error) {
-    console.error('Cloud tool execution failed:', error);
+    log('ERROR', 'CLOUD', `网络请求异常: ${pluginId}/${toolName}`, error);
     return generateError(
       'NETWORK_ERROR',
       `网络错误: ${error instanceof Error ? error.message : String(error)}`,
@@ -789,7 +878,10 @@ async function executeDeviceTool(
   args: Record<string, any>,
   toolCallId: string
 ): Promise<ToolResponse> {
+  log('INFO', 'DEVICE', `开始执行 Device 工具: ${pluginId}/${toolName}`, { toolCallId, args });
+
   if (!toolDef.deviceCommand) {
+    log('ERROR', 'DEVICE', `Device 工具缺少 deviceCommand 定义: ${pluginId}/${toolName}`);
     return generateError(
       'CONFIG_MISSING',
       'Device 工具缺少 deviceCommand 定义',
@@ -799,14 +891,20 @@ async function executeDeviceTool(
 
   // 渲染端命令，目的是做参数校验（必填检查 + 可选字段剔除）
   // 渲染后的 renderedCommand 本身不直接下发，call_device_tool 内部会再次构建命令
+  log('DEBUG', 'DEVICE', `渲染 deviceCommand 模板并校验参数: ${pluginId}/${toolName}`);
   const { error: renderError } = renderDeviceCommand(
     toolDef.deviceCommand.template,
     args,
     toolDef.arguments
   );
-  if (renderError) return renderError;
+  if (renderError) {
+    log('ERROR', 'DEVICE', `deviceCommand 渲染失败: ${pluginId}/${toolName}`, renderError);
+    return renderError;
+  }
+  log('DEBUG', 'DEVICE', `deviceCommand 渲染校验通过: ${pluginId}/${toolName}`);
 
   if (!callDeviceToolInstance) {
+    log('ERROR', 'DEVICE', `callDeviceToolInstance 未初始化，请通过 createFunctionCallTool 调用`);
     return generateError(
       'CONFIG_MISSING',
       'Device 工具执行缺少 call_device_tool 实例（未通过 createFunctionCallTool 调用）',
@@ -817,11 +915,16 @@ async function executeDeviceTool(
   // 直接调用 call_device_tool.execute，复用其完整的
   // sendCommand + data-event 监听 + 超时 + 错误处理逻辑
   // 参数格式与 call_device_tool.parameters 定义完全一致：{ toolName, arguments }
+  log('INFO', 'DEVICE', `调用 call_device_tool.execute: ${pluginId}/${toolName}`, { toolCallId });
+  const execStart = Date.now();
   const result = await callDeviceToolInstance.execute(toolCallId, {
     toolName,
     arguments: args,
   });
+  const elapsed = Date.now() - execStart;
 
+  log('INFO', 'DEVICE', `Device 工具执行完毕: ${pluginId}/${toolName}，耗时 ${elapsed}ms`);
+  log('DEBUG', 'DEVICE', `Device 执行结果`, result);
   return generateSuccess(result);
 }
 
@@ -831,6 +934,9 @@ async function executeDeviceTool(
  * 设置当前 skill 上下文（由运行时在调用 function_call_tool 前设置）
  */
 export function setCurrentSkill(skillName: string | null): void {
+  if (skillName !== currentSkillName) {
+    log('DEBUG', 'CTX', `skill 上下文切换: ${currentSkillName ?? '(null)'} → ${skillName ?? '(null)'}`);
+  }
   currentSkillName = skillName;
 }
 
@@ -838,7 +944,9 @@ export function setCurrentSkill(skillName: string | null): void {
  * 手动刷新工具缓存
  */
 export async function refreshToolCache(): Promise<void> {
+  log('INFO', 'CACHE', '手动触发工具缓存刷新');
   await scanSkills();
+  log('INFO', 'CACHE', '工具缓存刷新完成');
 }
 
 /**
@@ -851,8 +959,15 @@ export async function function_call_tool(params: {
   arguments: Record<string, any>;
   toolCallId?: string;
 }): Promise<ToolResponse> {
+  const callId = params.toolCallId ?? `call-${Date.now()}`;
+  log('INFO', 'CALL', `工具调用入口: ${params.pluginId}/${params.toolName}`, {
+    toolCallId: callId,
+    argumentKeys: params.arguments ? Object.keys(params.arguments) : [],
+  });
+
   // 参数验证
   if (!params.pluginId || !params.toolName || !params.arguments) {
+    log('ERROR', 'CALL', `缺少必要参数`, { received: Object.keys(params) });
     return generateError(
       'INVALID_PARAM',
       '缺少必要参数: pluginId, toolName, arguments',
@@ -862,6 +977,7 @@ export async function function_call_tool(params: {
   }
 
   // 懒刷新缓存
+  log('DEBUG', 'CALL', `检查缓存刷新: ${params.pluginId}/${params.toolName}`);
   await lazyRefresh();
 
   // 查找工具
@@ -869,6 +985,7 @@ export async function function_call_tool(params: {
 
   // [FIX #5] 调用前检查是否存在冲突，有冲突直接返回 TOOL_CONFLICT
   if (conflictedKeys.has(cacheKey)) {
+    log('ERROR', 'CALL', `工具存在冲突定义，拒绝执行: ${cacheKey}`);
     return generateError(
       'TOOL_CONFLICT',
       `工具 ${params.pluginId}/${params.toolName} 存在不一致的定义`,
@@ -880,6 +997,7 @@ export async function function_call_tool(params: {
   const toolDef = toolCache[cacheKey];
 
   if (!toolDef) {
+    log('ERROR', 'CALL', `工具未找到: ${cacheKey}，当前缓存工具: ${Object.keys(toolCache).join(', ') || '(空)'}`);
     return generateError(
       'TOOL_NOT_FOUND',
       `未找到工具: ${params.pluginId}/${params.toolName}`,
@@ -888,13 +1006,19 @@ export async function function_call_tool(params: {
     );
   }
 
+  log('DEBUG', 'CALL', `工具已找到: ${cacheKey} [${toolDef.pluginType}]`);
+
   // [FIX #1] 使用 validateArguments 并访问 toolDef.arguments
+  log('DEBUG', 'CALL', `校验入参: ${cacheKey}`, { args: params.arguments });
   const validationError = validateArguments(params.arguments, toolDef.arguments);
   if (validationError) {
+    log('WARN', 'CALL', `入参校验失败: ${cacheKey}`, validationError);
     return validationError;
   }
+  log('DEBUG', 'CALL', `入参校验通过: ${cacheKey}`);
 
   // 根据 pluginType 执行
+  log('INFO', 'CALL', `分发执行: ${cacheKey} → ${toolDef.pluginType}`);
   switch (toolDef.pluginType) {
     case 'Cloud':
     case 'MCP':
@@ -915,6 +1039,7 @@ export async function function_call_tool(params: {
       );
 
     default:
+      log('ERROR', 'CALL', `不支持的 pluginType: ${toolDef.pluginType}`, { cacheKey });
       return generateError(
         'UNSUPPORTED_PLUGIN_TYPE',
         `不支持的 pluginType: ${toolDef.pluginType}`,
@@ -969,10 +1094,12 @@ export const toolRegistration = {
  * 仅在 execute 入口处注入 SessionContext 信息。
  */
 export function createFunctionCallTool(ctx: SessionContext): any {
+  log('INFO', 'INIT', `createFunctionCallTool 初始化: agentId=${ctx.agentId ?? '(null)'}, sessionId=${ctx.sessionId ?? '(null)'}`);
   // 用同一个 ctx 构造 call_device_tool 实例，并注入供 executeDeviceTool 使用
   // 延迟 import 避免循环依赖：call-device-tool.ts 不依赖本文件
   import('./call-device-tool.js').then(({ createCallDeviceTool }) => {
     setCallDeviceToolInstance(createCallDeviceTool(ctx));
+    log('INFO', 'INIT', `call_device_tool 实例注入完成: agentId=${ctx.agentId ?? '(null)'}`);
   });
 
   return {
@@ -984,6 +1111,12 @@ export function createFunctionCallTool(ctx: SessionContext): any {
     async execute(toolCallId: string, params: any) {
       // 将 SessionContext 中的 agentId 作为当前 skill 上下文注入
       setCurrentSkill(ctx.agentId ?? null);
+      log('INFO', 'EXECUTE', `createFunctionCallTool.execute 调用: ${params.pluginId}/${params.toolName}`, {
+        toolCallId,
+        agentId: ctx.agentId,
+        sessionId: ctx.sessionId,
+        argumentKeys: params.arguments ? Object.keys(params.arguments) : [],
+      });
 
       try {
         const result = await function_call_tool({
@@ -993,9 +1126,11 @@ export function createFunctionCallTool(ctx: SessionContext): any {
           arguments: params.arguments ?? {},
           toolCallId,
         });
+        log('INFO', 'EXECUTE', `工具调用结束: ${params.pluginId}/${params.toolName}`, { ok: result.ok, toolCallId });
         return result;
       } finally {
         // 执行完毕后清理 skill 上下文，避免泄漏到其他工具调用
+        log('DEBUG', 'EXECUTE', `清理 skill 上下文: ${ctx.agentId ?? '(null)'}`);
         setCurrentSkill(null);
       }
     },

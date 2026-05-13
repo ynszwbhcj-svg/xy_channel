@@ -1,0 +1,26 @@
+{
+    "schemaVersion": "1.3",
+    "generationAt": "2026-05-13T14:24:00Z",
+    "pluginId": "7dedac1c0f9a45faabb07edbb8a4e31d",
+    "toolName": "SeedreamBatch_5",
+    "toolType": "XiaoYiPlugin",
+    "pluginType": "Cloud",
+    "protocol": "SSE",
+    "description": "doubao seedream",
+    "arguments": {
+      "type": "object",
+      "required": [
+        "prompt", "size"
+      ],
+      "properties": {
+        "prompt": {
+          "type": "String",
+          "description": "query"
+        },
+        "size": {
+          "type": "String",
+          "description": "生成的图片尺寸"
+        }
+      }
+    }
+  }
