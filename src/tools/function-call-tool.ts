@@ -5,20 +5,23 @@ import * as os from 'os';
 import * as dotenv from 'dotenv';
 dotenv.config();
 import type { SessionContext } from './session-manager.js';
+import { logger } from './utils/logger.js';
 
 // ============ Logger ============
 
 const LOG_PREFIX = '[FCT]'; // function-call-tool
 
 function log(level: 'DEBUG' | 'INFO' | 'WARN' | 'ERROR', tag: string, msg: string, data?: any): void {
-  const ts = new Date().toISOString();
-  const prefix = `${ts} ${LOG_PREFIX}[${level}][${tag}]`;
-  if (data !== undefined) {
-    const fn = level === 'ERROR' ? console.error : level === 'WARN' ? console.warn : console.log;
-    fn(`${prefix} ${msg}`, data);
+  const prefix = `${LOG_PREFIX}[${tag}]`;
+  const formatted = `${prefix} ${msg}`;
+  if (level === 'ERROR') {
+    data !== undefined ? logger.error(formatted, data) : logger.error(formatted);
+  } else if (level === 'WARN') {
+    data !== undefined ? logger.warn(formatted, data) : logger.warn(formatted);
+  } else if (level === 'DEBUG') {
+    data !== undefined ? logger.debug(formatted, data) : logger.debug(formatted);
   } else {
-    const fn = level === 'ERROR' ? console.error : level === 'WARN' ? console.warn : console.log;
-    fn(`${prefix} ${msg}`);
+    data !== undefined ? logger.log(formatted, data) : logger.log(formatted);
   }
 }
 
@@ -207,7 +210,7 @@ async function loadXiaoyiConfig(): Promise<XiaoyiConfig> {
       traceId: () => `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
     };
   } catch (error) {
-    console.warn(`[XIAOYI_CONFIG] 无法读取 ${envFilePath}，使用空配置:`, error);
+    logger.warn(`[FCT][CONFIG] 无法读取 ${envFilePath}，使用空配置:`, error);
     return {
       ...defaults,
       traceId: () => `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
@@ -362,7 +365,7 @@ async function parseSkillMetadata(skillPath: string): Promise<SkillMetadata | nu
     // 解析 frontmatter (YAML)
     const frontmatterMatch = content.match(/^---\n([\s\S]*?)\n---/);
     if (!frontmatterMatch) {
-      console.error(`No frontmatter found in ${skillMdPath}`);
+      logger.error(`[FCT][SCAN] No frontmatter found in ${skillMdPath}`);
       return null;
     }
 
@@ -418,7 +421,7 @@ async function parseSkillMetadata(skillPath: string): Promise<SkillMetadata | nu
 
     return metadata as SkillMetadata;
   } catch (error) {
-    console.error(`Failed to parse SKILL.md at ${skillPath}:`, error);
+    logger.error(`[FCT][SCAN] Failed to parse SKILL.md at ${skillPath}:`, error);
     return null;
   }
 }
@@ -1052,8 +1055,8 @@ export async function function_call_tool(params: {
 // ============ 初始化 ============
 
 // 启动时初始化配置并扫描 skills
-initXiaoyiConfig().catch(console.error);
-scanSkills().catch(console.error);
+initXiaoyiConfig().catch(e => logger.error('[FCT][INIT] initXiaoyiConfig 失败:', e));
+scanSkills().catch(e => logger.error('[FCT][INIT] scanSkills 失败:', e));
 
 // 导出工具注册信息（用于 LLM）
 // [FIX #3] 参数名改为 `arguments`，description 也同步更新
