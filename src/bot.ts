@@ -258,11 +258,26 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
         );
       }
     }
-    // 🔑 Steer消息加 /steer 前缀，触发core的 queueEmbeddedPiMessage
-    if (isUpdate && textForAgent) {
-      textForAgent = `/steer ${textForAgent}`;
-      logger.log(`[BOT] 🔄 Prepended /steer for steer injection`);
+    // 🔑 Steer消息: 跳过旧路径直接进入 streaming-signal 队列
+    // /steer 前缀由 dispatchSteerWhenReady 内部添加
+    if (isUpdate) {
+      logger.log(`[BOT] 🔄 Steer message — enqueuing to streaming-signal queue`);
+      await enqueueSteer({
+        sessionId: parsed.sessionId,
+        sessionKey: route.sessionKey,
+        steerText: textForAgent,        // 原始文本，不带 /steer 前缀
+        cfg,
+        runtime,
+        parsed,
+        route,
+        deviceType,
+      });
+      logger.log(`[BOT] ✅ Steer queue completed for session: ${parsed.sessionId}`);
+      logger.log(`xy: dispatch complete (session=${parsed.sessionId})`);
+      return;
     }
+
+    // ── First message (non-steer) path below ──────────────────────
 
     // File download — only for real user messages, steer injections have no files
     let mediaPayload: ReturnType<typeof buildXYMediaPayload> = {};
@@ -318,15 +333,10 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
       ...mediaPayload,
     });
 
-    // 🔑 Dynamic steer state: when isUpdate (second message), start as steered=true
-    // so the dispatcher skips all user-facing callbacks (deliver, onIdle, etc.)
-    // and onSettled skips cleanup.
-    const steerState = { steered: isUpdate };
-
     // 🔑 第一条消息创建 streaming 信号（provider.ts 的 wrapStreamFn 触发）
-    if (!isUpdate) {
-      createStreamingSignal(parsed.sessionId);
-    }
+    createStreamingSignal(parsed.sessionId);
+
+    const steerState = { steered: false };
 
     // 🔑 创建dispatcher
     logger.log(`[BOT-DISPATCHER] 🎯 Creating reply dispatcher`);
@@ -415,20 +425,6 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
         return dispatchPromise;
       },
     });
-
-    // 🔑 Steer 串行队列：等待 streaming 信号后 dispatch，多个 steer 按顺序处理
-    if (isUpdate) {
-      await enqueueSteer({
-        sessionId: parsed.sessionId,
-        sessionKey: route.sessionKey,
-        steerText: textForAgent,
-        cfg,
-        runtime,
-        parsed,
-        route,
-        deviceType,
-      });
-    }
 
     logger.log(`[BOT] ✅ Dispatcher completed for session: ${parsed.sessionId}`);
     logger.log(`xy: dispatch complete (session=${parsed.sessionId})`);
@@ -595,7 +591,8 @@ async function dispatchSteerWhenReady(params: EnqueueSteerParams): Promise<void>
   // 3. 构建 dispatch 上下文并 dispatch /steer
   const core = getXYRuntime() as any;
   const speaker = sessionId;
-  const messageBody = `${speaker}: ${steerText}`;
+  const steerCommand = `/steer ${steerText}`;
+  const messageBody = `${speaker}: ${steerCommand}`;
   const envelopeOptions = core.channel.reply.resolveEnvelopeFormatOptions(params.cfg);
   const body = core.channel.reply.formatAgentEnvelope({
     channel: "xiaoyi-channel",
@@ -607,8 +604,8 @@ async function dispatchSteerWhenReady(params: EnqueueSteerParams): Promise<void>
 
   const ctxPayload = core.channel.reply.finalizeInboundContext({
     Body: body,
-    RawBody: steerText,
-    CommandBody: steerText,
+    RawBody: steerCommand,
+    CommandBody: steerCommand,
     From: sessionId,
     To: sessionId,
     SessionKey: params.route.sessionKey,
