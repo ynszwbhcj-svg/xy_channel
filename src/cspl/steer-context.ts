@@ -7,24 +7,10 @@ import { randomUUID } from "node:crypto";
 
 let cachedCfg: ClawdbotConfig | null = null;
 let cachedRuntime: RuntimeEnv | null = null;
-let cachedAccountId: string = "default";
 
-export function setCsplSteerContext(
-  cfg: ClawdbotConfig,
-  runtime: RuntimeEnv,
-  accountId: string,
-): void {
+export function setCsplSteerContext(cfg: ClawdbotConfig, runtime: RuntimeEnv): void {
   cachedCfg = cfg;
   cachedRuntime = runtime;
-  cachedAccountId = accountId;
-}
-
-export function getCsplSteerContext(): {
-  cfg: ClawdbotConfig | null;
-  runtime: RuntimeEnv | null;
-  accountId: string;
-} {
-  return { cfg: cachedCfg, runtime: cachedRuntime, accountId: cachedAccountId };
 }
 
 /**
@@ -63,7 +49,7 @@ export async function injectCsplSteer(
       cfg: cachedCfg,
       runtime: cachedRuntime,
       message: syntheticMessage as any,
-      accountId: cachedAccountId,
+      accountId: "default",
     });
     return true;
   } catch (err) {

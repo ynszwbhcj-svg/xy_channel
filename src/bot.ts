@@ -48,7 +48,7 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
   const { cfg, runtime, message, accountId, webSocketSessionId } = params;
 
   // Cache context for CSPL steer injection (after_tool_call hook)
-  setCsplSteerContext(cfg, runtime, accountId);
+  setCsplSteerContext(cfg, runtime);
 
   // Get runtime (already validated in monitor.ts, but get reference for use)
   const core = getXYRuntime() as any;
