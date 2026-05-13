@@ -5,9 +5,6 @@ package-lock.json
 # Build output
 dist/
 
-# Documentation
-*.md
-
 # IDE
 .claude/
 
