@@ -266,11 +266,20 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
       // 会被 globalDispatchInitGate 永久阻塞。
       params.onInitComplete?.();
 
+      // Steer 也支持文件 —— 提取并下载，附带到 mediaPayload
+      const steerFileParts = extractFileParts(parsed.parts);
+      const steerDownloadedFiles = await downloadFilesFromParts(steerFileParts);
+      const steerMediaPayload = buildXYMediaPayload(steerDownloadedFiles);
+      if (steerFileParts.length > 0) {
+        logger.log(`[BOT] 📎 Steer message with files: ${steerFileParts.length} file(s)`);
+      }
+
       logger.log(`[BOT] 🔄 Steer message — enqueuing to streaming-signal queue`);
       await enqueueSteer({
         sessionId: parsed.sessionId,
         sessionKey: route.sessionKey,
         steerText: textForAgent,        // 原始文本，不带 /steer 前缀
+        mediaPayload: steerMediaPayload,
         cfg,
         runtime,
         parsed,
@@ -547,6 +556,7 @@ interface EnqueueSteerParams {
   sessionId: string;
   sessionKey: string;
   steerText: string;
+  mediaPayload: ReturnType<typeof buildXYMediaPayload>;
   cfg: ClawdbotConfig;
   runtime: RuntimeEnv;
   parsed: ReturnType<typeof parseA2AMessage>;
@@ -651,6 +661,7 @@ async function dispatchSteerWhenReady(params: EnqueueSteerParams): Promise<void>
     OriginatingChannel: "xiaoyi-channel" as const,
     OriginatingTo: sessionId,
     ReplyToBody: undefined,
+    ...params.mediaPayload,
   });
 
   const steerState = { steered: true };
