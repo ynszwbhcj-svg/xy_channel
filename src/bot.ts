@@ -37,6 +37,12 @@ export interface HandleXYMessageParams {
   webSocketSessionId?: string; // 可选：WebSocket 层级的 sessionId，用于保存 .xiaoyiruntime
   /** Called after dispatch init is complete (agentTools/wrapStreamFn done). */
   onInitComplete?: () => void;
+  /**
+   * When true, skip taskId/session registration. Used by tryInjectSteer to
+   * inject a steer message without overwriting the active taskId or leaking
+   * session refCount.
+   */
+  skipRegistration?: boolean;
 }
 
 /**
@@ -139,6 +145,7 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
 
     // 🔑 注册taskId（检测是否是已有活跃任务的 session）
     const isUpdate = hasActiveTask(parsed.sessionId);
+    const skipReg = params.skipRegistration === true;
 
     if (isUpdate) {
       logger.log(`[BOT] 🔄 STEER MODE - Second message detected (core will handle steer)`);
@@ -146,7 +153,10 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
       logger.log(`[BOT]   - New taskId: ${parsed.taskId}`);
     }
 
-    registerTaskId(parsed.sessionId, parsed.taskId, parsed.messageId);
+    // Steer injections skip taskId registration to avoid overwriting the active taskId
+    if (!skipReg) {
+      registerTaskId(parsed.sessionId, parsed.taskId, parsed.messageId);
+    }
 
     // Extract and update push_id if present
     const pushId = extractPushId(parsed.parts);
@@ -195,27 +205,30 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
 
     logger.log(`xy: resolved route accountId=${route.accountId}, sessionKey=${route.sessionKey}`);
 
-    registerSession(route.sessionKey, {
-      config,
-      sessionId: parsed.sessionId,
-      taskId: parsed.taskId,
-      messageId: parsed.messageId,
-      agentId: route.accountId,
-      deviceType,
-    });
+    // Steer injections skip session registration to avoid refCount leaks
+    if (!skipReg) {
+      registerSession(route.sessionKey, {
+        config,
+        sessionId: parsed.sessionId,
+        taskId: parsed.taskId,
+        messageId: parsed.messageId,
+        agentId: route.accountId,
+        deviceType,
+      });
 
-    // 🔑 发送初始状态更新
-    logger.log(`[STATUS] Sending initial status update for session ${parsed.sessionId}`);
-    void sendStatusUpdate({
-      config,
-      sessionId: parsed.sessionId,
-      taskId: parsed.taskId,
-      messageId: parsed.messageId,
-      text: "任务正在处理中，请稍候~",
-      state: "working",
-    }).catch((err) => {
-      logger.error(`Failed to send initial status update:`, err);
-    });
+      // 🔑 发送初始状态更新
+      logger.log(`[STATUS] Sending initial status update for session ${parsed.sessionId}`);
+      void sendStatusUpdate({
+        config,
+        sessionId: parsed.sessionId,
+        taskId: parsed.taskId,
+        messageId: parsed.messageId,
+        text: "任务正在处理中，请稍候~",
+        state: "working",
+      }).catch((err) => {
+        logger.error(`Failed to send initial status update:`, err);
+      });
+    }
 
     // Extract text and files from parts
     const text = extractTextFromParts(parsed.parts);
@@ -321,7 +334,10 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
       steerState,
     });
 
-    startStatusInterval();
+    // Steer injections don't need status intervals
+    if (!skipReg) {
+      startStatusInterval();
+    }
 
     // Build session context for AsyncLocalStorage
     const sessionContext = {
