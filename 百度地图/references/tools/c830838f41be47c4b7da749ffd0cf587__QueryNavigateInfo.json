@@ -1,0 +1,58 @@
+{
+    "schemaVersion": "1.3",
+    "generationAt": "2026-05-13T09:53:00Z",
+    "pluginId": "c830838f41be47c4b7da749ffd0cf587",
+    "toolName": "QueryNavigateInfo",
+    "toolType": "XiaoYiPlugin",
+    "pluginType": "Cloud",
+    "protocol": "REST",
+    "description": "QueryNavigateInfo",
+    "arguments": {
+      "type": "object",
+      "required": [
+        "locationSystem"
+      ],
+      "properties": {
+        "query": {
+          "type": "String",
+          "description": "query"
+        },
+        "routeType": {
+          "type": "String",
+          "description": "类型类型 shortestTime 时间优先 noHighway 不走高速 highwayFirst 高速优先 avoidCharge 少收费 smartRoute 智能路线"
+        },
+        "wayPoints": {
+          "type": "Array",
+          "description": "途经点"
+        },
+        "dstLocation": {
+          "type": "Object",
+          "description": "目的地"
+        },
+        "resetDialog": {
+          "type": "Integer",
+          "description": "首轮标识, 1: 首轮, 0: 非首轮"
+        },
+        "srcLocation": {
+          "type": "Object",
+          "description": "出发地"
+        },
+        "trafficType": {
+          "type": "String",
+          "description": "交通方式（类型）: Drive 驾车(默认值）,Walk 步行,Cycle 骑行,Bus 公交,Subway 地铁"
+        },
+        "locationSystem": {
+          "type": "String",
+          "description": "坐标系"
+        },
+        "currentLocation": {
+          "type": "Object",
+          "description": "当前位置信息"
+        },
+        "dstLocationType": {
+          "type": "String",
+          "description": "目的地类型，比如”家“、”公司“"
+        }
+      }
+    }
+  }
