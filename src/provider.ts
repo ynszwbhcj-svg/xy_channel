@@ -28,9 +28,7 @@ function isRetryableProviderError(message: string | undefined): boolean {
   return false;
 }
 
-/** Extract text content from all user messages, searching from the last backwards
- *  so that cron-detection works even when a job reuses a previous sessionId
- *  (the `[cron:...]` tag is in the newest user message, not the first). */
+/** Extract text content from the first user message. */
 function getFirstUserText(messages: Array<{ role: string; content?: string | Array<{ type: string; text?: string }> }> | undefined): string {
   if (!messages) return "";
   const firstUser = messages.find(m => m.role === "user");
@@ -43,46 +41,18 @@ function getFirstUserText(messages: Array<{ role: string; content?: string | Arr
   return "";
 }
 
-/** Search ALL user messages for cron tag, newest first. */
-function anyUserMessageHasCron(messages: Array<{ role: string; content?: string | Array<{ type: string; text?: string }> }> | undefined): boolean {
-  if (!messages) return false;
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const msg = messages[i];
-    if (msg.role !== "user") continue;
-    const text = typeof msg.content === "string"
-      ? msg.content
-      : Array.isArray(msg.content)
-        ? (msg.content.find((b: any) => b.type === "text") as any)?.text ?? ""
-        : "";
-    if (/\[cron:/i.test(text)) return true;
-  }
-  return false;
-}
-
 /** Regex to match `[cron:<uuid> <title>]` anywhere in text. */
 const CRON_TAG_RE = /\[cron:[^\s\]]+\s+([^\]]+)\]/;
 
-/** Check if the request is triggered by a cron job by inspecting ALL user messages.
- *  Searches newest-first to handle session reuse (the cron tag is in the latest message). */
+/** Check if the request is triggered by a cron job by inspecting the first user message. */
 function isCronTriggered(messages: Array<{ role: string; content?: string | Array<{ type: string; text?: string }> }> | undefined): boolean {
-  return anyUserMessageHasCron(messages);
+  return /\[cron:/i.test(getFirstUserText(messages));
 }
 
-/** Extract cron title from the newest user message matching `[cron:<uuid> <title>]`. */
+/** Extract cron title from first user message matching `[cron:<uuid> <title>]`. */
 function extractCronTitle(messages: Array<{ role: string; content?: string | Array<{ type: string; text?: string }> }> | undefined): string | undefined {
-  if (!messages) return undefined;
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const msg = messages[i];
-    if (msg.role !== "user") continue;
-    const text = typeof msg.content === "string"
-      ? msg.content
-      : Array.isArray(msg.content)
-        ? (msg.content.find((b: any) => b.type === "text") as any)?.text ?? ""
-        : "";
-    const match = text.match(CRON_TAG_RE);
-    if (match) return match[1];
-  }
-  return undefined;
+  const match = getFirstUserText(messages).match(CRON_TAG_RE);
+  return match ? match[1] : undefined;
 }
 
 /** Compute retry delay in ms for the given 1-based attempt, with up to 10s jitter. */
