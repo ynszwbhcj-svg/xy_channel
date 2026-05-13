@@ -113,23 +113,9 @@ export default definePluginEntry({
     // in ALL registration modes (not just "full").
     api.registerProvider(xiaoyiProvider);
 
-    if (api.registrationMode === "cli-metadata") {
-      return;
-    }
-
-    if (api.registrationMode === "tool-discovery") {
-      registerFullHooks(api);
-      return;
-    }
-
     // Register channel plugin and set runtime
     api.registerChannel({ plugin: xyPlugin });
     setXYRuntime(api.runtime);
-
-    if (api.registrationMode === "discovery") {
-      return;
-    }
-
     if (api.registrationMode === "full") {
       registerFullHooks(api);
       registerCsplHook(api);
