@@ -411,6 +411,22 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
       },
     });
 
+    // 🔑 Steer 重试：如果首次注入失败（run 还没 streaming），等待后重试
+    if (isUpdate) {
+      await retrySteerIfNeeded({
+        steerState,
+        sessionId: parsed.sessionId,
+        sessionKey: route.sessionKey,
+        steerText: textForAgent,
+        ctxPayload,
+        cfg,
+        runtime,
+        parsed,
+        route,
+        deviceType,
+      });
+    }
+
     logger.log(`[BOT] ✅ Dispatcher completed for session: ${parsed.sessionId}`);
     logger.log(`xy: dispatch complete (session=${parsed.sessionId})`);
   } catch (err) {
@@ -477,4 +493,148 @@ function buildXYMediaPayload(
     MediaPaths: mediaPaths.length > 0 ? mediaPaths : undefined,
     MediaTypes: mediaTypes.length > 0 ? mediaTypes : undefined,
   };
+}
+
+/** Steer 重试参数 */
+interface SteerRetryParams {
+  steerState: { steered: boolean; steerResult?: 'success' | 'fail' };
+  sessionId: string;
+  sessionKey: string;
+  steerText: string;    // 已带 /steer 前缀的文本
+  ctxPayload: any;
+  cfg: ClawdbotConfig;
+  runtime: RuntimeEnv;
+  parsed: ReturnType<typeof parseA2AMessage>;
+  route: { accountId: string; sessionKey: string };
+  deviceType: string;
+}
+
+const STEER_RETRY_DELAYS = [2000, 3000, 5000];
+
+/**
+ * Steer 注入重试：当首次注入因 run 未 streaming 而失败时，
+ * 等待递增延迟后重试，最多尝试 3 次。
+ */
+async function retrySteerIfNeeded(params: SteerRetryParams): Promise<void> {
+  const { steerState, sessionId, steerText } = params;
+
+  // 首次成功则无需重试
+  if (steerState.steerResult === 'success') {
+    logger.log(`[STEER-RETRY] ✅ Steer succeeded on first attempt`);
+    return;
+  }
+
+  // 只有明确失败才重试；无结果可能是异常路径，也尝试重试
+  if (steerState.steerResult !== 'fail' && steerState.steerResult !== undefined) {
+    return;
+  }
+
+  logger.log(`[STEER-RETRY] ⚠️ First steer attempt result=${steerState.steerResult}, starting retry loop`);
+
+  const core = getXYRuntime() as any;
+
+  for (let attempt = 0; attempt < STEER_RETRY_DELAYS.length; attempt++) {
+    const delay = STEER_RETRY_DELAYS[attempt];
+    logger.log(`[STEER-RETRY] ⏳ Waiting ${delay}ms before retry #${attempt + 1}`);
+
+    await new Promise(resolve => setTimeout(resolve, delay));
+
+    // 第一条消息已结束，无需继续
+    if (!hasActiveTask(sessionId)) {
+      logger.log(`[STEER-RETRY] ℹ️ First message completed, skip retry`);
+      return;
+    }
+
+    logger.log(`[STEER-RETRY] 🔄 Retrying steer dispatch #${attempt + 1}`);
+
+    // 构建新的 steer 消息上下文
+    const speaker = sessionId;
+    const messageBody = `${speaker}: ${steerText}`;
+    const envelopeOptions = core.channel.reply.resolveEnvelopeFormatOptions(params.cfg);
+    const body = core.channel.reply.formatAgentEnvelope({
+      channel: "xiaoyi-channel",
+      from: speaker,
+      timestamp: new Date(),
+      envelope: envelopeOptions,
+      body: messageBody,
+    });
+
+    const retryCtx = core.channel.reply.finalizeInboundContext({
+      Body: body,
+      RawBody: steerText,
+      CommandBody: steerText,
+      From: sessionId,
+      To: sessionId,
+      SessionKey: params.route.sessionKey,
+      AccountId: params.route.accountId,
+      ChatType: "direct" as const,
+      GroupSubject: undefined,
+      SenderName: sessionId,
+      SenderId: sessionId,
+      Provider: "xiaoyi-channel" as const,
+      Surface: "xiaoyi-channel" as const,
+      MessageSid: `${params.parsed.taskId}_${params.deviceType}`,
+      Timestamp: Date.now(),
+      WasMentioned: false,
+      CommandAuthorized: true,
+      OriginatingChannel: "xiaoyi-channel" as const,
+      OriginatingTo: sessionId,
+      ReplyToBody: undefined,
+    });
+
+    const retryState: { steered: boolean; steerResult?: 'success' | 'fail' } = { steered: true };
+
+    const { dispatcher: retryDispatcher, replyOptions: retryReplyOptions } =
+      createXYReplyDispatcher({
+        cfg: params.cfg,
+        runtime: params.runtime,
+        sessionId,
+        taskId: params.parsed.taskId,
+        messageId: params.parsed.messageId,
+        accountId: params.route.accountId,
+        steerState: retryState,
+      });
+
+    const sessionContext = {
+      config: resolveXYConfig(params.cfg),
+      sessionId,
+      taskId: params.parsed.taskId,
+      messageId: params.parsed.messageId,
+      agentId: params.route.accountId,
+      deviceType: params.deviceType,
+    };
+
+    try {
+      await core.channel.reply.withReplyDispatcher({
+        dispatcher: retryDispatcher,
+        onSettled: () => {
+          logger.log(`[STEER-RETRY] 🏁 Retry dispatch settled, result=${retryState.steerResult}`);
+        },
+        run: () => {
+          return runWithSessionContext(sessionContext, async () => {
+            const result = await core.channel.reply.dispatchReplyFromConfig({
+              ctx: retryCtx,
+              cfg: params.cfg,
+              dispatcher: retryDispatcher,
+              replyOptions: retryReplyOptions,
+            });
+            logger.log(`[STEER-RETRY] dispatch result: ${JSON.stringify(result)}`);
+            return result;
+          });
+        },
+      });
+    } catch (err) {
+      logger.error(`[STEER-RETRY] ❌ Retry dispatch #${attempt + 1} threw: ${String(err)}`);
+      continue;
+    }
+
+    if (retryState.steerResult === 'success') {
+      logger.log(`[STEER-RETRY] ✅ Steer succeeded on retry #${attempt + 1}`);
+      return;
+    }
+
+    logger.log(`[STEER-RETRY] ⚠️ Retry #${attempt + 1} result=${retryState.steerResult}, continuing`);
+  }
+
+  logger.warn(`[STEER-RETRY] ❌ All retries exhausted for session ${sessionId}`);
 }

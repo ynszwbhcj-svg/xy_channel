@@ -16,7 +16,7 @@ export interface CreateXYReplyDispatcherParams {
   taskId: string;
   messageId: string;
   accountId: string;
-  steerState: { steered: boolean };  // Dynamic flag set when dispatchReplyFromConfig steers
+  steerState: { steered: boolean; steerResult?: 'success' | 'fail' };  // Dynamic flag set when dispatchReplyFromConfig steers
 }
 
 const TEMP_FILE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
@@ -147,7 +147,13 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
       deliver: async (payload: ReplyPayload, info) => {
         // 🔑 steered dispatch不发送内容（让主dispatcher处理）
         if (steerState.steered) {
-          logger.log(`[DELIVER] Steered dispatch - skipping deliver, info.kind=${info?.kind}`);
+          const text = payload.text ?? '';
+          if (text.includes('steered current session')) {
+            steerState.steerResult = 'success';
+          } else if (text.includes('not accepting steering') || text.includes('No active run')) {
+            steerState.steerResult = 'fail';
+          }
+          logger.log(`[DELIVER] Steered dispatch - result=${steerState.steerResult}, info.kind=${info?.kind}, text=${text.slice(0, 80)}`);
           return;
         }
 
