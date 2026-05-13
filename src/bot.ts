@@ -508,7 +508,15 @@ interface StreamingSignal {
   notify: () => void;
 }
 
-const streamingSignals = new Map<string, StreamingSignal>();
+// Use globalThis to survive module deduplication — provider.ts may load a
+// different copy of bot.ts, so a plain module-level Map would be two objects.
+const _g = globalThis as Record<string, unknown>;
+
+if (!_g.__xyStreamingSignals) _g.__xyStreamingSignals = new Map<string, StreamingSignal>();
+if (!_g.__xySteerQueues) _g.__xySteerQueues = new Map<string, Promise<void>>();
+
+const streamingSignals = _g.__xyStreamingSignals as Map<string, StreamingSignal>;
+const steerQueues = _g.__xySteerQueues as Map<string, Promise<void>>;
 
 /**
  * 由 provider.ts 在 wrapStreamFn 调用时触发。
@@ -531,9 +539,6 @@ function createStreamingSignal(sessionId: string): StreamingSignal {
   logger.log(`[STEER-QUEUE] 🟢 Streaming signal created for session ${sessionId}`);
   return signal;
 }
-
-/** Per-session 串行队列：保证同一 session 的 steer 消息按顺序处理 */
-const steerQueues = new Map<string, Promise<void>>();
 
 interface EnqueueSteerParams {
   sessionId: string;
