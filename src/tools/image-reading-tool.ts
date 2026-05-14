@@ -79,7 +79,7 @@ async function callImageUnderstandingAPI(
     "x-api-key": apiKey,
     "x-request-from": "openclaw",
     "x-uid": uid,
-    "x-skill-id": "image_comprehension",
+    "x-skill-id": "xiaoyi_image_comprehension",
     "x-prd-pkg-name": "com.huawei.hag",
   };
 
