@@ -743,7 +743,8 @@ async function executeCloudTool(
   };
 
   log('DEBUG', 'CLOUD', `请求体构建完成`, { traceId, sessionId: requestBody.session.sessionId, skillId: skillIdForHeader });
-
+  log('DEBUG', 'CLOUD', `完整请求体`, requestBody);
+  
   try {
     const headers: { key: string; value: string; type: unknown }[] = [
       { key: 'x-skill-id',      value: skillIdForHeader,         type: 'text' },
@@ -758,6 +759,7 @@ async function executeCloudTool(
     if (toolDef.protocol === 'REST') {
       headers.push({ key: 'accept', value: 'application/json', type: 'text' });
       log('INFO', 'CLOUD', `发送 REST 请求: ${endpoint}`, { traceId });
+      log('DEBUG', 'CLOUD', `完整头请求: `, buildHeaders(headers));
 
       const fetchStart = Date.now();
       const response = await fetch(endpoint, {
@@ -782,6 +784,7 @@ async function executeCloudTool(
     } else if (toolDef.protocol === 'SSE') {
       headers.push({ key: 'accept', value: 'text/event-stream', type: 'text' });
       log('INFO', 'CLOUD', `发送 SSE 请求: ${endpoint}`, { traceId });
+      log('DEBUG', 'CLOUD', `完整头请求: `, buildHeaders(headers));
 
       const fetchStart = Date.now();
       const response = await fetch(endpoint, {
