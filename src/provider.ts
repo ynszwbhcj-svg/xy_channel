@@ -44,6 +44,12 @@ function getFirstUserText(messages: Array<{ role: string; content?: string | Arr
 /** Regex to match `[cron:<uuid> <title>]` anywhere in text. */
 const CRON_TAG_RE = /\[cron:[^\s\]]+\s+([^\]]+)\]/;
 
+/** Extract the cron job UUID from the first user message, e.g. `[cron:abc123 ...]` → `abc123`. */
+function extractCronUuid(messages: Array<{ role: string; content?: string | Array<{ type: string; text?: string }> }> | undefined): string | undefined {
+  const match = getFirstUserText(messages).match(/\[cron:([^\s\]]+)/i);
+  return match ? match[1] : undefined;
+}
+
 /** Check if the request is triggered by a cron job by inspecting the first user message. */
 function isCronTriggered(messages: Array<{ role: string; content?: string | Array<{ type: string; text?: string }> }> | undefined): boolean {
   return /\[cron:/i.test(getFirstUserText(messages));
@@ -248,9 +254,6 @@ const HEADER_SESSION_ID = "x-session-id";
 const HEADER_INTERACTION_ID = "x-interaction-id";
 /** Internal key for passing fallback uid prefix from prepareExtraParams to wrapStreamFn. */
 const FALLBACK_PREFIX_KEY = "_xiaoyi_fallback_prefix";
-/** Internal key for passing deviceType from prepareExtraParams to wrapStreamFn. */
-const DEVICE_TYPE_KEY = "_xiaoyi_device_type";
-
 const SELF_EVOLUTION_PROMPT_BEGIN = "<self_evolution_prompt>";
 const SELF_EVOLUTION_PROMPT_END = "</self_evolution_prompt>";
 const SELF_EVOLUTION_ENABLED_PROMPT_SECTION = `
@@ -427,7 +430,9 @@ function trimUserMetadata(text: string): string {
 
 /**
  * Extract A2A taskId and deviceType from Conversation info JSON.
- * bot.ts stores them as MessageSid = "taskId_deviceType".
+ * bot.ts stores them as MessageSid = "xiaoyi_taskId_deviceType".
+ * The "xiaoyi_" prefix ensures extraction only happens for messages
+ * routed through xiaoyi-channel, not other channels sharing the provider.
  */
 function extractA2AFromConversationInfo(text: string): { taskId: string; deviceType: string } | null {
   const match = text.match(/Conversation info \(untrusted metadata\):\n```json\n([\s\S]*?)\n```/);
@@ -435,8 +440,8 @@ function extractA2AFromConversationInfo(text: string): { taskId: string; deviceT
   const msgIdMatch = match[1].match(/"message_id"\s*:\s*"([^"]+)"/);
   if (!msgIdMatch) return null;
   const parts = msgIdMatch[1].split("_");
-  if (parts.length < 2) return null;
-  return { taskId: parts[0], deviceType: parts[1] };
+  if (parts.length < 3 || parts[0] !== "xiaoyi") return null;
+  return { taskId: parts[1], deviceType: parts[2] };
 }
 
 export const xiaoyiProvider: ProviderPlugin = {
@@ -447,36 +452,14 @@ export const xiaoyiProvider: ProviderPlugin = {
   isCacheTtlEligible: () => true,
 
   /**
-   * Inject dynamic session params into extraParams so they flow
-   * through to wrapStreamFn's ctx.extraParams.
-   *
-   * Priority:
-   *   1. Session context (from AsyncLocalStorage, set by bot.ts)
-   *   2. uid-based fallback: sha256(uid).hex[:32]_timestamp
-   *   3. No uid available → return undefined (no headers injected)
+   * Store uid-based fallback prefix for lazy timestamp generation in wrapStreamFn.
+   * Session-level headers (traceId / sessionId / interactionId) are resolved
+   * directly in wrapStreamFn via cron detection, Conversation info extraction,
+   * or uid fallback.
    */
   prepareExtraParams: (ctx) => {
-    const sessionCtx = getCurrentSessionContext();
-
-    if (sessionCtx) {
-      const taskId = sessionCtx.taskId;
-      const sessionId = taskId.split("&")[0];
-      const interactionId = taskId.split("&")[1] || "";
-      return {
-        ...ctx.extraParams,
-        [HEADER_TRACE_ID]: taskId,
-        [HEADER_SESSION_ID]: sessionId,
-        [HEADER_INTERACTION_ID]: interactionId,
-        [DEVICE_TYPE_KEY]: sessionCtx.deviceType ?? "",
-      };
-    }
-
-    // Fallback: store uid prefix for lazy timestamp generation in wrapStreamFn.
-    // This ensures each model call gets a fresh timestamp instead of reusing
-    // the same one across tool-use loops and retries.
     const uid = getUidFromConfig(ctx.config);
     if (!uid) return undefined;
-
     return {
       ...ctx.extraParams,
       [FALLBACK_PREFIX_KEY]: encodeUid(uid),
@@ -525,44 +508,42 @@ export const xiaoyiProvider: ProviderPlugin = {
       }
 
       // ── Build dynamic headers ────────────────────────────
-      if (ctx.extraParams) {
-        const fallbackPrefix = ctx.extraParams[FALLBACK_PREFIX_KEY];
+      // Priority:
+      //   1. Cron-triggered: uid → cronUuid, with cron-specific headers
+      //   2. Xiaoyi A2A: taskId extracted from Conversation info (xiaoyi_ prefix)
+      //   3. UID-based fallback: sha256(uid).hex[:32]_timestamp
+      const isCron = isCronTriggered(context.messages);
 
+      if (isCron) {
+        const fallbackPrefix = ctx.extraParams?.[FALLBACK_PREFIX_KEY];
         if (typeof fallbackPrefix === "string") {
-          // Fallback mode: generate fresh timestamp per request
-          const isCron = isCronTriggered(context.messages);
           const fallbackValue = `${fallbackPrefix}_${Date.now()}`;
-          dynamicHeaders[HEADER_TRACE_ID] = isCron ? `cron_${fallbackValue}` : fallbackValue;
+          dynamicHeaders[HEADER_TRACE_ID] = `cron_${fallbackValue}`;
           dynamicHeaders[HEADER_SESSION_ID] = fallbackValue;
           dynamicHeaders[HEADER_INTERACTION_ID] = fallbackValue;
-          if (isCron) {
-            const cronTitle = extractCronTitle(context.messages);
-            if (cronTitle) dynamicHeaders["x-cron-title"] = encodeURIComponent(cronTitle);
-            if (context.messages?.length === 1) dynamicHeaders["x-cron-flag"] = "begin";
-          }
-        } else if (extractedTaskId) {
-          // Session mode: taskId extracted from Conversation info
-          const traceId = extractedTaskId;
-          const sessionId = traceId.split("&")[0];
-          const interactionId = traceId.split("&")[1] ?? "";
-
-          const isCron = isCronTriggered(context.messages);
-          dynamicHeaders[HEADER_TRACE_ID] = isCron ? `cron_${traceId}_${Date.now()}` : traceId;
-          if (isCron) {
-            const cronTitle = extractCronTitle(context.messages);
-            if (cronTitle) dynamicHeaders["x-cron-title"] = encodeURIComponent(cronTitle);
-            if (context.messages?.length === 1) dynamicHeaders["x-cron-flag"] = "begin";
-          }
-          dynamicHeaders[HEADER_SESSION_ID] = sessionId;
-          dynamicHeaders[HEADER_INTERACTION_ID] = interactionId;
         } else {
-          // Fallback: use extraParams cached values
-          const traceId = ctx.extraParams[HEADER_TRACE_ID];
-          const sessionId = ctx.extraParams[HEADER_SESSION_ID];
-          const interactionId = ctx.extraParams[HEADER_INTERACTION_ID];
-          if (typeof traceId === "string") dynamicHeaders[HEADER_TRACE_ID] = traceId;
-          if (typeof sessionId === "string") dynamicHeaders[HEADER_SESSION_ID] = sessionId;
-          if (typeof interactionId === "string") dynamicHeaders[HEADER_INTERACTION_ID] = interactionId;
+          const cronUuid = extractCronUuid(context.messages) ?? "cron";
+          const cronSessionId = `cron_${cronUuid}_${Date.now()}`;
+          dynamicHeaders[HEADER_TRACE_ID] = cronSessionId;
+          dynamicHeaders[HEADER_SESSION_ID] = cronUuid;
+          dynamicHeaders[HEADER_INTERACTION_ID] = cronSessionId;
+        }
+        const cronTitle = extractCronTitle(context.messages);
+        if (cronTitle) dynamicHeaders["x-cron-title"] = encodeURIComponent(cronTitle);
+        if (context.messages?.length === 1) dynamicHeaders["x-cron-flag"] = "begin";
+      } else if (extractedTaskId) {
+        const sessionId = extractedTaskId.split("&")[0];
+        const interactionId = extractedTaskId.split("&")[1] ?? "";
+        dynamicHeaders[HEADER_TRACE_ID] = extractedTaskId;
+        dynamicHeaders[HEADER_SESSION_ID] = sessionId;
+        dynamicHeaders[HEADER_INTERACTION_ID] = interactionId;
+      } else {
+        const fallbackPrefix = ctx.extraParams?.[FALLBACK_PREFIX_KEY];
+        if (typeof fallbackPrefix === "string") {
+          const fallbackValue = `${fallbackPrefix}_${Date.now()}`;
+          dynamicHeaders[HEADER_TRACE_ID] = fallbackValue;
+          dynamicHeaders[HEADER_SESSION_ID] = fallbackValue;
+          dynamicHeaders[HEADER_INTERACTION_ID] = fallbackValue;
         }
       }
 
@@ -578,9 +559,8 @@ export const xiaoyiProvider: ProviderPlugin = {
         logger.log(`[xiaoyiprovider] system prompt length: ${context.systemPrompt.length}`);
       }
       // deviceType: prefer value extracted from Conversation info,
-      // then extraParams, then ALS fallback.
-      const extraParamsDeviceType = (ctx.extraParams?.[DEVICE_TYPE_KEY] as string) || undefined;
-      const deviceType = (extractedDeviceType || extraParamsDeviceType)
+      // then ALS fallback.
+      const deviceType = extractedDeviceType
         ?? getCurrentSessionContext()?.deviceType;
 
       // 在发送给模型前，优化 systemPrompt 结构

@@ -1,4 +1,5 @@
 // Image Reading tool implementation
+import { createHash } from "crypto";
 import { XYFileUploadService } from "../file-upload.js";
 import type { SessionContext } from "./session-manager.js";
 import fetch from "node-fetch";
@@ -66,11 +67,12 @@ async function callImageUnderstandingAPI(
   text: string,
   apiKey: string,
   uid: string,
-  fileUploadUrl: string
+  fileUploadUrl: string,
+  sessionId: string
 ): Promise<string> {
 
   const apiUrl = `${fileUploadUrl}/celia-claw/v1/sse-api/skill/execute`;
-  const traceId = uuidv4();
+  const traceId = `${createHash("sha256").update(uid).digest("hex").slice(0, 32)}_${Date.now()}`;
 
   const headers = {
     "Content-Type": "application/json",
@@ -79,7 +81,7 @@ async function callImageUnderstandingAPI(
     "x-api-key": apiKey,
     "x-request-from": "openclaw",
     "x-uid": uid,
-    "x-skill-id": "image_comprehension",
+    "x-skill-id": "xiaoyi_image_comprehension",
     "x-prd-pkg-name": "com.huawei.hag",
   };
 
@@ -87,7 +89,7 @@ async function callImageUnderstandingAPI(
     version: "1.0",
     session: {
       isNew: false,
-      sessionId: "wangyu202410241921",
+      sessionId,
       interactionId: 0,
     },
     endpoint: {
@@ -195,7 +197,7 @@ async function callImageUnderstandingAPI(
  * Supports both local file paths and remote URLs, up to 10 images at once.
  */
 export function createImageReadingTool(ctx: SessionContext): any {
-  const { config } = ctx;
+  const { config, sessionId } = ctx;
   return {
     name: "image_reading",
     label: "Image Reading",
@@ -258,7 +260,8 @@ export function createImageReadingTool(ctx: SessionContext): any {
           prompt,
           config.apiKey,
           config.uid,
-          config.fileUploadUrl
+          config.fileUploadUrl,
+          sessionId
         );
 
         return {
