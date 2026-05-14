@@ -4,7 +4,6 @@ import type { SessionContext } from "./session-manager.js";
 import fetch from "node-fetch";
 import fs from "fs/promises";
 import { v4 as uuidv4 } from "uuid";
-import { getCurrentTaskId } from "../task-manager.js";
 
 /**
  * Check if value is a remote URL
@@ -67,16 +66,16 @@ async function callImageUnderstandingAPI(
   text: string,
   apiKey: string,
   uid: string,
-  fileUploadUrl: string,
-  taskId: string
+  fileUploadUrl: string
 ): Promise<string> {
 
   const apiUrl = `${fileUploadUrl}/celia-claw/v1/sse-api/skill/execute`;
+  const traceId = uuidv4();
 
   const headers = {
     "Content-Type": "application/json",
     "Accept": "text/event-stream",
-    "x-hag-trace-id": taskId,
+    "x-hag-trace-id": traceId,
     "x-api-key": apiKey,
     "x-request-from": "openclaw",
     "x-uid": uid,
@@ -254,14 +253,12 @@ export function createImageReadingTool(ctx: SessionContext): any {
         }
 
         // Call image understanding API with all image URLs
-        const currentTaskId = getCurrentTaskId(ctx.sessionId) ?? ctx.taskId;
         const caption = await callImageUnderstandingAPI(
           allImageUrls,
           prompt,
           config.apiKey,
           config.uid,
-          config.fileUploadUrl,
-          currentTaskId
+          config.fileUploadUrl
         );
 
         return {
