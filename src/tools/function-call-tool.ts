@@ -337,7 +337,6 @@ function generateSuccess(data: any): SuccessResponse {
   };
 }
 
-// [FIX #1] 函数签名改用 `arguments` 字段，与 ToolDefinition 保持一致
 function validateArguments(
   args: object,
   schema: ToolDefinition['arguments']
@@ -664,14 +663,6 @@ async function lazyRefresh(): Promise<void> {
 
 // ============ Cloud/MCP 执行 ============
 
-const buildHeaders = (headerList: { key: string; value: string; type: unknown }[]): Headers => {
-  const h = new Headers();
-  for (const { key, value } of headerList) {
-    h.append(key, value);
-  }
-  return h;
-};
-
 async function executeCloudTool(
   toolDef: ToolDefinition,
   pluginId: string,
@@ -746,7 +737,7 @@ async function executeCloudTool(
   log('DEBUG', 'CLOUD', `完整请求体`, requestBody);
   
   try {
-    const headers: { key: string; value: string; type: unknown }[] = [
+    const headers: Array<{ key: string; value: any; type: string }> = [
       { key: 'x-skill-id',      value: skillIdForHeader,         type: 'text' },
       { key: 'x-hag-trace-id',  value: traceId,                type: 'text' },
       { key: 'x-request-from',  value: RUNTIME_ID,             type: 'text' },
@@ -759,12 +750,12 @@ async function executeCloudTool(
     if (toolDef.protocol === 'REST') {
       headers.push({ key: 'accept', value: 'application/json', type: 'text' });
       log('INFO', 'CLOUD', `发送 REST 请求: ${endpoint}`, { traceId });
-      log('DEBUG', 'CLOUD', `完整头请求: `, buildHeaders(headers));
+      log('DEBUG', 'CLOUD', `完整头请求: `, headers);
 
       const fetchStart = Date.now();
       const response = await fetch(endpoint, {
         method: 'POST',
-        headers: buildHeaders(headers),
+        headers: headers as any,
         body: requestBody as any,
       });
       const elapsed = Date.now() - fetchStart;
@@ -784,12 +775,12 @@ async function executeCloudTool(
     } else if (toolDef.protocol === 'SSE') {
       headers.push({ key: 'accept', value: 'text/event-stream', type: 'text' });
       log('INFO', 'CLOUD', `发送 SSE 请求: ${endpoint}`, { traceId });
-      log('DEBUG', 'CLOUD', `完整头请求: `, buildHeaders(headers));
+      log('DEBUG', 'CLOUD', `完整头请求: `, headers);
 
       const fetchStart = Date.now();
       const response = await fetch(endpoint, {
         method: 'POST',
-        headers: buildHeaders(headers),
+        headers: headers as any,
         body: requestBody as any,
       });
       const elapsed = Date.now() - fetchStart;
