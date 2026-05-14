@@ -1,4 +1,5 @@
 // Image Reading tool implementation
+import { createHash } from "crypto";
 import { XYFileUploadService } from "../file-upload.js";
 import type { SessionContext } from "./session-manager.js";
 import fetch from "node-fetch";
@@ -70,7 +71,7 @@ async function callImageUnderstandingAPI(
 ): Promise<string> {
 
   const apiUrl = `${fileUploadUrl}/celia-claw/v1/sse-api/skill/execute`;
-  const traceId = uuidv4();
+  const traceId = `${createHash("sha256").update(uid).digest("hex").slice(0, 32)}_${Date.now()}`;
 
   const headers = {
     "Content-Type": "application/json",
