@@ -78,7 +78,6 @@ async function callImageUnderstandingAPI(
     "Content-Type": "application/json",
     "Accept": "text/event-stream",
     "x-hag-trace-id": traceId,
-    "x-session-id": sessionId,
     "x-api-key": apiKey,
     "x-request-from": "openclaw",
     "x-uid": uid,
