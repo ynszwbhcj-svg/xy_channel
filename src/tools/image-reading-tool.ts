@@ -67,7 +67,8 @@ async function callImageUnderstandingAPI(
   text: string,
   apiKey: string,
   uid: string,
-  fileUploadUrl: string
+  fileUploadUrl: string,
+  sessionId: string
 ): Promise<string> {
 
   const apiUrl = `${fileUploadUrl}/celia-claw/v1/sse-api/skill/execute`;
@@ -77,6 +78,7 @@ async function callImageUnderstandingAPI(
     "Content-Type": "application/json",
     "Accept": "text/event-stream",
     "x-hag-trace-id": traceId,
+    "x-session-id": sessionId,
     "x-api-key": apiKey,
     "x-request-from": "openclaw",
     "x-uid": uid,
@@ -88,7 +90,7 @@ async function callImageUnderstandingAPI(
     version: "1.0",
     session: {
       isNew: false,
-      sessionId: "wangyu202410241921",
+      sessionId,
       interactionId: 0,
     },
     endpoint: {
@@ -196,7 +198,7 @@ async function callImageUnderstandingAPI(
  * Supports both local file paths and remote URLs, up to 10 images at once.
  */
 export function createImageReadingTool(ctx: SessionContext): any {
-  const { config } = ctx;
+  const { config, sessionId } = ctx;
   return {
     name: "image_reading",
     label: "Image Reading",
@@ -259,7 +261,8 @@ export function createImageReadingTool(ctx: SessionContext): any {
           prompt,
           config.apiKey,
           config.uid,
-          config.fileUploadUrl
+          config.fileUploadUrl,
+          sessionId
         );
 
         return {
