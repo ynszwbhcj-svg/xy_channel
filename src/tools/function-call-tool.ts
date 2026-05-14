@@ -34,7 +34,6 @@ interface ToolDefinition {
   pluginType: 'Cloud' | 'Device' | 'MCP';
   protocol?: 'REST' | 'SSE';
   description: string;
-  // [FIX #1] 字段名由 `args` 改为 `arguments`，与 Readme §7.1 规范对齐
   arguments: {
     type: string;
     properties: Record<string, any>;
@@ -122,23 +121,35 @@ type ToolResponse = SuccessResponse | ErrorResponse;
 interface PluginExecutorRequest {
   version: string;
   session: {
+    interactionId: number;
     isNew: boolean;
     sessionId: string;
-    interactionId: number;
   };
   endpoint: {
     device: {
+      sid: string;
       deviceId: string;
-      prdVer: string;
       phoneType: string;
+      prdVer: string;
+      sysVer: string;
+      deviceType: number;
+      timezone: string;
     };
+    locale: string;
+    sysLocale: string;
     countryCode: string;
+  };
+  utterance: {
+    original: string;
+    type: string;
   };
   actions: Array<{
     actionSn: string;
     actionExecutorTask: {
+      pluginId: string;
+      agentState: string;
       actionName: string;
-      content: Record<string, any>;
+      content: object;
       replyCard: boolean;
     };
   }>;
@@ -328,7 +339,7 @@ function generateSuccess(data: any): SuccessResponse {
 
 // [FIX #1] 函数签名改用 `arguments` 字段，与 ToolDefinition 保持一致
 function validateArguments(
-  args: Record<string, any>,
+  args: object,
   schema: ToolDefinition['arguments']
 ): ErrorResponse | null {
   // 检查必填字段
@@ -384,7 +395,6 @@ function validateArguments(
 // ============ 工具定义比较 ============
 
 function areToolsEqual(tool1: ToolDefinition, tool2: ToolDefinition): boolean {
-  // [FIX #2] 核心字段列表中 'args' 改为 'arguments'，与 Readme §2.2 规范对齐
   const coreFields: (keyof ToolDefinition)[] = [
     'pluginId',
     'toolName',
@@ -482,7 +492,6 @@ async function loadToolDefinition(toolFilePath: string): Promise<ToolDefinition 
     const content = await fs.readFile(toolFilePath, 'utf-8');
     const toolDef = JSON.parse(content) as ToolDefinition;
 
-    // [FIX #1] 验证必填字段时改用 `arguments` 而非 `args`
     if (!toolDef.schemaVersion || !toolDef.pluginId || !toolDef.toolName ||
         !toolDef.pluginType || !toolDef.description || !toolDef.arguments) {
       log('ERROR', 'SCAN', `工具定义缺少必填字段，跳过: ${toolFilePath}`, {
@@ -667,7 +676,7 @@ async function executeCloudTool(
   toolDef: ToolDefinition,
   pluginId: string,
   toolName: string,
-  args: Record<string, any>
+  args:object,
 ): Promise<ToolResponse> {
   log('INFO', 'CLOUD', `开始执行 Cloud/MCP 工具: ${pluginId}/${toolName} [${toolDef.protocol}]`, { args });
 
@@ -689,7 +698,6 @@ async function executeCloudTool(
     : `${XIAOYI_CONFIG.serviceUrl}/celia-claw/v1/rest-api/skill/execute`;
 
   // 从 toolKeyToSkillName 反向索引中查找当前工具所属 skill 的 SKILL.md name 字段。
-  // 这样 x-skill-id 使用的是 skill 元数据中声明的规范名称，而非运行时 agentId。
   const cacheKey = getCacheKey(pluginId, toolName);
   const skillIdForHeader = toolKeyToSkillName.get(cacheKey) ?? currentSkillName ?? '';
   log('DEBUG', 'CLOUD', `请求端点: ${endpoint}，skill 上下文: ${currentSkillName}，x-skill-id: ${skillIdForHeader}`);
@@ -698,28 +706,40 @@ async function executeCloudTool(
   const requestBody: PluginExecutorRequest = {
     version: '1.0',
     session: {
+      interactionId: 0,
       isNew: false,
       sessionId: XIAOYI_RUNTIME_INFO.sessionId || "",
-      interactionId: 0,
     },
     endpoint: {
       device: {
+        sid: '',
         deviceId: '',
-        prdVer: '',
         phoneType: '',
+        prdVer: '',
+        sysVer: '',
+        deviceType: 0,
+        timezone: ''
       },
-      countryCode: '',
+      locale: 'zh-CN',
+      sysLocale: 'zh',
+      countryCode: 'CN',
+    },
+    utterance: {
+      original: '',
+      type: 'text',
     },
     actions: [
       {
-        actionSn: XIAOYI_CONFIG.traceId(),
+        actionSn: traceId,
         actionExecutorTask: {
+          pluginId: pluginId,
+          agentState: "OnShelf",
           actionName: toolName,
           content: args,
           replyCard: false,
         },
       },
-    ],
+    ]
   };
 
   log('DEBUG', 'CLOUD', `请求体构建完成`, { traceId, sessionId: requestBody.session.sessionId, skillId: skillIdForHeader });
@@ -728,20 +748,22 @@ async function executeCloudTool(
     const headers: { key: string; value: string; type: unknown }[] = [
       { key: 'x-skill-id',      value: skillIdForHeader,         type: 'text' },
       { key: 'x-hag-trace-id',  value: traceId,                type: 'text' },
-      { key: 'x-request-from',  value: 'openclaw',             type: 'text' },
+      { key: 'x-request-from',  value: RUNTIME_ID,             type: 'text' },
       { key: 'x-uid',           value: XIAOYI_CONFIG.uid,      type: 'text' },
       { key: 'x-api-key',       value: XIAOYI_CONFIG.apiKey,   type: 'text' },
+      { key: 'content-type',       value: "application/json",   type: 'text' },
+      { key: 'x-prd-pkg-name',       value: "com.huawei.hag",   type: 'text' },
     ];
 
     if (toolDef.protocol === 'REST') {
-      headers.push({ key: 'Accept', value: 'application/json', type: 'text' });
+      headers.push({ key: 'accept', value: 'application/json', type: 'text' });
       log('INFO', 'CLOUD', `发送 REST 请求: ${endpoint}`, { traceId });
 
       const fetchStart = Date.now();
       const response = await fetch(endpoint, {
         method: 'POST',
         headers: buildHeaders(headers),
-        body: JSON.stringify(requestBody),
+        body: requestBody as any,
       });
       const elapsed = Date.now() - fetchStart;
 
@@ -758,14 +780,14 @@ async function executeCloudTool(
       return generateSuccess(data);
 
     } else if (toolDef.protocol === 'SSE') {
-      headers.push({ key: 'Accept', value: 'text/event-stream', type: 'text' });
+      headers.push({ key: 'accept', value: 'text/event-stream', type: 'text' });
       log('INFO', 'CLOUD', `发送 SSE 请求: ${endpoint}`, { traceId });
 
       const fetchStart = Date.now();
       const response = await fetch(endpoint, {
         method: 'POST',
         headers: buildHeaders(headers),
-        body: JSON.stringify(requestBody),
+        body: requestBody as any,
       });
       const elapsed = Date.now() - fetchStart;
 
@@ -823,7 +845,7 @@ async function executeCloudTool(
 
 function renderDeviceCommand(
   template: DeviceCommand['template'],
-  args: Record<string, any>,
+  args: object,
   schema: ToolDefinition['arguments']
 ): { rendered: DeviceCommand['template'] | null; error: ErrorResponse | null } {
   const rendered = JSON.parse(JSON.stringify(template));
@@ -897,7 +919,7 @@ async function executeDeviceTool(
   toolDef: ToolDefinition,
   pluginId: string,
   toolName: string,
-  args: Record<string, any>,
+  args: object,
   toolCallId: string
 ): Promise<ToolResponse> {
   log('INFO', 'DEVICE', `开始执行 Device 工具: ${pluginId}/${toolName}`, { toolCallId, args });
