@@ -148,6 +148,8 @@ interface PluginExecutorRequest {
 
 let toolCache: ToolCache = {};
 let skillsMap: Map<string, SkillInfo> = new Map();
+// 工具缓存 key（pluginId__toolName）→ skill name 的反向索引，用于在 executeCloudTool 中查找工具所属 skill 的真实 name
+let toolKeyToSkillName: Map<string, string> = new Map();
 let currentSkillName: string | null = null;
 
 // Xiaoyi Channel 相关配置
@@ -537,6 +539,7 @@ async function scanSkills(): Promise<void> {
   const scanStart = Date.now();
   const newToolCache: ToolCache = {};
   const newSkillsMap: Map<string, SkillInfo> = new Map();
+  const newToolKeyToSkillName: Map<string, string> = new Map();
   // [FIX #5] 每次全量扫描时重置冲突集合
   conflictedKeys.clear();
 
@@ -607,6 +610,7 @@ async function scanSkills(): Promise<void> {
           // 一致则去重，不重复写入
         } else {
           newToolCache[key] = toolDef;
+          newToolKeyToSkillName.set(key, metadata.name);
           log('DEBUG', 'SCAN', `工具已加入缓存: ${key} [${toolDef.pluginType}/${toolDef.protocol ?? 'N/A'}]`);
         }
       }
@@ -615,6 +619,7 @@ async function scanSkills(): Promise<void> {
 
   toolCache = newToolCache;
   skillsMap = newSkillsMap;
+  toolKeyToSkillName = newToolKeyToSkillName;
   const elapsed = Date.now() - scanStart;
   log('INFO', 'SCAN', `扫描完成: ${skillsMap.size} 个 skill，${Object.keys(toolCache).length} 个工具，${conflictedKeys.size} 个冲突，耗时 ${elapsed}ms`);
 }
@@ -683,7 +688,11 @@ async function executeCloudTool(
     ? `${XIAOYI_CONFIG.serviceUrl}/celia-claw/v1/sse-api/skill/execute`
     : `${XIAOYI_CONFIG.serviceUrl}/celia-claw/v1/rest-api/skill/execute`;
 
-  log('DEBUG', 'CLOUD', `请求端点: ${endpoint}，skill 上下文: ${currentSkillName}`);
+  // 从 toolKeyToSkillName 反向索引中查找当前工具所属 skill 的 SKILL.md name 字段。
+  // 这样 x-skill-id 使用的是 skill 元数据中声明的规范名称，而非运行时 agentId。
+  const cacheKey = getCacheKey(pluginId, toolName);
+  const skillIdForHeader = toolKeyToSkillName.get(cacheKey) ?? currentSkillName ?? '';
+  log('DEBUG', 'CLOUD', `请求端点: ${endpoint}，skill 上下文: ${currentSkillName}，x-skill-id: ${skillIdForHeader}`);
 
   const traceId = XIAOYI_CONFIG.traceId();
   const requestBody: PluginExecutorRequest = {
@@ -713,11 +722,11 @@ async function executeCloudTool(
     ],
   };
 
-  log('DEBUG', 'CLOUD', `请求体构建完成`, { traceId, sessionId: requestBody.session.sessionId, skillId: currentSkillName });
+  log('DEBUG', 'CLOUD', `请求体构建完成`, { traceId, sessionId: requestBody.session.sessionId, skillId: skillIdForHeader });
 
   try {
     const headers: { key: string; value: string; type: unknown }[] = [
-      { key: 'x-skill-id',      value: currentSkillName,       type: 'text' },
+      { key: 'x-skill-id',      value: skillIdForHeader,         type: 'text' },
       { key: 'x-hag-trace-id',  value: traceId,                type: 'text' },
       { key: 'x-request-from',  value: 'openclaw',             type: 'text' },
       { key: 'x-uid',           value: XIAOYI_CONFIG.uid,      type: 'text' },
