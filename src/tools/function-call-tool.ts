@@ -128,29 +128,18 @@ interface PluginExecutorRequest {
   };
   endpoint: {
     device: {
-      sid: string;
       deviceId: string;
       prdVer: string;
       phoneType: string;
-      sysVer: string;
-      deviceType: number;
-      timezone: string;
     };
-    locale: string;
-    sysLocale: string;
     countryCode: string;
-  };
-  utterance: {
-    type: string;
-    original?: string;
   };
   actions: Array<{
     actionSn: string;
     actionExecutorTask: {
-      pluginId: string;
-      agentState: string;
       actionName: string;
       content: Record<string, any>;
+      replyCard: boolean;
     };
   }>;
 }
@@ -168,6 +157,13 @@ interface XiaoyiConfig {
   uid: string;
   traceId: () => string;
 }
+
+interface XiaoyiRuntimeInfo {
+  sessionId: string;
+  conversionId: string;
+  taskId: string;
+}
+
 
 function expandPath(filePath: string): string {
   if (filePath.startsWith("~")) {
@@ -203,8 +199,8 @@ async function loadXiaoyiConfig(): Promise<XiaoyiConfig> {
 
     return {
       serviceUrl: parsed['SERVICE_URL'] ?? defaults.serviceUrl,
-      apiKey: parsed['PERSONAL_API_KEY'] ?? defaults.apiKey,
-      uid: parsed['PERSONAL_UID'] ?? defaults.uid,
+      apiKey: parsed['PERSONAL-API-KEY'] ?? defaults.apiKey,
+      uid: parsed['PERSONAL-UID'] ?? defaults.uid,
       traceId: () => `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
     };
   } catch (error) {
@@ -212,6 +208,44 @@ async function loadXiaoyiConfig(): Promise<XiaoyiConfig> {
     return {
       ...defaults,
       traceId: () => `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+    };
+  }
+}
+
+async function loadXiaoyiRuntimeInfo(): Promise<XiaoyiRuntimeInfo> {
+  const envFilePath = expandPath("~/.openclaw/.xiaoyiruntime");
+  const defaults = { sessionId: '', conversionId: '', taskId: '' };
+  log('INFO', 'CONFIG', `加载配置文件: ${envFilePath}`);
+
+  try {
+    const content = await fs.readFile(envFilePath, 'utf-8');
+    const parsed: Record<string, string> = {};
+
+    for (const line of content.split('\n')) {
+      const trimmed = line.trim();
+      // 跳过空行和注释
+      if (!trimmed || trimmed.startsWith('#')) continue;
+      const eqIdx = trimmed.indexOf('=');
+      if (eqIdx === -1) continue;
+      const key = trimmed.slice(0, eqIdx).trim();
+      // 去除值两端的引号（兼容 "value" 和 'value' 格式）
+      let value = trimmed.slice(eqIdx + 1).trim();
+      if ((value.startsWith('"') && value.endsWith('"')) ||
+          (value.startsWith("'") && value.endsWith("'"))) {
+        value = value.slice(1, -1);
+      }
+      parsed[key] = value;
+    }
+
+    return {
+      sessionId: parsed['SESSION_ID'] ?? defaults.sessionId,
+      conversionId: parsed['CONVERSION_ID'] ?? defaults.conversionId,
+      taskId: parsed['TASK_ID'] ?? defaults.taskId,
+    };
+  } catch (error) {
+    logger.warn(`[FCT][CONFIG] 无法读取 ${envFilePath}，使用空配置:`, error);
+    return {
+      ...defaults
     };
   }
 }
@@ -224,6 +258,13 @@ const XIAOYI_CONFIG: XiaoyiConfig = {
   traceId: () => `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
 };
 
+// 模块级配置对象，初始为空值，由 initXiaoyiRuntimeInfo() 填充
+const XIAOYI_RUNTIME_INFO: XiaoyiRuntimeInfo = {
+  sessionId: '',
+  conversionId: '',
+  taskId: '',
+};
+
 async function initXiaoyiConfig(): Promise<void> {
   log('INFO', 'CONFIG', '初始化 XiaoyiConfig...');
   const loaded = await loadXiaoyiConfig();
@@ -231,6 +272,15 @@ async function initXiaoyiConfig(): Promise<void> {
   XIAOYI_CONFIG.apiKey = loaded.apiKey;
   XIAOYI_CONFIG.uid = loaded.uid;
   log('INFO', 'CONFIG', `XiaoyiConfig 初始化完成: serviceUrl=${XIAOYI_CONFIG.serviceUrl || '(空)'}, uid=${XIAOYI_CONFIG.uid || '(空)'}, apiKey=${XIAOYI_CONFIG.apiKey ? '******' : '(空)'}`);
+}
+
+async function initXiaoyiRuntimeInfo(): Promise<void> {
+  log('INFO', 'CONFIG', '初始化 XiaoyiRuntimeInfo...');
+  const loaded = await loadXiaoyiRuntimeInfo();
+  XIAOYI_RUNTIME_INFO.sessionId = loaded.sessionId;
+  XIAOYI_RUNTIME_INFO.conversionId = loaded.conversionId;
+  XIAOYI_RUNTIME_INFO.taskId = loaded.taskId;
+  log('INFO', 'CONFIG', `XiaoyiRuntimeInfo 初始化完成: sessionId=${XIAOYI_RUNTIME_INFO.sessionId || '(空)'}, conversionId=${XIAOYI_RUNTIME_INFO.conversionId || '(空)'}, taskId=${XIAOYI_RUNTIME_INFO.taskId || '(空)'}`);
 }
 
 // Runtime 标识
@@ -600,6 +650,14 @@ async function lazyRefresh(): Promise<void> {
 
 // ============ Cloud/MCP 执行 ============
 
+const buildHeaders = (headerList: { key: string; value: string; type: unknown }[]): Headers => {
+  const h = new Headers();
+  for (const { key, value } of headerList) {
+    h.append(key, value);
+  }
+  return h;
+};
+
 async function executeCloudTool(
   toolDef: ToolDefinition,
   pluginId: string,
@@ -608,29 +666,17 @@ async function executeCloudTool(
 ): Promise<ToolResponse> {
   log('INFO', 'CLOUD', `开始执行 Cloud/MCP 工具: ${pluginId}/${toolName} [${toolDef.protocol}]`, { args });
 
-  // 检查配置
   if (!XIAOYI_CONFIG.serviceUrl || !XIAOYI_CONFIG.apiKey || !XIAOYI_CONFIG.uid) {
     const missing = ['SERVICE_URL', 'PERSONAL_API_KEY', 'PERSONAL_UID'].filter(
       key => !XIAOYI_CONFIG[key as keyof typeof XIAOYI_CONFIG]
     );
     log('ERROR', 'CLOUD', `配置缺失，无法执行: ${pluginId}/${toolName}`, { missing });
-    return generateError(
-      'CONFIG_MISSING',
-      '缺少 Cloud/MCP 工具执行所需的配置',
-      false,
-      { missing }
-    );
+    return generateError('CONFIG_MISSING', '缺少 Cloud/MCP 工具执行所需的配置', false, { missing });
   }
 
-  // 检查当前 skill 上下文
   if (!currentSkillName) {
     log('ERROR', 'CLOUD', `没有 skill 上下文，无法执行: ${pluginId}/${toolName}`);
-    return generateError(
-      'TOOL_NOT_FOUND',
-      '没有选中的 skill 上下文',
-      false,
-      { pluginId, toolName }
-    );
+    return generateError('TOOL_NOT_FOUND', '没有选中的 skill 上下文', false, { pluginId, toolName });
   }
 
   const endpoint = toolDef.protocol === 'SSE'
@@ -639,40 +685,29 @@ async function executeCloudTool(
 
   log('DEBUG', 'CLOUD', `请求端点: ${endpoint}，skill 上下文: ${currentSkillName}`);
 
-  // 构建请求体
   const traceId = XIAOYI_CONFIG.traceId();
   const requestBody: PluginExecutorRequest = {
     version: '1.0',
     session: {
       isNew: false,
-      sessionId: `session-${Date.now()}`,
+      sessionId: XIAOYI_RUNTIME_INFO.sessionId || "",
       interactionId: 0,
     },
     endpoint: {
       device: {
-        sid: '',
         deviceId: '',
         prdVer: '',
         phoneType: '',
-        sysVer: '',
-        deviceType: 0,
-        timezone: 'GMT+08:00',
       },
-      locale: 'zh-CN',
-      sysLocale: 'zh',
-      countryCode: 'CN',
-    },
-    utterance: {
-      type: 'text',
+      countryCode: '',
     },
     actions: [
       {
         actionSn: XIAOYI_CONFIG.traceId(),
         actionExecutorTask: {
-          pluginId,
-          agentState: 'OnShelf',
           actionName: toolName,
           content: args,
+          replyCard: false,
         },
       },
     ],
@@ -680,26 +715,23 @@ async function executeCloudTool(
 
   log('DEBUG', 'CLOUD', `请求体构建完成`, { traceId, sessionId: requestBody.session.sessionId, skillId: currentSkillName });
 
-  // 发送请求
   try {
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-      'x-hag-trace-id': traceId,
-      'x-uid': XIAOYI_CONFIG.uid,
-      'x-api-key': XIAOYI_CONFIG.apiKey,
-      'x-request-from': RUNTIME_ID,
-      'x-skill-id': currentSkillName,
-      'x-prd-pkg-name': 'com.huawei.hag',
-    };
+    const headers: { key: string; value: string; type: unknown }[] = [
+      { key: 'x-skill-id',      value: currentSkillName,       type: 'text' },
+      { key: 'x-hag-trace-id',  value: traceId,                type: 'text' },
+      { key: 'x-request-from',  value: 'openclaw',             type: 'text' },
+      { key: 'x-uid',           value: XIAOYI_CONFIG.uid,      type: 'text' },
+      { key: 'x-api-key',       value: XIAOYI_CONFIG.apiKey,   type: 'text' },
+    ];
 
     if (toolDef.protocol === 'REST') {
-      headers['Accept'] = 'application/json';
+      headers.push({ key: 'Accept', value: 'application/json', type: 'text' });
       log('INFO', 'CLOUD', `发送 REST 请求: ${endpoint}`, { traceId });
 
       const fetchStart = Date.now();
       const response = await fetch(endpoint, {
         method: 'POST',
-        headers,
+        headers: buildHeaders(headers),
         body: JSON.stringify(requestBody),
       });
       const elapsed = Date.now() - fetchStart;
@@ -708,26 +740,22 @@ async function executeCloudTool(
 
       if (!response.ok) {
         log('ERROR', 'CLOUD', `PluginExecutor 返回错误: ${response.status}`, { traceId, pluginId, toolName });
-        return generateError(
-          'UPSTREAM_ERROR',
-          `PluginExecutor 返回错误: ${response.status}`,
-          response.status >= 500,
-          { status: response.status }
-        );
+        return generateError('UPSTREAM_ERROR', `PluginExecutor 返回错误: ${response.status}`, response.status >= 500, { status: response.status });
       }
 
       const data = await response.json();
       log('DEBUG', 'CLOUD', `REST 响应数据`, data);
       log('INFO', 'CLOUD', `REST 工具执行成功: ${pluginId}/${toolName}`);
       return generateSuccess(data);
+
     } else if (toolDef.protocol === 'SSE') {
-      headers['Accept'] = 'text/event-stream';
+      headers.push({ key: 'Accept', value: 'text/event-stream', type: 'text' });
       log('INFO', 'CLOUD', `发送 SSE 请求: ${endpoint}`, { traceId });
 
       const fetchStart = Date.now();
       const response = await fetch(endpoint, {
         method: 'POST',
-        headers,
+        headers: buildHeaders(headers),
         body: JSON.stringify(requestBody),
       });
       const elapsed = Date.now() - fetchStart;
@@ -736,16 +764,9 @@ async function executeCloudTool(
 
       if (!response.ok) {
         log('ERROR', 'CLOUD', `PluginExecutor SSE 返回错误: ${response.status}`, { traceId, pluginId, toolName });
-        return generateError(
-          'UPSTREAM_ERROR',
-          `PluginExecutor 返回错误: ${response.status}`,
-          response.status >= 500,
-          { status: response.status }
-        );
+        return generateError('UPSTREAM_ERROR', `PluginExecutor 返回错误: ${response.status}`, response.status >= 500, { status: response.status });
       }
 
-      // [FIX #6] 处理 SSE 流：取所有有效 data 帧中的最后一条作为最终结果
-      // Readme §4.5：忽略中间片段，只取最后完整结果
       const text = await response.text();
       const events = text.split('\n\n');
       log('DEBUG', 'CLOUD', `SSE 流接收完毕，共 ${events.length} 个事件帧`, { traceId });
@@ -764,7 +785,6 @@ async function executeCloudTool(
             const data = JSON.parse(dataStr);
             frameCount++;
             log('DEBUG', 'CLOUD', `SSE 有效帧 #${frameCount}`, data);
-            // 取最后一条有效 JSON 帧，不再依赖业务字段判断
             lastData = data;
           } catch {
             log('WARN', 'CLOUD', `SSE 帧 JSON 解析失败，跳过: ${dataStr.substring(0, 100)}`);
@@ -777,24 +797,16 @@ async function executeCloudTool(
         return generateSuccess(lastData);
       } else {
         log('ERROR', 'CLOUD', `SSE 流结束但无有效结果: ${pluginId}/${toolName}`, { traceId, streamPreview: text.substring(0, 200) });
-        return generateError(
-          'UPSTREAM_ERROR',
-          'SSE 流结束但未返回有效结果',
-          false,
-          { streamContent: text.substring(0, 200) }
-        );
+        return generateError('UPSTREAM_ERROR', 'SSE 流结束但未返回有效结果', false, { streamContent: text.substring(0, 200) });
       }
     }
 
     log('ERROR', 'CLOUD', `不支持的协议: ${toolDef.protocol}`);
     return generateError('UNSUPPORTED_PROTOCOL', `不支持的协议: ${toolDef.protocol}`, false);
+
   } catch (error) {
     log('ERROR', 'CLOUD', `网络请求异常: ${pluginId}/${toolName}`, error);
-    return generateError(
-      'NETWORK_ERROR',
-      `网络错误: ${error instanceof Error ? error.message : String(error)}`,
-      true
-    );
+    return generateError('NETWORK_ERROR', `网络错误: ${error instanceof Error ? error.message : String(error)}`, true);
   }
 }
 
@@ -1054,6 +1066,7 @@ export async function function_call_tool(params: {
 
 // 启动时初始化配置并扫描 skills
 initXiaoyiConfig().catch(e => logger.error('[FCT][INIT] initXiaoyiConfig 失败:', e));
+initXiaoyiRuntimeInfo().catch(e => logger.error('[FCT][INIT] initXiaoyiRuntimeInfo 失败:', e));
 scanSkills().catch(e => logger.error('[FCT][INIT] scanSkills 失败:', e));
 
 // 导出工具注册信息（用于 LLM）
