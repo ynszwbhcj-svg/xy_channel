@@ -662,7 +662,6 @@ async function lazyRefresh(): Promise<void> {
 }
 
 // ============ Cloud/MCP 执行 ============
-
 async function executeCloudTool(
   toolDef: ToolDefinition,
   pluginId: string,
@@ -737,26 +736,27 @@ async function executeCloudTool(
   log('DEBUG', 'CLOUD', `完整请求体`, requestBody);
   
   try {
-    const headers: Array<{ key: string; value: any; type: string }> = [
-      { key: 'x-skill-id',      value: skillIdForHeader,         type: 'text' },
-      { key: 'x-hag-trace-id',  value: traceId,                type: 'text' },
-      { key: 'x-request-from',  value: RUNTIME_ID,             type: 'text' },
-      { key: 'x-uid',           value: XIAOYI_CONFIG.uid,      type: 'text' },
-      { key: 'x-api-key',       value: XIAOYI_CONFIG.apiKey,   type: 'text' },
-      { key: 'content-type',       value: "application/json",   type: 'text' },
-      { key: 'x-prd-pkg-name',       value: "com.huawei.hag",   type: 'text' },
-    ];
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      'x-hag-trace-id': traceId,
+      'x-uid': XIAOYI_CONFIG.uid,
+      'x-api-key': XIAOYI_CONFIG.apiKey,
+      'x-request-from': RUNTIME_ID,
+      'x-skill-id': skillIdForHeader,
+      'x-prd-pkg-name': 'com.huawei.hag',
+    };
+
 
     if (toolDef.protocol === 'REST') {
-      headers.push({ key: 'accept', value: 'application/json', type: 'text' });
+      headers['Accept'] = 'application/json';
       log('INFO', 'CLOUD', `发送 REST 请求: ${endpoint}`, { traceId });
       log('DEBUG', 'CLOUD', `完整头请求: `, headers);
 
       const fetchStart = Date.now();
       const response = await fetch(endpoint, {
         method: 'POST',
-        headers: headers as any,
-        body: requestBody as any,
+        headers,
+        body: JSON.stringify(requestBody),
       });
       const elapsed = Date.now() - fetchStart;
 
@@ -773,15 +773,15 @@ async function executeCloudTool(
       return generateSuccess(data);
 
     } else if (toolDef.protocol === 'SSE') {
-      headers.push({ key: 'accept', value: 'text/event-stream', type: 'text' });
+      headers['Accept'] = 'text/event-stream';
       log('INFO', 'CLOUD', `发送 SSE 请求: ${endpoint}`, { traceId });
       log('DEBUG', 'CLOUD', `完整头请求: `, headers);
 
       const fetchStart = Date.now();
       const response = await fetch(endpoint, {
         method: 'POST',
-        headers: headers as any,
-        body: requestBody as any,
+        headers,
+        body: JSON.stringify(requestBody),
       });
       const elapsed = Date.now() - fetchStart;
 
