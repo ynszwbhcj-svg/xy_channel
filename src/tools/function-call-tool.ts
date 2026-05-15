@@ -800,14 +800,19 @@ async function executeCloudTool(
       let frameCount = 0;
       
       for (const event of events) {
-        if (event.startsWith('data: ')) {
-          const dataStr = event.substring(6).trim();
+        const dataStr = event.substring(6).trim();
+        log('DEBUG', 'CLOUD', '原始 dataStr:', dataStr);
+        log('DEBUG', 'CLOUD', 'dataStr 长度:', dataStr.length);
+        log('DEBUG', 'CLOUD', '是否包含反斜杠:', dataStr.includes('\\'));
+
+        const cleanedStr = dataStr.replace(/\\"/g, '"');
+        
           if (!dataStr || dataStr === '[DONE]') {
             if (dataStr === '[DONE]') log('DEBUG', 'CLOUD', `SSE 收到 [DONE] 信号`);
             continue;
           }
           try {
-            const data = JSON.parse(dataStr);
+            const data = JSON.parse(cleanedStr);
             frameCount++;
             log('DEBUG', 'CLOUD', `SSE 有效帧 #${frameCount}`, data);
       
@@ -844,9 +849,9 @@ async function executeCloudTool(
             if (lastItems !== null) break;
       
           } catch {
-            log('WARN', 'CLOUD', `SSE 帧 JSON 解析失败，跳过: ${dataStr.substring(0, 100)}`);
+            log('WARN', 'CLOUD', `SSE 帧 JSON 解析失败，跳过: ${dataStr.substring(0, 10000
+            )}`);
           }
-        }
       }
       
       if (lastItems !== null) {
