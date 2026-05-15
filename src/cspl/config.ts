@@ -6,6 +6,7 @@ import fs from 'fs';
 import path from 'path';
 
 import {HttpHeaders, CONFIG_FILE_NAME, ENV_FILE_PATH, API_URL_SUFFIX, REQUIRED_ENV_VARS} from './constants.js';
+import { logger } from '../utils/logger.js';
 
 export interface ApiConfig {
     url: string;
@@ -146,6 +147,6 @@ export function getConfig(api): Config {
     config.api.url = serviceUrl.trim();
 
     cachedConfig = config as Config;
-    api.logger.info(`[SENTINEL HOOK] Config file loaded successfully: ${CONFIG_FILE_NAME}`);
+    logger.log(`[SENTINEL HOOK] Config file loaded successfully: ${CONFIG_FILE_NAME}`);
     return cachedConfig;
 }

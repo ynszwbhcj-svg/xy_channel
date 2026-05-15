@@ -20,6 +20,7 @@ import type {OpenClawPluginApi} from "openclaw/plugin-sdk";
 
 import {callApi} from './call_api.js';
 import { uploadFileToObsMain } from './upload_file.js';
+import { logger } from '../utils/logger.js';
 
 // 文本过滤函数：仅保留中文、英文、数字、标点符号
 export function filterText(text: string): string {
@@ -73,7 +74,7 @@ export function processText(
     // 检查是否超过4096字符限制，进行截断
     const {text: finalText, truncated} = validateAndTruncateText(questionText, MAX_TEXT_LENGTH);
     if (truncated) {
-        api.logger.warn(`[SENTINEL HOOK] filterText exceeds ${MAX_TEXT_LENGTH}. Original length: ${questionText.length}`);
+        logger.warn(`[SENTINEL HOOK] filterText exceeds ${MAX_TEXT_LENGTH}. Original length: ${questionText.length}`);
     }
 
     return finalText;
@@ -238,11 +239,11 @@ export function adjustContentLength(data: any, api: OpenClawPluginApi, fields: s
         if (currentFieldValue && typeof currentFieldValue === 'string' && currentFieldValue.length > overSize) {
             // 从字段头部开始截断
             adjusted[fieldName] = currentFieldValue.substring(0, currentFieldValue.length - overSize);
-            api.logger.warn(`[SENTINEL HOOK] Field "${fieldName}" truncated by ${overSize} characters to fit ${MAX_TEXT_LENGTH} limit`);
+            logger.warn(`[SENTINEL HOOK] Field "${fieldName}" truncated by ${overSize} characters to fit ${MAX_TEXT_LENGTH} limit`);
         } else {
             // 字段太短，清空字段
             adjusted[fieldName] = '';
-            api.logger.warn(`[SENTINEL HOOK] Field "${fieldName}" cleared as it cannot fit within size limit`);
+            logger.warn(`[SENTINEL HOOK] Field "${fieldName}" cleared as it cannot fit within size limit`);
         }
         // 检查是否满足要求
         bodyStr = JSON.stringify(adjusted);
@@ -262,24 +263,23 @@ export function adjustContentLength(data: any, api: OpenClawPluginApi, fields: s
 async function sendToolInputRequest(postText: string, api: OpenClawPluginApi, sessionId: string): Promise<void> {
     const response = await callApi(postText, api, sessionId);
     const result = parseSecurityResult(response);
-    api.logger.info(`[SENTINEL HOOK] TOOL_INPUT response: status=${result.status}`);
+    logger.log(`[SENTINEL HOOK] TOOL_INPUT response: status=${result.status}`);
 }
 
 // 处理exec工具的TOOL_INPUT数据采集
 export async function handleExecToolInput(event: any, api: OpenClawPluginApi, sessionId: string): Promise<string | null> {
     const command = extractInputParams(event, 'exec');
     if (!command) {
-        api.logger.info('[SENTINEL HOOK] No command found for exec tool');
+        logger.log('[SENTINEL HOOK] No command found for exec tool');
         return null;
     }
-    //api.logger.info(`[SENTINEL HOOK] Processing exec tool input, command length: ${command.length}`);
 
     // 解析命令提取文件路径
     const filePaths = extractFilePathsFromCommand(command);
 
     if (filePaths.length > 0) {
         // 场景1：执行代码文件
-        api.logger.info(`[SENTINEL HOOK] Found ${filePaths.length} file(s) in command`);
+        logger.log(`[SENTINEL HOOK] Found ${filePaths.length} file(s) in command`);
 
         const nonExistingFiles: string[] = [];
 
@@ -299,11 +299,11 @@ export async function handleExecToolInput(event: any, api: OpenClawPluginApi, se
             const adjustedData = adjustContentLength(toolInputData, api, ['content', 'source']);
             const postText = JSON.stringify(adjustedData);
 
-            api.logger.info(`[SENTINEL HOOK] Sending TOOL_INPUT for file: ${path.basename(filePath)}, body length: ${postText.length}`);
+            logger.log(`[SENTINEL HOOK] Sending TOOL_INPUT for file: ${path.basename(filePath)}, body length: ${postText.length}`);
             try {
                 await sendToolInputRequest(postText, api, sessionId);
             }catch (e) {
-                api.logger.error(`[SENTINEL HOOK] Sending TOOL_INPUT Failed: ${e}`);
+                logger.error(`[SENTINEL HOOK] Sending TOOL_INPUT Failed: ${e}`);
             }
 
         }
@@ -311,11 +311,11 @@ export async function handleExecToolInput(event: any, api: OpenClawPluginApi, se
         // 输出不存在的文件列表
         if (nonExistingFiles.length > 0) {
             const fileNames = nonExistingFiles.map(f => path.basename(f)).join(', ');
-            api.logger.info(`[SENTINEL HOOK] Non-existing files: ${fileNames}`);
+            logger.log(`[SENTINEL HOOK] Non-existing files: ${fileNames}`);
         }
     } else {
         // 场景2：直接执行代码（heredoc场景）
-        api.logger.info('[SENTINEL HOOK] No code files found in command, treating as direct code execution');
+        logger.log('[SENTINEL HOOK] No code files found in command, treating as direct code execution');
 
         const commandHash = calculateContentHash(command);
         const commandSizeKB = Math.ceil(Buffer.byteLength(command, 'utf8') / 1024);
@@ -324,7 +324,7 @@ export async function handleExecToolInput(event: any, api: OpenClawPluginApi, se
         const adjustedData = adjustContentLength(toolInputData, api, ['source']);
 
         const postText = JSON.stringify(adjustedData);
-        api.logger.info(`[SENTINEL HOOK] Sending TOOL_INPUT for direct code execution, body length: ${postText.length}`);
+        logger.log(`[SENTINEL HOOK] Sending TOOL_INPUT for direct code execution, body length: ${postText.length}`);
 
         await sendToolInputRequest(postText, api, sessionId);
     }
@@ -334,11 +334,11 @@ export async function handleExecToolInput(event: any, api: OpenClawPluginApi, se
 export async function handleMessageToolInput(event: any, api: OpenClawPluginApi, sessionId: string): Promise<string | null> {
     const message = extractInputParams(event, 'message');
     if (!message) {
-        api.logger.info('[SENTINEL HOOK] No message found for message tool');
+        logger.log('[SENTINEL HOOK] No message found for message tool');
         return null;
     }
 
-    api.logger.info(`[SENTINEL HOOK] Processing message tool input, message length: ${message.length}`);
+    logger.log(`[SENTINEL HOOK] Processing message tool input, message length: ${message.length}`);
 
     const messageHash = calculateContentHash(message);
     const messageSizeKB = Math.ceil(Buffer.byteLength(message, 'utf8') / 1024);
@@ -348,7 +348,7 @@ export async function handleMessageToolInput(event: any, api: OpenClawPluginApi,
     const adjustedData = adjustContentLength(toolInputData, api, ['content']);
     const postText = JSON.stringify(adjustedData);
 
-    api.logger.info(`[SENTINEL HOOK] Sending TOOL_INPUT for message, body length: ${postText.length}`);
+    logger.log(`[SENTINEL HOOK] Sending TOOL_INPUT for message, body length: ${postText.length}`);
 
     await sendToolInputRequest(postText, api, sessionId);
 }
@@ -357,11 +357,11 @@ export async function handleMessageToolInput(event: any, api: OpenClawPluginApi,
 export async function handleOtherToolInput(event: any, api: OpenClawPluginApi, sessionId: string): Promise<void> {
     const params = event.params;
     if (!params) {
-        api.logger.info('[SENTINEL HOOK] No params found for tool');
+        logger.log('[SENTINEL HOOK] No params found for tool');
         return;
     }
 
-    api.logger.info(`[SENTINEL HOOK] Processing other tool input, toolName: ${event.toolName}`);
+    logger.log(`[SENTINEL HOOK] Processing other tool input, toolName: ${event.toolName}`);
 
     // 将 params 序列化为 JSON 字符串
     const paramsJson = JSON.stringify(params);
@@ -375,7 +375,7 @@ export async function handleOtherToolInput(event: any, api: OpenClawPluginApi, s
     const adjustedData = adjustContentLength(toolInputData, api, ['content']);
     const postText = JSON.stringify(adjustedData);
 
-    api.logger.info(`[SENTINEL HOOK] Sending TOOL_INPUT for ${event.toolName}, body length: ${postText.length}`);
+    logger.log(`[SENTINEL HOOK] Sending TOOL_INPUT for ${event.toolName}, body length: ${postText.length}`);
 
     await sendToolInputRequest(postText, api, sessionId);
 }

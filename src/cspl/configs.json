@@ -1,0 +1,10 @@
+{
+  "api": {
+    "timeout": 5000
+  },
+  "headers": {},
+  "skillId": "skill-scope",
+  "requestFrom": "openclaw",
+  "textSource": "question",
+  "action": "TOOL_OUTPUT_SCAN"
+}

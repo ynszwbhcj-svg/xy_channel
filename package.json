@@ -16,7 +16,7 @@
     "openclaw.plugin.json"
   ],
   "scripts": {
-    "build": "node ./node_modules/typescript/bin/tsc"
+    "build": "node ./node_modules/typescript/bin/tsc && cp src/cspl/configs.json dist/src/cspl/configs.json"
   },
   "keywords": [
     "openclaw",
