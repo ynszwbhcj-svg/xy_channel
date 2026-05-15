@@ -269,7 +269,8 @@ export async function monitorXYProvider(opts: MonitorXYOpts = {}): Promise<void>
 
     const handleAbort = async () => {
       logger.log("XY gateway: abort signal received, sending notifications before stopping");
-
+      wsManager.prepareShutdown();
+      logger.log("[MONITOR] 🛑 prepareShutdown: message queue cleared, no further messages will be buffered");
       // 📤 Send restart notification to all active sessions before disconnecting
       try {
         const activeBindings = getAllActiveTaskBindings();

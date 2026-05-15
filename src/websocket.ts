@@ -128,7 +128,31 @@ export class XYWebSocketManager extends EventEmitter {
       this.error("Plugin will continue but cannot receive messages.");
     }
   }
-
+  /**
+     * Immediately mark as shutting down and drain the message queue.
+     * Call this BEFORE sending any final notifications on abort, so that
+     * any outbound messages generated during the notification window
+     * (e.g. openclaw core "Partial progress" errors routed through
+     * xyOutbound.sendText) cannot enqueue new items or trigger a Push
+     * broadcast via the reconnect-buffer path.
+     *
+     * Safe to call multiple times; subsequent calls are no-ops.
+     */
+  prepareShutdown() {
+    if (this.isShuttingDown) {
+      return;
+    }
+    this.log("[MessageQueue] prepareShutdown: marking isShuttingDown=true and clearing queue early");
+    this.isShuttingDown = true;
+    // Cancel any pending reconnect-buffer flush timer
+    if (this.reconnectBufferTimer) {
+      clearTimeout(this.reconnectBufferTimer);
+      this.reconnectBufferTimer = null;
+    }
+    // Drain the queue so nothing is replayed on reconnect
+    this.messageQueue.clear();
+    this.isBuffering = false;
+  }
   /**
    * Disconnect from WebSocket server.
    */
