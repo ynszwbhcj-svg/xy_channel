@@ -71,6 +71,7 @@ export interface SendA2AResponseParams {
  */
 export async function sendA2AResponse(params: SendA2AResponseParams): Promise<void> {
   const { config, sessionId, taskId, messageId, text, append, final, files, errorCode, errorMessage } = params;
+  const log = logger.withContext(sessionId, taskId);
 
   // 审批桥接：将 OpenClaw 的审批提示翻译成用户友好的确认文案
   const bridgedText = text === undefined ? text : rewriteOutboundApprovalText(sessionId, text);
@@ -120,7 +121,7 @@ export async function sendA2AResponse(params: SendA2AResponseParams): Promise<vo
       code: errorCode,
       message: errorMessage ?? "任务执行异常，请重试",
     };
-    logger.log(`[A2A_RESPONSE] Including error code: ${errorCode}`);
+    log.log(`[A2A_RESPONSE] Including error code: ${errorCode}`);
   }
 
   // Send via WebSocket
@@ -135,10 +136,10 @@ export async function sendA2AResponse(params: SendA2AResponseParams): Promise<vo
 
   // Log complete response body
   const redactedText = redactSensitiveText(bridgedText ?? "");
-  logger.log(`[A2A_RESPONSE] Sending artifact-update, append=${append}, final=${final}, text=${buildTextPreview(redactedText)}, files=${files?.length ?? 0}, sensitive=${containsSensitiveInfo(bridgedText ?? "")}`);
+  log.log(`[A2A_RESPONSE] Sending artifact-update, append=${append}, final=${final}, text=${buildTextPreview(redactedText)}, files=${files?.length ?? 0}, sensitive=${containsSensitiveInfo(bridgedText ?? "")}`);
 
   await wsManager.sendMessage(sessionId, outboundMessage);
-  logger.log(`[A2A_RESPONSE] Message sent successfully`);
+  log.log(`[A2A_RESPONSE] Message sent successfully`);
 }
 
 /**
@@ -160,6 +161,7 @@ export interface SendReasoningTextUpdateParams {
  */
 export async function sendReasoningTextUpdate(params: SendReasoningTextUpdateParams): Promise<void> {
   const { config, sessionId, taskId, messageId, text, append = true } = params;
+  const log = logger.withContext(sessionId, taskId);
 
   // 审批桥接
   const bridgedText = rewriteOutboundApprovalText(sessionId, text);
@@ -224,6 +226,7 @@ export async function sendStatusUpdate(params: SendStatusUpdateParams): Promise<
   // fall back to closure-captured values
   const currentTaskId = getCurrentTaskId(sessionId) ?? taskId;
   const currentMessageId = getCurrentMessageId(sessionId) ?? messageId;
+  const log = logger.withContext(sessionId, currentTaskId);
 
   // 审批桥接和脱敏
   const bridgedText = rewriteOutboundApprovalText(sessionId, text);
@@ -268,7 +271,7 @@ export async function sendStatusUpdate(params: SendStatusUpdateParams): Promise<
   };
 
   // Log complete response body
-  logger.log(`[A2A_STATUS] Sending status-update, taskId=${currentTaskId}, text="${redactedText}"`);
+  log.log(`[A2A_STATUS] Sending status-update, text="${redactedText}"`);
 
   await wsManager.sendMessage(sessionId, outboundMessage);
 }
@@ -294,6 +297,7 @@ export async function sendCommand(params: SendCommandParams): Promise<void> {
   // fall back to closure-captured values
   const currentTaskId = getCurrentTaskId(sessionId) ?? taskId;
   const currentMessageId = getCurrentMessageId(sessionId) ?? messageId;
+  const log = logger.withContext(sessionId, currentTaskId);
 
   // Build artifact update with command as data
   // Wrap command in commands array as per protocol requirement
@@ -337,9 +341,9 @@ export async function sendCommand(params: SendCommandParams): Promise<void> {
   };
 
   // Log complete response body
-  logger.log(`[A2A_COMMAND] Sending command`);
+  log.log(`[A2A_COMMAND] Sending command`);
   await wsManager.sendMessage(sessionId, outboundMessage);
-  logger.log(`[A2A_COMMAND] Command sent successfully`);
+  log.log(`[A2A_COMMAND] Command sent successfully`);
 }
 
 /**
@@ -356,6 +360,7 @@ export interface SendClearContextResponseParams {
  */
 export async function sendClearContextResponse(params: SendClearContextResponseParams): Promise<void> {
   const { config, sessionId, messageId } = params;
+  const log = logger.withContext(sessionId, "");
 
 
   // Build JSON-RPC response for clearContext
@@ -385,7 +390,7 @@ export async function sendClearContextResponse(params: SendClearContextResponseP
   };
 
   await wsManager.sendMessage(sessionId, outboundMessage);
-  logger.log(`[CLEAR_CONTEXT] Sent clearContext response`);
+  log.log(`[CLEAR_CONTEXT] Sent clearContext response`);
 }
 
 /**
@@ -403,6 +408,7 @@ export interface SendTasksCancelResponseParams {
  */
 export async function sendTasksCancelResponse(params: SendTasksCancelResponseParams): Promise<void> {
   const { config, sessionId, taskId, messageId } = params;
+  const log = logger.withContext(sessionId, taskId);
 
 
   // Build JSON-RPC response for tasks/cancel
@@ -433,7 +439,7 @@ export async function sendTasksCancelResponse(params: SendTasksCancelResponsePar
   };
 
   await wsManager.sendMessage(sessionId, outboundMessage);
-  logger.log(`[TASKS_CANCEL] Sent tasks/cancel response`);
+  log.log(`[TASKS_CANCEL] Sent tasks/cancel response`);
 }
 
 /**
@@ -452,6 +458,7 @@ export interface SendTriggerResponseParams {
  */
 export async function sendTriggerResponse(params: SendTriggerResponseParams): Promise<void> {
   const { config, sessionId, taskId, messageId, content } = params;
+  const log = logger.withContext(sessionId, taskId);
 
   // 审批桥接和脱敏
   const bridgedContent = rewriteOutboundApprovalText(sessionId, content);
@@ -496,7 +503,7 @@ export async function sendTriggerResponse(params: SendTriggerResponseParams): Pr
     msgDetail: JSON.stringify(jsonRpcResponse),
   };
 
-  logger.log(`[TRIGGER_RESPONSE] Sending Trigger response, text=${buildTextPreview(redactedContent)}`);
+  log.log(`[TRIGGER_RESPONSE] Sending Trigger response, text=${buildTextPreview(redactedContent)}`);
   await wsManager.sendMessage(sessionId, outboundMessage);
-  logger.log(`[TRIGGER_RESPONSE] Trigger response sent successfully`);
+  log.log(`[TRIGGER_RESPONSE] Trigger response sent successfully`);
 }

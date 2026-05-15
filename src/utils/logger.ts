@@ -97,15 +97,6 @@ function getSessionInfo(): { sessionId: string; taskId: string } {
   return { sessionId: "", taskId: "" };
 }
 
-// ── Core write function ──
-function writeLog(level: string, message: string, args: any[]): void {
-  checkRotation();
-  const { sessionId, taskId } = getSessionInfo();
-  const timestamp = formatTimestampUTC8();
-  const msg = args.length ? formatMessage(message, args) : message;
-  dest.write(`| ${level} | ${timestamp} | ${sessionId} | ${taskId} | ${msg}\n`);
-}
-
 // ── Global error handlers (catch-all) ──
 process.on("uncaughtException", (err) => {
   writeLog("fatal", "Uncaught exception", [err]);
@@ -114,6 +105,23 @@ process.on("uncaughtException", (err) => {
 process.on("unhandledRejection", (reason) => {
   writeLog("error", "Unhandled rejection", [reason]);
 });
+
+// ── Core write function with optional explicit context ──
+function writeLog(level: string, message: string, args: any[], explicitSid?: string, explicitTid?: string): void {
+  checkRotation();
+  const sessionId = explicitSid !== undefined ? explicitSid : getSessionInfo().sessionId;
+  const taskId = explicitTid !== undefined ? explicitTid : getSessionInfo().taskId;
+  const timestamp = formatTimestampUTC8();
+  const msg = args.length ? formatMessage(message, args) : message;
+  dest.write(`|${level}|${timestamp}|${sessionId}|${taskId}|${msg}\n`);
+}
+
+export interface ScopedLogger {
+  log(message: string, ...args: any[]): void;
+  warn(message: string, ...args: any[]): void;
+  error(message: string, ...args: any[]): void;
+  debug(message: string, ...args: any[]): void;
+}
 
 // ── Exported logger ──
 export const logger = {
@@ -131,6 +139,16 @@ export const logger = {
 
   debug(message: string, ...args: any[]): void {
     writeLog("debug", message, args);
+  },
+
+  /** Create a scoped logger with explicit sessionId/taskId (bypasses AsyncLocalStorage/globalThis). */
+  withContext(sessionId: string, taskId: string): ScopedLogger {
+    return {
+      log(message: string, ...args: any[]): void { writeLog("info", message, args, sessionId, taskId); },
+      warn(message: string, ...args: any[]): void { writeLog("warn", message, args, sessionId, taskId); },
+      error(message: string, ...args: any[]): void { writeLog("error", message, args, sessionId, taskId); },
+      debug(message: string, ...args: any[]): void { writeLog("debug", message, args, sessionId, taskId); },
+    };
   },
 };
 
