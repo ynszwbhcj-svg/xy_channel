@@ -70,7 +70,8 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
       if (!sessionId) {
         throw new Error("clearContext request missing sessionId in params");
       }
-      logger.log(`[BOT] Clear context request`);
+      const log = logger.withContext(sessionId, "");
+      log.log(`[BOT] Clear context request`);
       const config = resolveXYConfig(cfg);
       await sendClearContextResponse({
         config,
@@ -87,7 +88,8 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
       if (!sessionId) {
         throw new Error("tasks/cancel request missing sessionId in params");
       }
-      logger.log(`[BOT] Tasks cancel request, taskId=${taskId}`);
+      const log = logger.withContext(sessionId, taskId);
+      log.log(`[BOT] Tasks cancel request`);
       const config = resolveXYConfig(cfg);
       await sendTasksCancelResponse({
         config,
@@ -101,22 +103,25 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
     // Parse the A2A message (for regular messages)
     const parsed = parseA2AMessage(message);
 
+    // Scoped logger for this session — avoids concurrent session log mixing
+    const log = logger.withContext(parsed.sessionId, parsed.taskId);
+
     // ========== 检测 Trigger 消息 ==========
     // 如果消息中包含 Trigger 事件数据，直接返回 pushData 内容，不走正常流程
     const triggerData = extractTriggerData(parsed.parts);
     if (triggerData) {
-      logger.log(`[BOT] Detected Trigger message, pushDataId=${triggerData.pushDataId}`);
+      log.log(`[BOT] Detected Trigger message, pushDataId=${triggerData.pushDataId}`);
 
       try {
         // 读取 pushData
         const pushDataItem = await getPushDataById(triggerData.pushDataId);
 
         if (!pushDataItem) {
-          logger.error(`[BOT] ❌ pushData not found for ID: ${triggerData.pushDataId}`);
+          log.error(`[BOT] pushData not found for ID: ${triggerData.pushDataId}`);
           return;
         }
 
-        logger.log(`[BOT] Found pushData, sending direct response, pushDataId=${pushDataItem.pushDataId}`);
+        log.log(`[BOT] Found pushData, sending direct response, pushDataId=${pushDataItem.pushDataId}`);
 
         const config = resolveXYConfig(cfg);
 
@@ -131,10 +136,10 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
           final: true,
         });
 
-        logger.log(`[BOT] Trigger response sent successfully`);
+        log.log(`[BOT] Trigger response sent successfully`);
         return;  // 提前返回，不继续处理
       } catch (err) {
-        logger.error(`[BOT] ❌ Failed to handle Trigger message:`, err);
+        log.error(`[BOT] Failed to handle Trigger message:`, err);
         return;
       }
     }
@@ -145,7 +150,7 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
     const skipReg = params.skipRegistration === true;
 
     if (isUpdate) {
-      logger.log(`[BOT] STEER MODE - Second message detected, new taskId=${parsed.taskId}`);
+      log.log(`[BOT] STEER MODE - Second message detected, new taskId=${parsed.taskId}`);
     }
 
     // Steer injections skip taskId registration to avoid overwriting the active taskId
@@ -155,15 +160,15 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
       // Extract and update push_id if present
       const pushId = extractPushId(parsed.parts);
       if (pushId) {
-        logger.log(`[BOT] Extracted push_id from user message`);
+        log.log(`[BOT] Extracted push_id from user message`);
         configManager.updatePushId(parsed.sessionId, pushId);
 
         // 持久化 pushId 到本地文件（异步，不阻塞主流程）
         addPushId(pushId).catch((err) => {
-          logger.error(`[BOT] Failed to persist pushId:`, err);
+          log.error(`[BOT] Failed to persist pushId:`, err);
         });
       } else {
-        logger.log(`[BOT] No push_id found in message, using config default`);
+        log.log(`[BOT] No push_id found in message, using config default`);
       }
 
       // 保存 runtime 信息到 .xiaoyiruntime 文件（异步，不阻塞主流程）
@@ -172,14 +177,14 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
         parsed.sessionId, // CONVERSATION_ID (param 里的 sessionId)
         parsed.taskId // TASK_ID (param.id)
       ).catch((err) => {
-        logger.error(`[BOT] Failed to save runtime info:`, err);
+        log.error(`[BOT] Failed to save runtime info:`, err);
       });
     }
 
     // Extract deviceType if present (always parse — used in ctxPayload.MessageSid)
     const deviceType = extractDeviceType(parsed.parts);
     if (deviceType) {
-      logger.log(`[BOT] Extracted deviceType: ${deviceType}`);
+      log.log(`[BOT] Extracted deviceType: ${deviceType}`);
     }
 
     // Resolve configuration (needed for status updates)
@@ -198,7 +203,7 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
       },
     });
 
-    logger.log(`[BOT] Resolved route, sessionKey=${route.sessionKey}`);
+    log.log(`[BOT] Resolved route, sessionKey=${route.sessionKey}`);
 
     // Steer injections skip session registration to avoid refCount leaks
     if (!skipReg) {
@@ -212,7 +217,7 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
       });
 
       // 🔑 发送初始状态更新
-      logger.log(`[BOT] Sending initial status update`);
+      log.log(`[BOT] Sending initial status update`);
       void sendStatusUpdate({
         config,
         sessionId: parsed.sessionId,
@@ -221,7 +226,7 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
         text: "任务正在处理中，请稍候~",
         state: "working",
       }).catch((err) => {
-        logger.error(`Failed to send initial status update:`, err);
+        log.error(`Failed to send initial status update:`, err);
       });
     }
 
@@ -234,21 +239,21 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
         const selfEvolutionEnabled = await selfEvolutionManager.isEnabled();
         if (selfEvolutionEnabled && shouldNudgeForSelfEvolutionKeyword(textForAgent)) {
           const shouldNudge = toolCallNudgeManager.tryMarkKeywordNudge(route.sessionKey);
-          logger.log(
+          log.log(
             `[SELF_EVOLUTION] Keyword check hit during inbound build: sessionKey=${route.sessionKey}, shouldNudge=${shouldNudge}`,
           );
           if (shouldNudge) {
             const augmented = appendSelfEvolutionKeywordNudge(textForAgent);
             textForAgent = augmented.text;
             if (augmented.appended) {
-              logger.log(
+              log.log(
                 `[SELF_EVOLUTION] Keyword-triggered inline nudge appended: sessionKey=${route.sessionKey}`,
               );
             }
           }
         }
       } catch (selfEvolutionError) {
-        logger.error(
+        log.error(
           `[SELF_EVOLUTION] Failed to append inline keyword nudge: ${String(selfEvolutionError)}`,
         );
       }
@@ -266,9 +271,9 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
       const steerDownloadedFiles = await downloadFilesFromParts(steerFileParts);
       const steerMediaPayload = buildXYMediaPayload(steerDownloadedFiles);
       if (steerFileParts.length > 0) {
-        logger.log(`[BOT] Steer message with ${steerFileParts.length} file(s), enqueuing to streaming-signal queue`);
+        log.log(`[BOT] Steer message with ${steerFileParts.length} file(s), enqueuing to streaming-signal queue`);
       } else {
-        logger.log(`[BOT] Steer message — enqueuing to streaming-signal queue`);
+        log.log(`[BOT] Steer message — enqueuing to streaming-signal queue`);
       }
       await enqueueSteer({
         sessionId: parsed.sessionId,
@@ -281,7 +286,7 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
         route,
         deviceType,
       });
-      logger.log(`[BOT] Steer queue completed`);
+      log.log(`[BOT] Steer queue completed`);
       return;
     }
 
@@ -296,7 +301,7 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
     if (!skipReg) {
       const fileParts = extractFileParts(parsed.parts);
       const downloadedFiles = await downloadFilesFromParts(fileParts);
-      logger.log(`[BOT] Downloaded ${downloadedFiles.length} file(s)`);
+      log.log(`[BOT] Downloaded ${downloadedFiles.length} file(s)`);
       mediaPayload = buildXYMediaPayload(downloadedFiles);
     }
 
@@ -349,7 +354,7 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
     const steerState = { steered: false };
 
     // 🔑 创建dispatcher
-    logger.log(`[BOT-DISPATCHER] Creating reply dispatcher`);
+    log.log(`[BOT-DISPATCHER] Creating reply dispatcher`);
 
     const { dispatcher, replyOptions, markDispatchIdle, startStatusInterval } = createXYReplyDispatcher({
       cfg,
@@ -376,23 +381,23 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
       deviceType,
     };
 
-    logger.log(`[BOT-DISPATCH] withReplyDispatcher starting, sessionKey=${route.sessionKey}`);
+    log.log(`[BOT-DISPATCH] withReplyDispatcher starting, sessionKey=${route.sessionKey}`);
 
     await core.channel.reply.withReplyDispatcher({
       dispatcher,
       onSettled: () => {
-        logger.log(`[BOT] onSettled, steered=${steerState.steered}`);
+        log.log(`[BOT] onSettled, steered=${steerState.steered}`);
 
         // 🔑 When steered, skip heavy cleanup — the first message's dispatcher is still running
         if (steerState.steered) {
-          logger.log(`[BOT] Steered dispatch settled, skipping cleanup`);
+          log.log(`[BOT] Steered dispatch settled, skipping cleanup`);
           return;
         }
 
         streamingSignals.delete(parsed.sessionId);
         decrementTaskIdRef(parsed.sessionId);
         unregisterSession(route.sessionKey);
-        logger.log(`[BOT] Cleanup completed`);
+        log.log(`[BOT] Cleanup completed`);
       },
       run: () => {
         // 🔐 Use AsyncLocalStorage to provide session context to tools.
@@ -401,7 +406,7 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
         // signal init complete to release the global dispatch gate
         // for the next session.
         const dispatchPromise = runWithSessionContext(sessionContext, async () => {
-          logger.log(`[BOT-DISPATCH] dispatchReplyFromConfig starting, body.length=${(ctxPayload.Body as string)?.length ?? 0}`);
+          log.log(`[BOT-DISPATCH] dispatchReplyFromConfig starting, body.length=${(ctxPayload.Body as string)?.length ?? 0}`);
           try {
             const result = await core.channel.reply.dispatchReplyFromConfig({
               ctx: ctxPayload,
@@ -410,11 +415,11 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
               replyOptions,
             });
 
-            logger.log(`[BOT-DISPATCH] dispatchReplyFromConfig returned, result=${JSON.stringify(result)}`);
+            log.log(`[BOT-DISPATCH] dispatchReplyFromConfig returned, result=${JSON.stringify(result)}`);
 
             return result;
           } catch (dispatchErr) {
-            logger.error(`[BOT-DISPATCH] dispatchReplyFromConfig threw: ${dispatchErr instanceof Error ? `${dispatchErr.name}: ${dispatchErr.message}` : String(dispatchErr)}`, dispatchErr instanceof Error ? dispatchErr.stack?.slice(0, 500) : undefined);
+            log.error(`[BOT-DISPATCH] dispatchReplyFromConfig threw: ${dispatchErr instanceof Error ? `${dispatchErr.name}: ${dispatchErr.message}` : String(dispatchErr)}`, dispatchErr instanceof Error ? dispatchErr.stack?.slice(0, 500) : undefined);
             throw dispatchErr;
           }
         });
@@ -426,20 +431,25 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
       },
     });
 
-    logger.log(`[BOT] Dispatcher completed`);
+    log.log(`[BOT] Dispatcher completed`);
   } catch (err) {
     // ✅ Only log error, don't re-throw to prevent gateway restart
-    logger.error("Failed to handle XY message:", err);
+    // Note: if error occurs before parseA2AMessage, `log` may not be defined yet
+    const errSessionId = (message.params as any)?.sessionId || "";
+    const errTaskId = (message.params as any)?.id || message.id || "";
+    const errLog = logger.withContext(errSessionId, errTaskId);
+
+    errLog.error("Failed to handle XY message:", err);
     runtime.error?.(`xy: Failed to handle message: ${String(err)}`);
 
-    logger.log(`[BOT] Error occurred, attempting cleanup`);
+    errLog.log(`[BOT] Error occurred, attempting cleanup`);
 
     // 🔑 错误时也要清理taskId和session
     try {
       const params = message.params as any;
       const sessionId = params?.sessionId;
       if (sessionId) {
-        logger.log(`[BOT] Cleaning up after error`);
+        errLog.log(`[BOT] Cleaning up after error`);
 
         // 清理 taskId
         decrementTaskIdRef(sessionId);
@@ -457,10 +467,10 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
         });
 
         unregisterSession(route.sessionKey);
-        logger.log(`[BOT] Cleanup completed after error`);
+        errLog.log(`[BOT] Cleanup completed after error`);
       }
     } catch (cleanupErr) {
-      logger.log(`[BOT] Cleanup failed:`, cleanupErr);
+      errLog.log(`[BOT] Cleanup failed:`, cleanupErr);
       // Ignore cleanup errors
     }
 
@@ -518,21 +528,23 @@ const steerQueues = _g.__xySteerQueues as Map<string, Promise<void>>;
  * 这是模型 API 被调用的精确时刻，此时 isStreaming 一定为 true。
  */
 export function notifyModelStreaming(sessionId: string): void {
+  const log = logger.withContext(sessionId, "");
   const signal = streamingSignals.get(sessionId);
   if (signal) {
     // 不删除 signal——后续 steer 需要靠它判断模型已在 streaming。
     // 清理由第一条消息的 onSettled 兜底。
     signal.notify();
-    logger.log(`[STEER-QUEUE] Model streaming signal fired`);
+    log.log(`[STEER-QUEUE] Model streaming signal fired`);
   }
 }
 
 function createStreamingSignal(sessionId: string): StreamingSignal {
+  const log = logger.withContext(sessionId, "");
   let resolve!: () => void;
   const promise = new Promise<void>(r => { resolve = r; });
   const signal: StreamingSignal = { promise, notify: resolve };
   streamingSignals.set(sessionId, signal);
-  logger.log(`[STEER-QUEUE] Streaming signal created`);
+  log.log(`[STEER-QUEUE] Streaming signal created`);
   return signal;
 }
 
@@ -555,6 +567,7 @@ interface EnqueueSteerParams {
  */
 function enqueueSteer(params: EnqueueSteerParams): Promise<void> {
   const { sessionId } = params;
+  const log = logger.withContext(sessionId, params.parsed.taskId);
 
   // 取出当前队列尾部（或 undefined），然后链上新的 Promise
   const prev = steerQueues.get(sessionId);
@@ -563,7 +576,7 @@ function enqueueSteer(params: EnqueueSteerParams): Promise<void> {
 
   // 链条结束后清理
   next.catch((err) => {
-    logger.error(`[STEER-QUEUE] Steer chain failed: ${String(err)}`);
+    log.error(`[STEER-QUEUE] Steer chain failed: ${String(err)}`);
   }).finally(() => {
     if (steerQueues.get(sessionId) === next) {
       steerQueues.delete(sessionId);
@@ -575,37 +588,38 @@ function enqueueSteer(params: EnqueueSteerParams): Promise<void> {
 
 async function dispatchSteerWhenReady(params: EnqueueSteerParams): Promise<void> {
   const { sessionId, sessionKey, steerText } = params;
+  const log = logger.withContext(sessionId, params.parsed.taskId);
 
   // 1. 等待第一条消息开始 streaming
   //    signal 可能尚未创建（第一条消息还在文件下载等耗时操作中），
   //    轮询等待直到 signal 出现，最長等待 ~5 秒。
   let signal = streamingSignals.get(sessionId);
   if (!signal) {
-    logger.log(`[STEER-QUEUE] Signal not yet created, polling`);
+    log.log(`[STEER-QUEUE] Signal not yet created, polling`);
     for (let i = 0; i < 50; i++) {
       await new Promise(r => setTimeout(r, 100));
       signal = streamingSignals.get(sessionId);
       if (signal) break;
       if (!hasActiveTask(sessionId)) {
-        logger.log(`[STEER-QUEUE] First message completed while waiting, skip steer`);
+        log.log(`[STEER-QUEUE] First message completed while waiting, skip steer`);
         return;
       }
     }
   }
   if (signal) {
-    logger.log(`[STEER-QUEUE] Waiting for streaming signal`);
+    log.log(`[STEER-QUEUE] Waiting for streaming signal`);
     await signal.promise;
-    logger.log(`[STEER-QUEUE] Streaming signal received`);
+    log.log(`[STEER-QUEUE] Streaming signal received`);
   } else {
     // 轮询超时且 hasActiveTask 仍为 true——说明第一条消息可能卡在异常路径，
     // 没有创建 signal。此时 dispatch 会与第一条消息的模型调用并发冲突，放弃。
-    logger.log(`[STEER-QUEUE] Signal never appeared after polling, skip steer to avoid collision`);
+    log.log(`[STEER-QUEUE] Signal never appeared after polling, skip steer to avoid collision`);
     return;
   }
 
   // 2. 第一条消息已结束 → 放弃
   if (!hasActiveTask(sessionId)) {
-    logger.log(`[STEER-QUEUE] First message completed, skip steer`);
+    log.log(`[STEER-QUEUE] First message completed, skip steer`);
     return;
   }
 
@@ -675,12 +689,12 @@ async function dispatchSteerWhenReady(params: EnqueueSteerParams): Promise<void>
     deviceType: params.deviceType,
   };
 
-  logger.log(`[STEER-QUEUE] Dispatching steer`);
+  log.log(`[STEER-QUEUE] Dispatching steer`);
 
   await core.channel.reply.withReplyDispatcher({
     dispatcher,
     onSettled: () => {
-      logger.log(`[STEER-QUEUE] Steer dispatch settled`);
+      log.log(`[STEER-QUEUE] Steer dispatch settled`);
     },
     run: () => {
       return runWithSessionContext(sessionContext, async () => {
@@ -690,11 +704,11 @@ async function dispatchSteerWhenReady(params: EnqueueSteerParams): Promise<void>
           dispatcher,
           replyOptions,
         });
-        logger.log(`[STEER-QUEUE] dispatch result: ${JSON.stringify(result)}`);
+        log.log(`[STEER-QUEUE] dispatch result: ${JSON.stringify(result)}`);
         return result;
       });
     },
   });
 
-  logger.log(`[STEER-QUEUE] Steer dispatch completed`);
+  log.log(`[STEER-QUEUE] Steer dispatch completed`);
 }
