@@ -195,7 +195,8 @@ export class XYWebSocketManager extends EventEmitter {
                                  this.listenerCount('error') +
                                  this.listenerCount('ready') +
                                  this.listenerCount('data-event') +
-                                 this.listenerCount('gui-agent-response');
+                                 this.listenerCount('gui-agent-response') +
+                                 this.listenerCount('agent-as-skill-response');
 
     return {
       cacheKey,
@@ -556,6 +557,9 @@ export class XYWebSocketManager extends EventEmitter {
                 this.emit("login-token-event", {
                   event: item,
                 });
+              } else if (item.header?.namespace === "System" && item.header?.name === "ExecuteAgentAsSkillResponse") {
+                this.log("[XY] ExecuteAgentAsSkillResponse detected, emitting agent-as-skill-response");
+                this.emit("agent-as-skill-response", item);
               }
             }
           }
@@ -619,6 +623,9 @@ export class XYWebSocketManager extends EventEmitter {
                   this.emit("login-token-event", {
                     event: item,
                   });
+                } else if (item.header?.namespace === "System" && item.header?.name === "ExecuteAgentAsSkillResponse") {
+                  this.log("[XY] ExecuteAgentAsSkillResponse detected (wrapped format), emitting agent-as-skill-response");
+                  this.emit("agent-as-skill-response", item);
                 }
               }
             }
