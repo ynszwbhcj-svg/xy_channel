@@ -1,106 +1,151 @@
-// CSPL Hook 配置管理
-// uid 和 apiKey 复用 XYChannelConfig，skillId 写死在常量中
+/*
+ * 版权所有 (c) 华为技术有限公司 2026-2026
+ */
 
-import type { ClawdbotConfig } from "openclaw/plugin-sdk";
-import { resolveXYConfig } from "../config.js";
-import type { XYChannelConfig } from "../types.js";
-import { CSPL_STATIC_CONFIG, API_URL_SUFFIX, ENV_FILE_PATH, REQUIRED_ENV_VARS } from "./constants.js";
-import fs from "node:fs";
-import { logger } from "../utils/logger.js";
+import fs from 'fs';
+import path from 'path';
+
+import {HttpHeaders, CONFIG_FILE_NAME, ENV_FILE_PATH, API_URL_SUFFIX, REQUIRED_ENV_VARS} from './constants.js';
 
 export interface ApiConfig {
-  url: string;
-  timeout: number;
+    url: string;
+    timeout: number;
 }
 
-export interface CsplConfig {
-  api: ApiConfig;
-  uid: string;
-  apiKey: string;
-  skillId: string;
-  requestFrom: string;
-  textSource: string;
-  action: string;
+export interface Config {
+    api: ApiConfig;
+    headers?: HttpHeaders;
+    uid: string;
+    apiKey: string;
+    skillId: string;
+    requestFrom: string;
+    textSource: string;
+    action: string;
 }
 
-let cachedConfig: CsplConfig | null = null;
+let cachedConfig: Config | null = null;
 
-function readServiceUrl(): string {
-  if (!fs.existsSync(ENV_FILE_PATH)) {
-    throw new Error(`[SENTINEL HOOK] Environment file not found: ${ENV_FILE_PATH}`);
-  }
+function readEnvFile(): Record<string, string> {
+    if (!fs.existsSync(ENV_FILE_PATH)) {
+        throw new Error(`Environment file not found.`);
+    }
 
-  const envData = fs.readFileSync(ENV_FILE_PATH, "utf-8");
-  for (const line of envData.split("\n")) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith("#")) continue;
-    const eqIdx = trimmed.indexOf("=");
-    if (eqIdx === -1) continue;
-    const key = trimmed.substring(0, eqIdx).trim();
-    const value = trimmed.substring(eqIdx + 1).trim();
-    if (key === "SERVICE_URL" && value) return value;
-  }
+    let envData: string;
+    try {
+        envData = fs.readFileSync(ENV_FILE_PATH, 'utf-8');
+    } catch (error) {
+        const err = error as Error;
+        throw new Error(`Failed to read environment file. Error: ${err.message}`);
+    }
 
-  throw new Error("[SENTINEL HOOK] Missing SERVICE_URL in env file");
+    const env: Record<string, string> = {};
+    const lines = envData.split('\n');
+
+    for (const line of lines) {
+        const trimmedLine = line.trim();
+        if (!trimmedLine || trimmedLine.startsWith('#')) {
+            continue;
+        }
+
+        const firstEqualIndex = trimmedLine.indexOf('=');
+        if (firstEqualIndex === -1) {
+            continue;
+        }
+
+        const key = trimmedLine.substring(0, firstEqualIndex).trim();
+        const value = trimmedLine.substring(firstEqualIndex + 1).trim();
+
+        if (key && REQUIRED_ENV_VARS.includes(key)) {
+            env[key] = value;
+        }
+    }
+
+    return env;
 }
 
-/**
- * 构建 CSPL 配置。uid 和 apiKey 复用 XYChannelConfig，避免重复配置。
- * serviceUrl 从 .xiaoyienv 文件读取，skillId 写死在常量中。
- *
- * Accepts either ClawdbotConfig (legacy after_tool_call path) or
- * XYChannelConfig (AgentToolResultMiddleware path).  Config is cached
- * after the first successful call so subsequent calls can omit the arg.
- */
-export function getCsplConfig(cfg?: ClawdbotConfig): CsplConfig {
-  if (cachedConfig) return cachedConfig;
+export function getConfig(api): Config {
+    if (cachedConfig) {
+        return cachedConfig;
+    }
 
-  if (!cfg) {
-    throw new Error("[SENTINEL HOOK] CSPL config not initialized: pass ClawdbotConfig on first call");
-  }
+    const configPath = path.join(__dirname, CONFIG_FILE_NAME);
 
-  const xyConfig = resolveXYConfig(cfg);
-  const serviceUrl = readServiceUrl();
+    if (!fs.existsSync(configPath)) {
+        throw new Error(`Config file not found: ${CONFIG_FILE_NAME}`);
+    }
 
-  cachedConfig = {
-    api: {
-      url: `${serviceUrl}${API_URL_SUFFIX}`,
-      timeout: CSPL_STATIC_CONFIG.api.timeout,
-    },
-    uid: xyConfig.uid,
-    apiKey: xyConfig.apiKey,
-    skillId: CSPL_STATIC_CONFIG.skillId,
-    requestFrom: CSPL_STATIC_CONFIG.requestFrom,
-    textSource: CSPL_STATIC_CONFIG.textSource,
-    action: CSPL_STATIC_CONFIG.action,
-  };
+    let configData: string;
+    try {
+        configData = fs.readFileSync(configPath, 'utf-8');
+    } catch (error) {
+        throw new Error(`Failed to read config file: ${CONFIG_FILE_NAME}.`);
+    }
 
-  logger.log("[SENTINEL HOOK] Config loaded (uid/apiKey from XYChannelConfig)");
-  return cachedConfig;
-}
+    let parsedConfig: unknown;
+    try {
+        parsedConfig = JSON.parse(configData);
+    } catch (error) {
+        throw new Error(`Failed to parse config file: ${CONFIG_FILE_NAME}.`);
+    }
 
-/**
- * Initialize CSPL config from an already-resolved XYChannelConfig.
- * Used by AgentToolResultMiddleware which has session context but not ClawdbotConfig.
- */
-export function initCsplConfigFromXYConfig(xyConfig: XYChannelConfig): CsplConfig {
-  if (cachedConfig) return cachedConfig;
+    if (!parsedConfig || typeof parsedConfig !== 'object') {
+        throw new Error(`Invalid config structure: ${CONFIG_FILE_NAME}. Expected an object.`);
+    }
 
-  const serviceUrl = readServiceUrl();
+    const config = parsedConfig as Partial<Config>;
 
-  cachedConfig = {
-    api: {
-      url: `${serviceUrl}${API_URL_SUFFIX}`,
-      timeout: CSPL_STATIC_CONFIG.api.timeout,
-    },
-    uid: xyConfig.uid,
-    apiKey: xyConfig.apiKey,
-    skillId: CSPL_STATIC_CONFIG.skillId,
-    requestFrom: CSPL_STATIC_CONFIG.requestFrom,
-    textSource: CSPL_STATIC_CONFIG.textSource,
-    action: CSPL_STATIC_CONFIG.action,
-  };
+    if (!config.api || typeof config.api !== 'object') {
+        throw new Error(`Invalid config: missing or invalid 'api' section in ${CONFIG_FILE_NAME}`);
+    }
 
-  logger.log("[SENTINEL HOOK] Config loaded via XYChannelConfig");
-  return cachedConfig;
+    if (!config.api.timeout || typeof config.api.timeout !== 'number') {
+        throw new Error(`Invalid config: missing or invalid 'api.timeout' in ${CONFIG_FILE_NAME}`);
+    }
+
+    if (!config.skillId || typeof config.skillId !== 'string') {
+        throw new Error(`Invalid config: missing or invalid 'skillId' in ${CONFIG_FILE_NAME}`);
+    }
+
+    if (!config.requestFrom || typeof config.requestFrom !== 'string') {
+        throw new Error(`Invalid config: missing or invalid 'requestFrom' in ${CONFIG_FILE_NAME}`);
+    }
+
+    if (!config.textSource || typeof config.textSource !== 'string') {
+        throw new Error(`Invalid config: missing or invalid 'textSource' in ${CONFIG_FILE_NAME}`);
+    }
+
+    if (!config.action || typeof config.action !== 'string') {
+        throw new Error(`Invalid config: missing or invalid 'action' in ${CONFIG_FILE_NAME}`);
+    }
+
+    let env: Record<string, string>;
+    try {
+        env = readEnvFile();
+    } catch (error) {
+        const err = error as Error;
+        throw new Error(`Failed to load environment variables from env files: ${err.message}`);
+    }
+
+    const personalApiKey = env['PERSONAL-API-KEY'];
+    if (!personalApiKey || typeof personalApiKey !== 'string' || personalApiKey.trim() === '') {
+        throw new Error(`Missing or empty 'PERSONAL-API-KEY' in env files`);
+    }
+
+    const personalUid = env['PERSONAL-UID'];
+    if (!personalUid || typeof personalUid !== 'string' || personalUid.trim() === '') {
+        throw new Error(`Missing or empty 'PERSONAL-UID' in env files`);
+    }
+
+    const serviceUrl = env['SERVICE_URL'];
+    if (!serviceUrl || typeof serviceUrl !== 'string' || serviceUrl.trim() === '') {
+        throw new Error(`Missing or empty 'SERVICE_URL' in env files`);
+    }
+
+    config.apiKey = personalApiKey.trim();
+    config.uid = personalUid.trim();
+    config.api.url = serviceUrl.trim();
+
+    cachedConfig = config as Config;
+    api.logger.info(`[SENTINEL HOOK] Config file loaded successfully: ${CONFIG_FILE_NAME}`);
+    return cachedConfig;
 }

@@ -3,6 +3,8 @@ import { v4 as uuidv4 } from "uuid";
 import { getXYWebSocketManager } from "./client.js";
 import { logger } from "./utils/logger.js";
 import { getCurrentTaskId, getCurrentMessageId } from "./task-manager.js";
+import { redactSensitiveText, containsSensitiveInfo } from "./sensitive-redactor.js";
+import { rewriteOutboundApprovalText } from "./approval-bridge.js";
 import type {
   XYChannelConfig,
   A2AJsonRpcResponse,
@@ -11,6 +13,42 @@ import type {
   OutboundWebSocketMessage,
   A2ACommand,
 } from "./types.js";
+
+// ─────────────────────────────────────────────────────────────
+// 敏感信息脱敏辅助函数
+// ─────────────────────────────────────────────────────────────
+
+const MESSAGE_CONTENT_KEYS = new Set(["text", "reasoningText", "content", "message"]);
+
+function redactMessagePayload(value: any, currentKey?: string): any {
+  if (value === null || value === undefined) {
+    return value;
+  }
+  if (typeof value === "string") {
+    if (currentKey === undefined || MESSAGE_CONTENT_KEYS.has(currentKey)) {
+      return redactSensitiveText(value);
+    }
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.map(item => redactMessagePayload(item, currentKey));
+  }
+  if (typeof value === "object") {
+    const result: Record<string, any> = {};
+    for (const key of Object.keys(value)) {
+      result[key] = redactMessagePayload(value[key], key);
+    }
+    return result;
+  }
+  return value;
+}
+
+function buildTextPreview(text: string): string {
+  if (typeof text !== "string" || text.length === 0) {
+    return "";
+  }
+  return text.length <= 10 ? text : `${text.slice(0, 5)}***${text.slice(-5)}`;
+}
 
 /**
  * Parameters for sending an A2A response.
@@ -34,6 +72,9 @@ export interface SendA2AResponseParams {
 export async function sendA2AResponse(params: SendA2AResponseParams): Promise<void> {
   const { config, sessionId, taskId, messageId, text, append, final, files, errorCode, errorMessage } = params;
 
+  // 审批桥接：将 OpenClaw 的审批提示翻译成用户友好的确认文案
+  const bridgedText = text === undefined ? text : rewriteOutboundApprovalText(sessionId, text);
+
   // Build artifact update event
   const artifact: A2ATaskArtifactUpdateEvent = {
     taskId,
@@ -48,10 +89,10 @@ export async function sendA2AResponse(params: SendA2AResponseParams): Promise<vo
   };
 
   // Add text part (even if empty string, to maintain parts structure)
-  if (text !== undefined) {
+  if (bridgedText !== undefined) {
     artifact.artifact.parts.push({
       kind: "text",
-      text,
+      text: bridgedText,
     });
   }
 
@@ -62,6 +103,9 @@ export async function sendA2AResponse(params: SendA2AResponseParams): Promise<vo
       data: { fileInfo: files },
     });
   }
+
+  // 对消息内容字段做敏感信息脱敏，不修改协议层的 id 等字段
+  artifact.artifact.parts = redactMessagePayload(artifact.artifact.parts, "parts");
 
   // Build JSON-RPC response
   const jsonRpcResponse: any = {
@@ -90,11 +134,13 @@ export async function sendA2AResponse(params: SendA2AResponseParams): Promise<vo
   };
 
   // 📋 Log complete response body
+  const redactedText = redactSensitiveText(bridgedText ?? "");
   logger.log(`[A2A_RESPONSE] 📤 Sending A2A artifact-update response: taskId: ${taskId}`);
   logger.log(`[A2A_RESPONSE]   - append: ${append}`);
   logger.log(`[A2A_RESPONSE]   - final: ${final}`);
-  logger.log(`[A2A_RESPONSE]   - text: ${text.length <= 10 ? text : text.slice(0, 5) + '***' + text.slice(-5)}`);
+  logger.log(`[A2A_RESPONSE]   - text: ${buildTextPreview(redactedText)}`);
   logger.log(`[A2A_RESPONSE]   - files count: ${files?.length ?? 0}`);
+  logger.log(`[A2A_RESPONSE]   - sensitive info detected: ${containsSensitiveInfo(bridgedText ?? "")}`);
 
   await wsManager.sendMessage(sessionId, outboundMessage);
   logger.log(`[A2A_RESPONSE] ✅ Message sent successfully`);
@@ -120,6 +166,8 @@ export interface SendReasoningTextUpdateParams {
 export async function sendReasoningTextUpdate(params: SendReasoningTextUpdateParams): Promise<void> {
   const { config, sessionId, taskId, messageId, text, append = true } = params;
 
+  // 审批桥接
+  const bridgedText = rewriteOutboundApprovalText(sessionId, text);
 
   const artifact: A2ATaskArtifactUpdateEvent = {
     taskId,
@@ -132,11 +180,14 @@ export async function sendReasoningTextUpdate(params: SendReasoningTextUpdatePar
       parts: [
         {
           kind: "reasoningText",
-          reasoningText: text,
+          reasoningText: bridgedText,
         },
       ],
     },
   };
+
+  // 对消息内容字段做敏感信息脱敏
+  artifact.artifact.parts = redactMessagePayload(artifact.artifact.parts, "parts");
 
   const jsonRpcResponse = {
     jsonrpc: "2.0",
@@ -179,21 +230,27 @@ export async function sendStatusUpdate(params: SendStatusUpdateParams): Promise<
   const currentTaskId = getCurrentTaskId(sessionId) ?? taskId;
   const currentMessageId = getCurrentMessageId(sessionId) ?? messageId;
 
+  // 审批桥接和脱敏
+  const bridgedText = rewriteOutboundApprovalText(sessionId, text);
+  const redactedText = redactSensitiveText(bridgedText);
+
   // Build status update event following A2A protocol standard
+  const statusMessage = redactMessagePayload({
+    role: "agent",
+    parts: [
+      {
+        kind: "text",
+        text: bridgedText,
+      },
+    ],
+  });
+
   const statusUpdate: A2ATaskStatusUpdateEvent = {
     taskId: currentTaskId,
     kind: "status-update",
     final: false, // Status updates should not end the stream
     status: {
-      message: {
-        role: "agent",
-        parts: [
-          {
-            kind: "text",
-            text,
-          },
-        ],
-      },
+      message: statusMessage,
       state,
     },
   };
@@ -218,7 +275,7 @@ export async function sendStatusUpdate(params: SendStatusUpdateParams): Promise<
   // 📋 Log complete response body
   logger.log(`[A2A_STATUS] 📤 Sending A2A status-update:`);
   logger.log(`[A2A_STATUS]   - taskId: ${currentTaskId}`);
-  logger.log(`[A2A_STATUS]   - text: "${text}"`);
+  logger.log(`[A2A_STATUS]   - text: "${redactedText}"`);
 
   await wsManager.sendMessage(sessionId, outboundMessage);
 }
@@ -265,6 +322,9 @@ export async function sendCommand(params: SendCommandParams): Promise<void> {
       ],
     },
   };
+
+  // 对消息内容字段做敏感信息脱敏
+  artifact.artifact.parts = redactMessagePayload(artifact.artifact.parts, "parts");
 
   // Build JSON-RPC response
   const jsonRpcResponse = {
@@ -400,6 +460,17 @@ export interface SendTriggerResponseParams {
 export async function sendTriggerResponse(params: SendTriggerResponseParams): Promise<void> {
   const { config, sessionId, taskId, messageId, content } = params;
 
+  // 审批桥接和脱敏
+  const bridgedContent = rewriteOutboundApprovalText(sessionId, content);
+  const redactedContent = redactSensitiveText(bridgedContent);
+
+  // 对消息内容做敏感信息脱敏
+  const artifactParts = redactMessagePayload([
+    {
+      kind: "text",
+      text: bridgedContent,
+    },
+  ], "parts");
 
   // Build JSON-RPC response for Trigger
   const jsonRpcResponse = {
@@ -413,12 +484,7 @@ export async function sendTriggerResponse(params: SendTriggerResponseParams): Pr
       final: true,
       artifact: {
         artifactId: uuidv4(),
-        parts: [
-          {
-            kind: "text",
-            text: content,
-          },
-        ],
+        parts: artifactParts,
       },
     },
     error: {
@@ -438,6 +504,7 @@ export async function sendTriggerResponse(params: SendTriggerResponseParams): Pr
   };
 
   logger.log(`[TRIGGER_RESPONSE] Sending Trigger response: sessionId=${sessionId}, taskId=${taskId}`);
+  logger.log(`[TRIGGER_RESPONSE]   - text: ${buildTextPreview(redactedContent)}`);
   await wsManager.sendMessage(sessionId, outboundMessage);
   logger.log(`[TRIGGER_RESPONSE] Trigger response sent successfully`);
 }
