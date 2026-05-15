@@ -64,20 +64,10 @@ export async function cleanupStaleTempFiles(tempDir: string = "/tmp/xy_channel")
 export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): any {
   const { cfg, runtime, sessionId, taskId, messageId, accountId, steerState } = params;
 
-  // Create a scoped logger that always uses this session's sessionId
-  // and dynamically resolves the latest taskId
-  const scopedLog = () => logger.withContext(sessionId, getActiveTaskId());
-
-  scopedLog().log(`[DISPATCHER-CREATE] Creating dispatcher`);
-
   // 初始taskId和messageId（作为fallback）
   const initialTaskId = taskId;
   const initialMessageId = messageId;
 
-  /**
-   * 🔑 核心改造：动态获取当前活跃的taskId和messageId
-   * 每次需要taskId时，都从TaskManager获取最新值
-   */
   const getActiveTaskId = (): string => {
     return getCurrentTaskId(sessionId) ?? initialTaskId;
   };
@@ -85,6 +75,12 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
   const getActiveMessageId = (): string => {
     return getCurrentMessageId(sessionId) ?? initialMessageId;
   };
+
+  // Create a scoped logger that always uses this session's sessionId
+  // and dynamically resolves the latest taskId
+  const scopedLog = () => logger.withContext(sessionId, getActiveTaskId());
+
+  scopedLog().log(`[DISPATCHER-CREATE] Creating dispatcher`);
 
   const core = getXYRuntime();
   const config: XYChannelConfig = resolveXYConfig(cfg);
