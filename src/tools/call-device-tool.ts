@@ -22,6 +22,7 @@ import { createUploadFileTool } from "./upload-file-tool.js";
 import { createSaveFileToPhoneTool } from "./save-file-to-phone-tool.js";
 import { createSendEmailTool } from "./send-email-tool.js";
 import { createSearchEmailTool } from "./search-email-tool.js";
+import { createFindPcDevicesTool } from "./find-pc-devices-tool.js";
 import { sendStatusUpdate } from "../formatter.js";
 import type { SessionContext } from "./session-manager.js";
 import { getCurrentTaskId, getCurrentMessageId } from "../task-manager.js";
@@ -57,6 +58,7 @@ export function createCallDeviceTool(ctx: SessionContext): any {
   const searchFileTool = createSearchFileTool(ctx);
   const saveFileToPhoneTool = createSaveFileToPhoneTool(ctx);
   const searchEmailTool = createSearchEmailTool(ctx);
+  const findPcDevicesTool = createFindPcDevicesTool(ctx);
 
   /**
    * 端工具注册表 —— 按 name 索引所有可通过 call_device_tool 调度的工具。
@@ -86,6 +88,7 @@ export function createCallDeviceTool(ctx: SessionContext): any {
     [saveFileToPhoneTool.name, saveFileToPhoneTool],
     [sendEmailTool.name, sendEmailTool],
     [searchEmailTool.name, searchEmailTool],
+    [findPcDevicesTool.name, findPcDevicesTool],
   ]);
 
   return {

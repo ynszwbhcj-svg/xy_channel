@@ -25,6 +25,7 @@ import { createGetCollectionToolSchemaTool } from "./get-collection-tool-schema.
 import { createGetEmailToolSchemaTool } from "./get-email-tool-schema.js";
 import { createLoginTokenTool } from "./login-token-tool.js";
 import { createAgentAsSkillTool } from "./agent-as-skill-tool.js";
+import { createFindPcDevicesTool } from "./find-pc-devices-tool.js";
 import { logger } from "../utils/logger.js";
 
 /**
@@ -60,5 +61,6 @@ export function createAllTools(ctx: SessionContext | null): ChannelAgentTool[] {
     createSaveSelfEvolutionSkillTool(ctx),
     createLoginTokenTool(ctx),
     createAgentAsSkillTool(ctx),
+    createFindPcDevicesTool(ctx),
   ];
 }

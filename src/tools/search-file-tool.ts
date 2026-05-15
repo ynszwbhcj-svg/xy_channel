@@ -16,15 +16,13 @@ export function createSearchFileTool(ctx: SessionContext): any {
   return {
   name: "search_file",
   label: "Search File",
-  description: `搜索用户设备文件系统的文件。
+  description: `搜索手机或PC/电脑文件系统的文件。
 
-【重要】使用约束：此工具仅在用户显著说明要从手机/PC等用户设备搜索时才执行，例如：
-- "从我手机/鸿蒙PC里面搜索xxxx"
-- "从手机文件系统找一下xxxx"
-- "在手机上查找文件xxxx"
-- "搜索手机里的文件"
+【重要】使用场景与调用流程：
+1. 搜索手机文件：当用户明确说明要从手机搜索时（如"从手机里面搜索xxxx"、"在手机上查找文件xxxx"），直接调用此工具，无需传入 udid。
+2. 搜索PC/电脑文件：当用户要求搜索PC/电脑上的文件时（如"帮我找一下PC上的xxx文件"、"搜索电脑上的xxx"），必须先调用 find_pc_devices 工具获取设备ID（udid），然后将 udid 传入此工具进行搜索。
 
-如果用户没有明确说明从手机或者PC搜索（如仅说"搜索文件"、"找一下xxxx"），应默认从当前runtime运行环境的本地的文件系统查询，不要调用此工具。
+如果用户没有明确说明从手机或PC搜索（如仅说"搜索文件"、"找一下xxxx"），应默认从当前runtime运行环境的本地文件系统查询，不要调用此工具。
 
 功能说明：根据关键词搜索文件名称或内容，返回匹配的文件列表（包括文件名、路径、大小、修改时间等信息）。
 
@@ -35,6 +33,10 @@ export function createSearchFileTool(ctx: SessionContext): any {
       query: {
         type: "string",
         description: "搜索关键词，用于匹配文件名称、后缀名或文件内容",
+      },
+      udid: {
+        type: "string",
+        description: "PC/电脑设备ID。当搜索PC/电脑上的文件时，需要先通过 find_pc_devices 工具获取设备ID后传入。搜索手机文件时不需要传入此参数。",
       },
     },
     required: ["query"],
@@ -69,6 +71,7 @@ export function createSearchFileTool(ctx: SessionContext): any {
           timeOut: 5,
           intentParam: {
             query: params.query.trim(),
+            ...(params.udid ? { udid: params.udid } : {}),
           },
           permissionId: [],
           achieveType: "INTENT",
