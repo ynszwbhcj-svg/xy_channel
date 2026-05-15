@@ -163,7 +163,7 @@ async function getPhotoUrls(
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {
       wsManager.off("data-event", handler);
-      logger.error("超时: 获取照片URL超时（60秒）", { sessionId });
+      logger.error("超时: 获取照片URL超时（60秒）");
       reject(new Error("获取照片URL超时（60秒）"));
     }, 60000);
 

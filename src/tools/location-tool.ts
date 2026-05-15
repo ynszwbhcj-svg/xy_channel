@@ -65,7 +65,7 @@ export function createLocationTool(ctx: SessionContext): any {
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
         wsManager.off("data-event", handler);
-        logger.error("超时: 获取位置超时（60秒）", { sessionId, toolCallId });
+        logger.error("超时: 获取位置超时（60秒）", { toolCallId });
         reject(new Error("获取位置超时（60秒）"));
       }, 60000);
 

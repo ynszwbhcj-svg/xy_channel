@@ -77,7 +77,7 @@ export function createSearchNoteTool(ctx: SessionContext): any {
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
         wsManager.off("data-event", handler);
-        logger.error("超时: 搜索备忘录超时（60秒）", { sessionId, toolCallId });
+        logger.error("超时: 搜索备忘录超时（60秒）", { toolCallId });
         reject(new Error("搜索备忘录超时（60秒）"));
       }, 60000);
 

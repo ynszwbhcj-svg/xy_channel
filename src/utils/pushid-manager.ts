@@ -75,8 +75,7 @@ export async function addPushId(pushId: string): Promise<void> {
     list.push(pushId);
     await writePushIdList(list);
 
-    logger.log(`[PushIdManager] ✅ Added new pushId: ${pushId.substring(0, 20)}...`);
-    logger.log(`[PushIdManager]   - Total pushIds: ${list.length}`);
+    logger.log(`[PushIdManager] Added new pushId: ${pushId.substring(0, 20)}, total=${list.length}`);
   } catch (error) {
     logger.error(`[PushIdManager] Failed to add pushId:`, error);
     // 不抛出异常，避免影响主流程

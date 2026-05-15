@@ -35,10 +35,7 @@ export async function handleTriggerEvent(
   try {
     const { event, sessionId, taskId } = context;
 
-    logger.log(`[TRIGGER_HANDLER] 📌 Received Trigger event`);
-    logger.log(`[TRIGGER_HANDLER]   - sessionId: ${sessionId}`);
-    logger.log(`[TRIGGER_HANDLER]   - taskId: ${taskId}`);
-    logger.log(`[TRIGGER_HANDLER]   - pushDataId: ${event.payload?.dataMap?.pushDataId}`);
+    logger.log(`[TRIGGER_HANDLER] Received Trigger event, sessionId: ${sessionId}, taskId: ${taskId}, pushDataId: ${event.payload?.dataMap?.pushDataId}`);
 
     // 构造包含 Trigger 事件的 A2A 消息
     // 将原始 event 放入 message.parts 中，让 handleXYMessage 检测并处理
@@ -64,7 +61,7 @@ export async function handleTriggerEvent(
       },
     };
 
-    logger.log(`[TRIGGER_HANDLER] 🚀 Dispatching to handleXYMessage for processing`);
+    logger.log(`[TRIGGER_HANDLER] Dispatching to handleXYMessage for processing`);
 
     // 通过 handleXYMessage 处理（复用现有链路）
     await handleXYMessage({
@@ -74,8 +71,8 @@ export async function handleTriggerEvent(
       accountId,
     });
 
-    logger.log(`[TRIGGER_HANDLER] ✅ Trigger event dispatched successfully`);
+    logger.log(`[TRIGGER_HANDLER] Trigger event dispatched successfully`);
   } catch (err) {
-    logger.error(`[TRIGGER_HANDLER] ❌ Failed to handle Trigger event:`, err);
+    logger.error(`[TRIGGER_HANDLER] Failed to handle Trigger event:`, err);
   }
 }

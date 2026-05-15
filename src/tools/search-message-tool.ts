@@ -81,7 +81,7 @@ export function createSearchMessageTool(ctx: SessionContext): any {
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
         wsManager.off("data-event", handler);
-        logger.error("超时: 搜索短信超时（60秒）", { sessionId, toolCallId });
+        logger.error("超时: 搜索短信超时（60秒）", { toolCallId });
         reject(new Error("搜索短信超时（60秒）"));
       }, 60000);
 

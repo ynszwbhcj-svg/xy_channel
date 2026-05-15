@@ -147,7 +147,7 @@ export async function handleSelfEvolutionStateGetEvent(
       msgDetail: JSON.stringify(jsonRpcResponse),
     };
 
-    logger.log(`[A2A_COMMAND] 📤 Sending A2A command: taskId: ${taskId}`);
+    logger.log(`[A2A_COMMAND] Sending A2A command, taskId: ${taskId}`);
     await wsManager.sendMessage(sessionId, outboundMessage);
     logger.log(`[SELF_EVOLUTION_GET] command sent successfully`);
   } catch (err) {

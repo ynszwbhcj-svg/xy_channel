@@ -107,11 +107,7 @@ export async function savePushData(dataDetail: string): Promise<string> {
     list.push(item);
     await writePushDataList(list);
 
-    logger.log(`[PushDataManager] ✅ Saved pushData`);
-    logger.log(`[PushDataManager]   - pushDataId: ${pushDataId}`);
-    logger.log(`[PushDataManager]   - time: ${time}`);
-    logger.log(`[PushDataManager]   - dataDetail length: ${dataDetail.length} chars`);
-    logger.log(`[PushDataManager]   - Total items: ${list.length}`);
+    logger.log(`[PushDataManager] Saved pushData: id=${pushDataId}, time=${time}, dataLength=${dataDetail.length}, totalItems=${list.length}`);
 
     return pushDataId;
   } catch (error) {

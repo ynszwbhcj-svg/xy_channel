@@ -74,7 +74,7 @@ export function createXiaoyiGuiTool(ctx: SessionContext): any {
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
         wsManager.off("gui-agent-response", handler);
-        logger.error("超时: XiaoYi GUI Agent 操作超时（5分钟）", { sessionId, toolCallId });
+        logger.error("超时: XiaoYi GUI Agent 操作超时（5分钟）", { toolCallId });
         reject(new Error("XiaoYi GUI Agent 操作超时（5分钟）"));
       }, 180000); // 5 minutes timeout
 

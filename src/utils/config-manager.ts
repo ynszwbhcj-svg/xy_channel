@@ -14,16 +14,13 @@ class ConfigManager {
    */
   updatePushId(sessionId: string, pushId: string): void {
     if (!pushId) {
-      logger.warn(`[ConfigManager] Attempted to set empty pushId for session ${sessionId}`);
+      logger.warn(`[ConfigManager] Attempted to set empty pushId`);
       return;
     }
 
     const previous = this.sessionPushIds.get(sessionId);
     if (previous !== pushId) {
-      logger.log(`[ConfigManager] ✨ Updated pushId for session ${sessionId}`);
-      logger.log(`[ConfigManager]   - Previous: ${previous ? previous.substring(0, 20) + '...' : 'none'}`);
-      logger.log(`[ConfigManager]   - New:      ${pushId.substring(0, 20)}...`);
-      logger.log(`[ConfigManager]   - Full new pushId: ${pushId}`);
+      logger.log(`[ConfigManager] Updated pushId: previous=${previous ? previous.substring(0, 20) : 'none'}, new=${pushId.substring(0, 20)}`);
       this.sessionPushIds.set(sessionId, pushId);
       this.globalPushId = pushId; // Also update global for backward compatibility
     }
@@ -47,7 +44,7 @@ class ConfigManager {
    */
   clearSession(sessionId: string): void {
     this.sessionPushIds.delete(sessionId);
-    logger.debug(`[ConfigManager] Cleared pushId for session ${sessionId}`);
+    logger.debug(`[ConfigManager] Cleared pushId`);
   }
 
   /**

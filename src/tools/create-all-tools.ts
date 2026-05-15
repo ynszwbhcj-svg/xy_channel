@@ -40,7 +40,7 @@ export function createAllTools(ctx: SessionContext | null): ChannelAgentTool[] {
     return [];
   }
 
-  logger.log(`[CREATE-ALL-TOOLS] creating tools for session=${ctx.sessionId}, task=${ctx.taskId}`);
+  logger.log(`[CREATE-ALL-TOOLS] creating tools`);
 
   return [
     createLocationTool(ctx),

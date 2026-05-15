@@ -48,6 +48,12 @@ const setLastRegisteredKey = (key: string) => { _g.__xyLastRegisteredSessionKey 
 // AsyncLocalStorage for thread-safe session context isolation
 export const asyncLocalStorage = new AsyncLocalStorage<SessionContext>();
 
+// Export AsyncLocalStorage to globalThis so logger.ts can access it
+// without creating a circular dependency (session-manager imports logger)
+if (!_g.__xyAsyncLocalStorage) {
+  _g.__xyAsyncLocalStorage = asyncLocalStorage;
+}
+
 /**
  * Register a session context for tool access.
  * Should be called when starting to process a message.

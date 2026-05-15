@@ -62,10 +62,7 @@ export async function saveRuntimeInfo(
     const result = lines.filter((line) => line.trim() !== "").join("\n") + "\n";
     await fs.writeFile(RUNTIME_FILE, result, "utf-8");
 
-    logger.log(`[RuntimeManager] ✅ Saved runtime info to .xiaoyiruntime`);
-    logger.log(`[RuntimeManager]   - SESSION_ID: ${webSocketSessionId}`);
-    logger.log(`[RuntimeManager]   - CONVERSATION_ID: ${conversationId}`);
-    logger.log(`[RuntimeManager]   - TASK_ID: ${taskId}`);
+    logger.log(`[RuntimeManager] Saved runtime info: SESSION_ID=${webSocketSessionId}, CONVERSATION_ID=${conversationId}, TASK_ID=${taskId}`);
   } catch (error) {
     logger.error(`[RuntimeManager] Failed to save runtime info:`, error);
     // 不抛出异常，避免影响主流程

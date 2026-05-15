@@ -69,7 +69,7 @@ export async function monitorXYProvider(opts: MonitorXYOpts = {}): Promise<void>
     : undefined;
 
   // 🔍 Diagnose WebSocket managers before gateway start
-  logger.log("🔍 [DIAGNOSTICS] Checking WebSocket managers before gateway start...");
+  logger.log("[DIAGNOSTICS] Checking WebSocket managers before gateway start...");
   diagnoseAllManagers();
 
   // Get WebSocket manager (cached)
@@ -104,14 +104,14 @@ export async function monitorXYProvider(opts: MonitorXYOpts = {}): Promise<void>
     const messageHandler = (message: any, sessionId: string, serverId: string) => {
       const messageKey = `${sessionId}::${message.id}`;
 
-      logger.log(`[MONITOR-HANDLER] ####### messageHandler triggered: sessionId=${sessionId}, messageId=${message.id} #######`);
+      logger.log(`[MONITOR-HANDLER] messageHandler triggered: messageId=${message.id}`);
 
       // ✅ Report health: received a message
       trackEvent?.();
 
       // Check for duplicate message handling
       if (activeMessages.has(messageKey)) {
-        logger.error(`[MONITOR-HANDLER] ⚠️ WARNING: Duplicate message detected! messageKey=${messageKey}, this may cause duplicate dispatchers!`);
+        logger.error(`[MONITOR-HANDLER] WARNING: Duplicate message detected, messageKey=${messageKey}`);
       }
 
       activeMessages.add(messageKey);
@@ -151,8 +151,7 @@ export async function monitorXYProvider(opts: MonitorXYOpts = {}): Promise<void>
 
         if (steerMode && hasActiveRun) {
           // Steer模式且有活跃任务：不入队列，直接并发执行
-          logger.log(`[MONITOR-HANDLER] 🔄 STEER MODE: Executing concurrently for messageKey=${messageKey}`);
-          logger.log(`[MONITOR-HANDLER]   - sessionId: ${parsed.sessionId}`);
+          logger.log(`[MONITOR-HANDLER] STEER MODE: Executing concurrently for messageKey=${messageKey}`);
           void task().catch((err) => {
             logger.error(`XY gateway: concurrent steer task failed for ${messageKey}: ${String(err)}`);
             activeMessages.delete(messageKey);
@@ -160,7 +159,7 @@ export async function monitorXYProvider(opts: MonitorXYOpts = {}): Promise<void>
         } else {
           // 正常模式：入队列串行执行
           void enqueue(sessionId, task).catch((err) => {
-            logger.error(`XY gateway: queue processing failed for session ${sessionId}: ${String(err)}`);
+            logger.error(`XY gateway: queue processing failed: ${String(err)}`);
             activeMessages.delete(messageKey);
           });
         }
@@ -168,7 +167,7 @@ export async function monitorXYProvider(opts: MonitorXYOpts = {}): Promise<void>
         // 解析失败，回退到正常队列模式
         logger.error(`[MONITOR-HANDLER] Failed to parse message for steer detection: ${String(parseErr)}`);
         void enqueue(sessionId, task).catch((err) => {
-          logger.error(`XY gateway: queue processing failed for session ${sessionId}: ${String(err)}`);
+          logger.error(`XY gateway: queue processing failed: ${String(err)}`);
           activeMessages.delete(messageKey);
         });
       }
@@ -198,9 +197,7 @@ export async function monitorXYProvider(opts: MonitorXYOpts = {}): Promise<void>
     };
 
     const triggerEventHandler = (context: any) => {
-      logger.log(`[MONITOR] 📌 Received trigger-event, dispatching to handler...`);
-      logger.log(`[MONITOR]   - sessionId: ${context.sessionId}`);
-      logger.log(`[MONITOR]   - taskId: ${context.taskId}`);
+      logger.log(`[MONITOR] Received trigger-event, dispatching to handler...`);
       // 异步处理 Trigger 事件，不阻塞主流程
       handleTriggerEvent(context, cfg, runtime, accountId).catch((err) => {
         logger.error(`[MONITOR] Failed to handle trigger-event:`, err);
@@ -228,14 +225,14 @@ export async function monitorXYProvider(opts: MonitorXYOpts = {}): Promise<void>
       logger.log("XY gateway: cleaning up...");
 
       // 🔍 Diagnose before cleanup
-      logger.log("🔍 [DIAGNOSTICS] Checking WebSocket managers before cleanup...");
+      logger.log("[DIAGNOSTICS] Checking WebSocket managers before cleanup...");
       diagnoseAllManagers();
 
       // Stop health check interval
       if (healthCheckInterval) {
         clearInterval(healthCheckInterval);
         healthCheckInterval = null;
-        logger.log("⏸️  Stopped periodic health check");
+        logger.log("Stopped periodic health check");
       }
 
       // Remove event handlers to prevent duplicate calls on gateway restart
@@ -260,10 +257,10 @@ export async function monitorXYProvider(opts: MonitorXYOpts = {}): Promise<void>
 
       loggedServers.clear();
       activeMessages.clear();
-      logger.log(`[MONITOR-HANDLER] 🧹 Cleanup complete, cleared active messages and sessions`);
+      logger.log(`[MONITOR-HANDLER] Cleanup complete, cleared active messages and sessions`);
 
       // 🔍 Diagnose after cleanup
-      logger.log("🔍 [DIAGNOSTICS] Checking WebSocket managers after cleanup...");
+      logger.log("[DIAGNOSTICS] Checking WebSocket managers after cleanup...");
       diagnoseAllManagers();
     };
 
@@ -277,7 +274,7 @@ export async function monitorXYProvider(opts: MonitorXYOpts = {}): Promise<void>
           const config = resolveXYConfig(cfg);
           const notificationText = "Gateway即将重启，重启期间可能短暂出现\u201c环境异常\u201d提示，请稍候并耐心重试~";
 
-          logger.log(`[MONITOR] 📤 Sending restart notifications to ${activeBindings.length} active session(s)`);
+          logger.log(`[MONITOR] Sending restart notifications to ${activeBindings.length} active session(s)`);
           const sendPromises = activeBindings.map(binding =>
             sendA2AResponse({
               config,
@@ -288,12 +285,12 @@ export async function monitorXYProvider(opts: MonitorXYOpts = {}): Promise<void>
               append: false,
               final: true,
             }).catch(err => {
-              logger.error(`[MONITOR] Failed to send restart notification to session ${binding.sessionId}: ${String(err)}`);
+              logger.error(`[MONITOR] Failed to send restart notification: ${String(err)}`);
             })
           );
 
           await Promise.all(sendPromises);
-          logger.log(`[MONITOR] ✅ Restart notifications sent to ${activeBindings.length} session(s)`);
+          logger.log(`[MONITOR] Restart notifications sent to ${activeBindings.length} session(s)`);
         } else {
           logger.log(`[MONITOR] No active sessions, skipping restart notifications`);
         }
@@ -325,22 +322,22 @@ export async function monitorXYProvider(opts: MonitorXYOpts = {}): Promise<void>
     wsManager.on("login-token-event", loginTokenEventHandler);
 
     // Start periodic health check (every 6 hours)
-    logger.log("🏥 Starting periodic health check (every 6 hours)...");
+    logger.log("Starting periodic health check (every 6 hours)...");
     healthCheckInterval = setInterval(() => {
-      logger.log("🏥 [HEALTH CHECK] Periodic WebSocket diagnostics...");
+      logger.log("[HEALTH CHECK] Periodic WebSocket diagnostics...");
       diagnoseAllManagers();
 
       // Auto-cleanup orphan connections
       const cleaned = cleanupOrphanConnections();
       if (cleaned > 0) {
-        logger.log(`🧹 [HEALTH CHECK] Auto-cleaned ${cleaned} manager(s) with orphan connections`);
+        logger.log(`[HEALTH CHECK] Auto-cleaned ${cleaned} manager(s) with orphan connections`);
       }
 
       // Cleanup stale sessions (older than 10min TTL)
       const cleanedSessions = cleanupStaleSessions();
       const remainingSessions = getActiveSessionCount();
       if (cleanedSessions > 0 || remainingSessions > 0) {
-        logger.log(`🧹 [HEALTH CHECK] Sessions: cleaned=${cleanedSessions}, active=${remainingSessions}`);
+        logger.log(`[HEALTH CHECK] Sessions: cleaned=${cleanedSessions}, active=${remainingSessions}`);
       }
 
       // Cleanup stale temp files (older than 24 hours)

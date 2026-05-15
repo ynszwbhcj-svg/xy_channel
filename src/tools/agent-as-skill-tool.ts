@@ -97,7 +97,7 @@ export function createAgentAsSkillTool(ctx: SessionContext): any {
       return new Promise((resolve, reject) => {
         const timeout = setTimeout(() => {
           wsManager.off("agent-as-skill-response", handler);
-          logger.error("超时: Agent-as-Skill 操作超时（5分钟）", { sessionId, agentId: params.agentId, toolCallId });
+          logger.error("超时: Agent-as-Skill 操作超时（5分钟）", { agentId: params.agentId, toolCallId });
           reject(new Error("Agent-as-Skill 操作超时（5分钟）"));
         }, 300000); // 5 minutes timeout
 
@@ -139,7 +139,7 @@ export function createAgentAsSkillTool(ctx: SessionContext): any {
           messageId,
           command,
         }).then(() => {
-          logger.log("[AGENT-AS-SKILL] Command sent successfully", { sessionId, agentId: params.agentId });
+          logger.log("[AGENT-AS-SKILL] Command sent successfully", { agentId: params.agentId });
         }).catch((error) => {
           clearTimeout(timeout);
           wsManager.off("agent-as-skill-response", handler);

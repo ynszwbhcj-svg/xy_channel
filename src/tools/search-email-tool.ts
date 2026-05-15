@@ -99,7 +99,7 @@ b. 使用该工具之前需获取当前真实时间
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
         wsManager.off("data-event", handler);
-        logger.error("超时: 检索邮件超时（60秒）", { sessionId, toolCallId: _toolCallId });
+        logger.error("超时: 检索邮件超时（60秒）", { toolCallId: _toolCallId });
         reject(new Error("检索邮件超时（60秒）"));
       }, 60000);
 

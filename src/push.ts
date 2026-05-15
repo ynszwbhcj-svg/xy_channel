@@ -76,8 +76,7 @@ export class XYPushService {
     // Use provided pushId or fall back to config pushId
     const actualPushId = pushId || this.config.pushId;
 
-    logger.log(`[PUSH] 📤 Preparing to send push message`);
-    logger.log(`[PUSH]   - Using pushId: ${actualPushId.substring(0, 20)}...`);
+    logger.log(`[PUSH] Preparing to send push message with pushId: ${actualPushId.substring(0, 20)}...`);
 
     try {
       const requestBody: PushRequest = {
@@ -126,13 +125,11 @@ export class XYPushService {
       });
 
       // Log response status and headers
-      logger.log(`[PUSH] 📥 Response received`);
-      logger.log(`[PUSH]   - HTTP Status: ${response.status} ${response.statusText}`);
+      logger.log(`[PUSH] Response received, HTTP Status: ${response.status} ${response.statusText}`);
 
       if (!response.ok) {
         const errorText = await response.text();
-        logger.error(`[PUSH] ❌ Push request failed`);
-        logger.error(`[PUSH]   - HTTP Status: ${response.status}`);
+        logger.error(`[PUSH] Push request failed, HTTP Status: ${response.status}`);
         throw new Error(`Push failed: HTTP ${response.status} - ${errorText}`);
       }
 
@@ -142,27 +139,22 @@ export class XYPushService {
         const responseText = await response.text();
 
         if (!responseText || responseText.trim() === '') {
-          logger.error(`[PUSH] ⚠️ Received empty response body`);
+          logger.error(`[PUSH] Received empty response body`);
           result = {};
         } else {
           result = JSON.parse(responseText);
         }
       } catch (parseError) {
-        logger.error(`[PUSH] ❌ Failed to parse JSON response`);
-        logger.error(`[PUSH]   - Parse error: ${parseError instanceof Error ? parseError.message : String(parseError)}`);
+        logger.error(`[PUSH] Failed to parse JSON response: ${parseError instanceof Error ? parseError.message : String(parseError)}`);
         throw new Error(`Invalid JSON response from push service: ${parseError instanceof Error ? parseError.message : String(parseError)}`);
       }
 
-      logger.log(`[PUSH] ✅ Push message sent successfully`);
-      logger.log(`[PUSH]   - Trace ID: ${traceId}`);
+      logger.log(`[PUSH] Push message sent successfully, Trace ID: ${traceId}`);
     } catch (error) {
-      logger.error(`[PUSH] ❌ Failed to send push message`);
-
       if (error instanceof Error) {
-        logger.error(`[PUSH]   - Error name: ${error.name}`);
-        logger.error(`[PUSH]   - Error message: ${error.message}`);
+        logger.error(`[PUSH] Failed to send push message: ${error.name} - ${error.message}`);
       } else {
-        logger.error(`[PUSH]   - Error:`, error);
+        logger.error(`[PUSH] Failed to send push message:`, error);
       }
 
       throw error;

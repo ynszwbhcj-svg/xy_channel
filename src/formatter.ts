@@ -120,7 +120,7 @@ export async function sendA2AResponse(params: SendA2AResponseParams): Promise<vo
       code: errorCode,
       message: errorMessage ?? "任务执行异常，请重试",
     };
-    logger.log(`[A2A_RESPONSE] ⚠️ Including error code: ${errorCode}`);
+    logger.log(`[A2A_RESPONSE] Including error code: ${errorCode}`);
   }
 
   // Send via WebSocket
@@ -133,17 +133,12 @@ export async function sendA2AResponse(params: SendA2AResponseParams): Promise<vo
     msgDetail: JSON.stringify(jsonRpcResponse),
   };
 
-  // 📋 Log complete response body
+  // Log complete response body
   const redactedText = redactSensitiveText(bridgedText ?? "");
-  logger.log(`[A2A_RESPONSE] 📤 Sending A2A artifact-update response: taskId: ${taskId}`);
-  logger.log(`[A2A_RESPONSE]   - append: ${append}`);
-  logger.log(`[A2A_RESPONSE]   - final: ${final}`);
-  logger.log(`[A2A_RESPONSE]   - text: ${buildTextPreview(redactedText)}`);
-  logger.log(`[A2A_RESPONSE]   - files count: ${files?.length ?? 0}`);
-  logger.log(`[A2A_RESPONSE]   - sensitive info detected: ${containsSensitiveInfo(bridgedText ?? "")}`);
+  logger.log(`[A2A_RESPONSE] Sending artifact-update, append=${append}, final=${final}, text=${buildTextPreview(redactedText)}, files=${files?.length ?? 0}, sensitive=${containsSensitiveInfo(bridgedText ?? "")}`);
 
   await wsManager.sendMessage(sessionId, outboundMessage);
-  logger.log(`[A2A_RESPONSE] ✅ Message sent successfully`);
+  logger.log(`[A2A_RESPONSE] Message sent successfully`);
 }
 
 /**
@@ -272,10 +267,8 @@ export async function sendStatusUpdate(params: SendStatusUpdateParams): Promise<
     msgDetail: JSON.stringify(jsonRpcResponse),
   };
 
-  // 📋 Log complete response body
-  logger.log(`[A2A_STATUS] 📤 Sending A2A status-update:`);
-  logger.log(`[A2A_STATUS]   - taskId: ${currentTaskId}`);
-  logger.log(`[A2A_STATUS]   - text: "${redactedText}"`);
+  // Log complete response body
+  logger.log(`[A2A_STATUS] Sending status-update, taskId=${currentTaskId}, text="${redactedText}"`);
 
   await wsManager.sendMessage(sessionId, outboundMessage);
 }
@@ -343,10 +336,10 @@ export async function sendCommand(params: SendCommandParams): Promise<void> {
     msgDetail: JSON.stringify(jsonRpcResponse),
   };
 
-  // 📋 Log complete response body
-  logger.log(`[A2A_COMMAND] 📤 Sending A2A command: taskId: ${currentTaskId}`);
+  // Log complete response body
+  logger.log(`[A2A_COMMAND] Sending command`);
   await wsManager.sendMessage(sessionId, outboundMessage);
-  logger.log(`[A2A_COMMAND] ✅ Command sent successfully`);
+  logger.log(`[A2A_COMMAND] Command sent successfully`);
 }
 
 /**
@@ -392,7 +385,7 @@ export async function sendClearContextResponse(params: SendClearContextResponseP
   };
 
   await wsManager.sendMessage(sessionId, outboundMessage);
-  logger.log(`Sent clearContext response: sessionId=${sessionId}`);
+  logger.log(`[CLEAR_CONTEXT] Sent clearContext response`);
 }
 
 /**
@@ -440,7 +433,7 @@ export async function sendTasksCancelResponse(params: SendTasksCancelResponsePar
   };
 
   await wsManager.sendMessage(sessionId, outboundMessage);
-  logger.log(`Sent tasks/cancel response: sessionId=${sessionId}, taskId=${taskId}`);
+  logger.log(`[TASKS_CANCEL] Sent tasks/cancel response`);
 }
 
 /**
@@ -503,8 +496,7 @@ export async function sendTriggerResponse(params: SendTriggerResponseParams): Pr
     msgDetail: JSON.stringify(jsonRpcResponse),
   };
 
-  logger.log(`[TRIGGER_RESPONSE] Sending Trigger response: sessionId=${sessionId}, taskId=${taskId}`);
-  logger.log(`[TRIGGER_RESPONSE]   - text: ${buildTextPreview(redactedContent)}`);
+  logger.log(`[TRIGGER_RESPONSE] Sending Trigger response, text=${buildTextPreview(redactedContent)}`);
   await wsManager.sendMessage(sessionId, outboundMessage);
   logger.log(`[TRIGGER_RESPONSE] Trigger response sent successfully`);
 }

@@ -1,5 +1,7 @@
-// Pino-based logging utilities for XY channel
+// Logging utilities for XY channel
+// Format: | level | time | sessionId | taskId | msg
 import pino from "pino";
+import { AsyncLocalStorage } from "async_hooks";
 import { mkdirSync, readdirSync, unlinkSync, statSync } from "fs";
 import { join } from "path";
 
@@ -8,14 +10,21 @@ const LOG_DIR = "/tmp/openclaw";
 const LOG_PREFIX = "xiaoyi-channel";
 const MAX_AGE_DAYS = 30;
 
-// ── Daily log file path ──
+// ── UTC+8 helpers ──
 function getTodayDateStr(): string {
-  const d = new Date();
-  return [
-    d.getFullYear(),
-    String(d.getMonth() + 1).padStart(2, "0"),
-    String(d.getDate()).padStart(2, "0"),
-  ].join("");
+  const utc8 = new Date(Date.now() + 8 * 60 * 60 * 1000);
+  return `${utc8.getUTCFullYear()}${String(utc8.getUTCMonth() + 1).padStart(2, "0")}${String(utc8.getUTCDate()).padStart(2, "0")}`;
+}
+
+function formatTimestampUTC8(): string {
+  const utc8 = new Date(Date.now() + 8 * 60 * 60 * 1000);
+  const y = utc8.getUTCFullYear();
+  const M = String(utc8.getUTCMonth() + 1).padStart(2, "0");
+  const D = String(utc8.getUTCDate()).padStart(2, "0");
+  const h = String(utc8.getUTCHours()).padStart(2, "0");
+  const m = String(utc8.getUTCMinutes()).padStart(2, "0");
+  const s = String(utc8.getUTCSeconds()).padStart(2, "0");
+  return `${y}${M}${D}T${h}${m}${s}`;
 }
 
 function getLogFilePath(dateStr?: string): string {
@@ -49,22 +58,9 @@ cleanupOldLogs();
 const cleanupTimer = setInterval(cleanupOldLogs, 6 * 60 * 60 * 1000);
 cleanupTimer.unref?.();
 
-// ── Pino instance with daily rotation ──
+// ── File destination with daily rotation ──
 let currentDate = getTodayDateStr();
 const dest = pino.destination({ dest: getLogFilePath(currentDate), sync: false, mkdir: true });
-const pinoLogger = pino(
-  {
-    level: "debug",
-    base: undefined,
-    timestamp: pino.stdTimeFunctions.isoTime,
-    formatters: {
-      level(label: string) {
-        return { level: label };
-      },
-    },
-  },
-  dest,
-);
 
 // ── Rotation check ──
 function checkRotation(): void {
@@ -76,39 +72,65 @@ function checkRotation(): void {
   }
 }
 
+// ── Session context from globalThis (avoids circular dep with session-manager) ──
+function getSessionInfo(): { sessionId: string; taskId: string } {
+  try {
+    const g = globalThis as Record<string, unknown>;
+    // Try AsyncLocalStorage first (correct for concurrent sessions)
+    const als = g.__xyAsyncLocalStorage as AsyncLocalStorage<{ sessionId: string; taskId: string }> | undefined;
+    if (als) {
+      const store = als.getStore();
+      if (store?.sessionId) return { sessionId: store.sessionId, taskId: store.taskId ?? "" };
+    }
+    // Fallback to activeSessions map
+    const sessions = g.__xyActiveSessions as Map<string, { sessionId: string; taskId: string }> | undefined;
+    if (sessions && sessions.size > 0) {
+      const lastKey = g.__xyLastRegisteredSessionKey as string;
+      if (lastKey) {
+        const entry = sessions.get(lastKey);
+        if (entry?.sessionId) return { sessionId: entry.sessionId, taskId: entry.taskId ?? "" };
+      }
+      const entry = sessions.values().next().value;
+      if (entry?.sessionId) return { sessionId: entry.sessionId, taskId: entry.taskId ?? "" };
+    }
+  } catch {}
+  return { sessionId: "", taskId: "" };
+}
+
+// ── Core write function ──
+function writeLog(level: string, message: string, args: any[]): void {
+  checkRotation();
+  const { sessionId, taskId } = getSessionInfo();
+  const timestamp = formatTimestampUTC8();
+  const msg = args.length ? formatMessage(message, args) : message;
+  dest.write(`| ${level} | ${timestamp} | ${sessionId} | ${taskId} | ${msg}\n`);
+}
+
 // ── Global error handlers (catch-all) ──
 process.on("uncaughtException", (err) => {
-  pinoLogger.fatal({ err }, "Uncaught exception");
+  writeLog("fatal", "Uncaught exception", [err]);
 });
 
 process.on("unhandledRejection", (reason) => {
-  pinoLogger.error({ reason }, "Unhandled rejection");
+  writeLog("error", "Unhandled rejection", [reason]);
 });
 
-// ── Exported logger (same API as before) ──
+// ── Exported logger ──
 export const logger = {
   log(message: string, ...args: any[]): void {
-    checkRotation();
-    const msg = formatMessage(message, args);
-    pinoLogger.info(msg);
+    writeLog("info", message, args);
   },
 
   warn(message: string, ...args: any[]): void {
-    checkRotation();
-    const msg = formatMessage(message, args);
-    pinoLogger.warn(msg);
+    writeLog("warn", message, args);
   },
 
   error(message: string, ...args: any[]): void {
-    checkRotation();
-    const msg = formatMessage(message, args);
-    pinoLogger.error(msg);
+    writeLog("error", message, args);
   },
 
   debug(message: string, ...args: any[]): void {
-    checkRotation();
-    const msg = formatMessage(`[DEBUG] ${message}`, args);
-    pinoLogger.debug(msg);
+    writeLog("debug", message, args);
   },
 };
 

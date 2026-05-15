@@ -100,7 +100,7 @@ c. 调用工具前需认真检查调用参数是否满足工具要求
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
         wsManager.off("data-event", handler);
-        logger.error("超时: 发送邮件超时（60秒）", { sessionId, toolCallId: _toolCallId });
+        logger.error("超时: 发送邮件超时（60秒）", { toolCallId: _toolCallId });
         reject(new Error("发送邮件超时（60秒）"));
       }, 60000);
 

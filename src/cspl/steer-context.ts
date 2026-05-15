@@ -81,7 +81,7 @@ export async function tryInjectSteer(params: SteerInjectionParams): Promise<bool
     },
   };
 
-  logger.log(`[STEER:${source}] Injecting steer for sessionId=${sessionId}, taskId=${taskId}`);
+  logger.log(`[STEER:${source}] Injecting steer`);
 
   try {
     await handleXYMessage({

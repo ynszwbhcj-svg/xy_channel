@@ -124,9 +124,9 @@ export const xyOutbound: ChannelOutboundAdapter = {
     let pushDataId: string;
     try {
       pushDataId = await savePushData(text);
-      logger.log(`[xyOutbound.sendText] ✅ Push data saved with ID: ${pushDataId.substring(0, 20)}`);
+      logger.log(`[xyOutbound.sendText] Push data saved with ID: ${pushDataId.substring(0, 20)}`);
     } catch (error) {
-      logger.error(`[xyOutbound.sendText] ❌ Failed to save push data:`, error);
+      logger.error(`[xyOutbound.sendText] Failed to save push data:`, error);
       // 如果持久化失败，仍然继续发送（不阻塞主流程）
       pushDataId = "";
     }
@@ -136,14 +136,14 @@ export const xyOutbound: ChannelOutboundAdapter = {
     let pushIdList: string[] = [];
     try {
       pushIdList = await getAllPushIds();
-      logger.log(`[xyOutbound.sendText] ✅ Loaded ${pushIdList.length} pushIds`);
+      logger.log(`[xyOutbound.sendText] Loaded ${pushIdList.length} pushIds`);
     } catch (error) {
-      logger.error(`[xyOutbound.sendText] ❌ Failed to load pushIds:`, error);
+      logger.error(`[xyOutbound.sendText] Failed to load pushIds:`, error);
     }
 
     // 3. 如果 pushIdList 为空，回退到原有逻辑（使用 config pushId）
     if (pushIdList.length === 0) {
-      logger.log(`[xyOutbound.sendText] ⚠️ No pushIds found, falling back to config pushId`);
+      logger.log(`[xyOutbound.sendText] No pushIds found, falling back to config pushId`);
       pushIdList = [config.pushId];
     }
 
@@ -157,7 +157,7 @@ export const xyOutbound: ChannelOutboundAdapter = {
     const pushText = text.length > 1000 ? text.slice(0, 1000) : text;
 
     // 4. 遍历所有 pushId，依次发送推送通知
-    logger.log(`[xyOutbound.sendText] 📤 Broadcasting to ${pushIdList.length} pushId(s)...`);
+    logger.log(`[xyOutbound.sendText] Broadcasting to ${pushIdList.length} pushId(s)...`);
     let successCount = 0;
     let failureCount = 0;
 
@@ -166,10 +166,10 @@ export const xyOutbound: ChannelOutboundAdapter = {
         // 传入 pushId 和 pushDataId，使用 kind="data" 格式
         await pushService.sendPush(pushText, title, undefined, actualTo, pushDataId, pushId);
         successCount++;
-        logger.log(`[xyOutbound.sendText] ✅ Sent successfully to pushId: ${pushId.substring(0, 20)}...`);
+        logger.log(`[xyOutbound.sendText] Sent successfully to pushId: ${pushId.substring(0, 20)}...`);
       } catch (error) {
         failureCount++;
-        logger.error(`[xyOutbound.sendText] ❌ Failed to send to pushId: ${pushId.substring(0, 20)}...`, error);
+        logger.error(`[xyOutbound.sendText] Failed to send to pushId: ${pushId.substring(0, 20)}...`, error);
         // 单个 pushId 发送失败不影响其他，继续处理下一个
       }
     }
@@ -219,7 +219,6 @@ export const xyOutbound: ChannelOutboundAdapter = {
 
     logger.log(`[xyOutbound.sendMedia] File uploaded:`, {
       fileId,
-      sessionId,
       taskId,
     });
 

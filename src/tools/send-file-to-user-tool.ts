@@ -285,10 +285,10 @@ b. 操作超时时间为2分钟（120秒），请勿重复调用此工具，如�
         }),
       };
 
-      logger.log(`[SEND-FILE-TO-USER] 🚀 EXEC sending: sessionId=${sessionId} taskId=${currentTaskId} fileName=${fileName}`);
+      logger.log(`[SEND-FILE-TO-USER] EXEC sending, fileName=${fileName}`);
       // Send WebSocket message
       await wsManager.sendMessage(sessionId, agentResponse);
-      logger.log(`send ${fileName} file to user success`)
+      logger.log(`[SEND-FILE-TO-USER] send ${fileName} file to user success`)
       sentFiles.push({ fileName, fileId });
     }
 
