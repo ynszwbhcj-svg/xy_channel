@@ -32,14 +32,6 @@ type TargetDeviceInfo = {
   deviceTypeId: string;
 };
 
-function stringifyForLog(value: unknown): string {
-  try {
-    return JSON.stringify(value);
-  } catch (error) {
-    return `[Unserializable value: ${error instanceof Error ? error.message : String(error)}]`;
-  }
-}
-
 function buildResultText(result: Record<string, unknown>) {
   return {
     content: [
@@ -104,7 +96,6 @@ function buildCrossDeviceResult(params: {
     rawEvent: params.rawEvent,
   };
 
-  logger.log(`${SEND_CROSS_RESULT_LOG_TAG} prepared model result, success=${params.success}, fileUrlCount=${fileUrls.length}, autoSendFile=${fileUrls.length > 0}`);
   return result;
 }
 
@@ -117,13 +108,13 @@ async function autoSendFileToUserIfNeeded(
     return result;
   }
 
-  logger.log(`${SEND_CROSS_RESULT_LOG_TAG} auto sending cross-device files before returning tool result, fileUrls=${stringifyForLog(fileUrls)}`);
+  logger.log(`${SEND_CROSS_RESULT_LOG_TAG} auto sending ${fileUrls.length} cross-device file(s) to user`);
   try {
     const sendFileTool = createSendFileToUserTool(ctx);
     const sendFileResult = await sendFileTool.execute("auto_send_cross_device_file", {
       fileRemoteUrls: fileUrls,
     });
-    logger.log(`${SEND_CROSS_RESULT_LOG_TAG} auto send_file_to_user completed, result=${stringifyForLog(sendFileResult)}`);
+    logger.log(`${SEND_CROSS_RESULT_LOG_TAG} auto send_file_to_user completed`);
     return {
       ...result,
       autoSendFileToUser: {
@@ -253,8 +244,6 @@ export function createSendCrossDeviceTaskTool(ctx: SessionContext): any {
     },
 
     async execute(_toolCallId: string, params: any) {
-      logger.log(`${LOG_TAG} tool invoked, params=${stringifyForLog(params)}`);
-
       const query = typeof params.query === "string" ? params.query.trim() : "";
       const targetDeviceInfo = normalizeTargetDeviceInfo(params.targetDeviceInfo);
       if (!query || !targetDeviceInfo) {
@@ -271,7 +260,7 @@ export function createSendCrossDeviceTaskTool(ctx: SessionContext): any {
       const command = buildUnifiedDistributeCommand(query, targetDeviceInfo, distributionSessionId);
       const statusText = `正在调用${targetDeviceInfo.deviceName}执行“${query}”跨设备任务...`;
 
-      logger.log(`${LOG_TAG} prepared UnifiedDistribute command=${stringifyForLog(command)}`);
+      logger.log(`${LOG_TAG} sending task to ${targetDeviceInfo.deviceName}, distributionSessionId=${distributionSessionId}`);
 
       return new Promise((resolve) => {
         let timeout: NodeJS.Timeout;
@@ -282,8 +271,6 @@ export function createSendCrossDeviceTaskTool(ctx: SessionContext): any {
         const cleanup = () => {
           clearTimeout(timeout);
           wsManager.off("cross-device-task-result", handler);
-          logger.log(`${LOG_TAG} cleaned up cross-device-task-result listener`);
-          logger.log(`${SEND_CROSS_RESULT_LOG_TAG} cleaned up cross-device-task-result listener`);
         };
 
         const finish = (result: CrossDeviceInternalResult) => {
@@ -292,18 +279,16 @@ export function createSendCrossDeviceTaskTool(ctx: SessionContext): any {
           }
           settled = true;
           const modelResult = buildModelToolResult(result);
-          logger.log(`${LOG_TAG} finishing tool result=${stringifyForLog(result)}`);
-          logger.log(`${SEND_CROSS_RESULT_LOG_TAG} returning model result=${stringifyForLog(modelResult)}`);
+          logger.log(`${LOG_TAG} completed, success=${result.success}, code=${result.code}, fileUrlCount=${result.fileUrls.length}`);
           cleanup();
           resolve(buildResultText(modelResult));
         };
 
         handler = (event: CrossDeviceTaskResultEvent) => {
-          logger.log(`${LOG_TAG} received cross-device-task-result=${stringifyForLog(event)}`);
-          logger.log(`${SEND_CROSS_RESULT_LOG_TAG} received cross-device result, code=${event.code}, message=${event.message}, rawEvent=${stringifyForLog(event.rawEvent)}`);
           if (event.sessionId && event.sessionId !== sessionId && event.sessionId !== distributionSessionId) {
             return;
           }
+          logger.log(`${SEND_CROSS_RESULT_LOG_TAG} received result, status=${event.status}, code=${event.code}, fileUrlCount=${event.fileUrls.length}`);
 
           void (async () => {
             if (resultHandlingStarted) {
@@ -347,7 +332,6 @@ export function createSendCrossDeviceTaskTool(ctx: SessionContext): any {
         }, CROSS_DEVICE_TASK_TIMEOUT_MS);
 
         wsManager.on("cross-device-task-result", handler);
-        logger.log(`${LOG_TAG} cross-device-task-result listener registered, timeoutMs=${CROSS_DEVICE_TASK_TIMEOUT_MS}`);
 
         sendStatusUpdate({
           config,

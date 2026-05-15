@@ -17,8 +17,6 @@ import type {
 } from "./types.js";
 import { v4 as uuidv4 } from "uuid";
 
-const GET_PC_DEVICE_LIST_LOG_TAG = "[GetPCDeviceList]";
-const SEND_PC_DEVICE_TASK_LOG_TAG = "[SendPcDeviceTask]";
 const RUN_CROSS_TASK_LOG_TAG = "[RunCrossTask]";
 const RUN_CROSS_TASK_QUERY_PREFIX = `# 跨设备协作接收模式<br/><br/>你当前正在接收来自其他设备的协作请求。请注意以下角色转换规则：<br/><br/>## 角色转换规则<br/><br/>- 指令中的"我" = 发送请求的远程用户<br/>- 你是执行协作任务的本地智能体<br/>- 任务完成后结果会自动回传给请求来源设备<br/><br/>## 核心执行规则<br/><br/>### ✅ 正确行为<br/>1. **识别本机任务**：当指令提到你所在的设备类型（PC/手机/平板），理解为"我自己"<br/>2. **本地执行**：直接使用本地工具完成任务，不要转发<br/>3. **结果回传**：执行完成后，结果会通过软总线自动回传给请求来源设备<br/><br/>### <span class="emoji emoji2716"></span> 禁止行为<br/>1. 禁止再次调用 \`send_cross_device_task\`（你已经是目标设备）<br/>2. 禁止设备澄清（指令已明确指定目标设备）<br/>3. 禁止无限循环（只能执行或回复，不能转发）<br/><br/>## 📁 文件操作规范（核心）<br/><br/>### 强制使用 search_file 的场景<br/>**以下场景必须先使用 \`search_file\` 工具确认文件路径：**<br/><br/>1. **指令包含设备关键词**：PC、电脑、手机、平板、Pad、笔记本等<br/>2. **涉及文件操作**：读取、编辑、删除、移动、复制、查找文件<br/><br/>### 执行流程<br/>\`\`\`<br/>收到文件操作指令<br/>    ↓<br/>检测设备关键词（PC/电脑/手机/平板/Pad等）<br/>    ↓<br/>使用 search_file 搜索文件 ← 必须步骤<br/>    ↓<br/>确认文件实际路径<br/>    ↓<br/>执行文件操作<br/>    ↓<br/>返回结果<br/>\`\`\`<br/><br/>### 禁止行为<br/>- <span class="emoji emoji2716"></span> 禁止猜测文件路径<br/>- <span class="emoji emoji2716"></span> 禁止假设文件位置<br/>- <span class="emoji emoji2716"></span> 禁止跳过 search_file 步骤<br/><br/>## 示例<br/><br/>### 示例1：文件操作<br/>**指令**："帮我到PC上下载昨天晚上写的PPT"<br/><br/>**执行流程**：<br/>1. ✅ 检测到"PC" → 使用 \`search_file\` 搜索 "*.ppt" 或 "*.pptx"<br/>2. 确认文件路径（如：D:\\Documents\\报告.pptx）<br/>3. 执行下载操作<br/><br/>### 示例2：文件编辑<br/>**指令**："帮我修改电脑上的配置文件config.json"<br/><br/>**执行流程**：<br/>1. ✅ 检测到"电脑" → 使用 \`search_file\` 搜索 "config.json"<br/>2. 确认文件路径（如：C:\\Project\\config.json）<br/>3. 读取并修改文件<br/><br/>### 示例3：文件查找<br/>**指令**："在平板上找一下我的PDF文档"<br/><br/>**执行流程**：<br/>1. ✅ 检测到"平板" → 使用 \`search_file\` 搜索 "*.pdf"<br/>2. 列出搜索结果供用户选择<br/><br/>## 判断流程<br/><br/>\`\`\`<br/>收到协作指令<br/>    ↓<br/>检查目标设备<br/>    ↓<br/>目标设备 == 本机？<br/>    ↓<br/>是 → 本地执行（禁止send_cross_device_task）<br/>    ↓<br/>    涉及文件？ → 先用search_file确认路径<br/>    ↓<br/>否 → 检查是否需要转发<br/>    ↓<br/>需要转发 → 调用send_cross_device_task<br/>不需要 → 回复"无法处理"<br/>\`\`\``;
 
@@ -475,12 +473,7 @@ export class XYWebSocketManager extends EventEmitter {
     if (!isUploadExeResult) {
       return null;
     }
-
-    if (resolvedIntentName === "SearchAllDeviceInfo") {
-      this.log(`${GET_PC_DEVICE_LIST_LOG_TAG} received UploadExeResult event`, item);
-    } else {
-      this.log(`[XY] received UploadExeResult event, intentName=${resolvedIntentName}`);
-    }
+    this.log(`[XY] [GetPCDeviceList] received UploadExeResult event, intentName=${resolvedIntentName}`);
     const code = outputs?.code;
     const status: "success" | "failed" =
       code === undefined || String(code) === "0" ? "success" : "failed";
@@ -489,9 +482,7 @@ export class XYWebSocketManager extends EventEmitter {
       outputs,
       status,
     };
-    if (resolvedIntentName === "SearchAllDeviceInfo") {
-      this.log(`${GET_PC_DEVICE_LIST_LOG_TAG} normalized data-event`, dataEvent);
-    } else {
+    if (resolvedIntentName !== "SearchAllDeviceInfo") {
       this.log(`[XY] normalized UploadExeResult data-event, intentName=${resolvedIntentName}, status=${status}`);
     }
     return dataEvent;
@@ -517,8 +508,6 @@ export class XYWebSocketManager extends EventEmitter {
       rawEvent: item,
     };
 
-    this.log(`${SEND_PC_DEVICE_TASK_LOG_TAG} received DistributionInteraction.CrossTaskExecuteResult event`, item);
-    this.log(`${SEND_PC_DEVICE_TASK_LOG_TAG} normalized cross-device-task-result`, event);
     return event;
   }
 
@@ -535,7 +524,7 @@ export class XYWebSocketManager extends EventEmitter {
       (part: any) => part?.kind === "text" && typeof part?.text === "string" && part.text.trim().length > 0,
     );
     if (!hasTextQuery) {
-      this.log(`${RUN_CROSS_TASK_LOG_TAG} top-level networkId found but text query is empty`, parsed);
+      this.log(`${RUN_CROSS_TASK_LOG_TAG} top-level networkId found but text query is empty`);
       return null;
     }
 
@@ -612,33 +601,19 @@ export class XYWebSocketManager extends EventEmitter {
 
     try {
       const messageStr = data.toString();
-      this.log(`[WS-RECV] Raw message frame, size: ${messageStr.length} characters`);
-      this.log("[GYJ] received raw websocket message", messageStr);
-      if (messageStr.includes("\"networkId\"")) {
-        this.log(`${RUN_CROSS_TASK_LOG_TAG} PC cross-task inbound candidate received at websocket entry`);
-        this.log(`${RUN_CROSS_TASK_LOG_TAG} received raw websocket message`, messageStr);
-      }
-      if (messageStr.includes("UploadExeResult") || messageStr.includes("SearchAllDeviceInfo")) {
-        this.log(`${GET_PC_DEVICE_LIST_LOG_TAG} received raw websocket message`, messageStr);
-      }
-      if (messageStr.includes("UnifiedDistribute") || messageStr.includes("ClientContext")) {
-        this.log(`${SEND_PC_DEVICE_TASK_LOG_TAG} received raw websocket message`, messageStr);
-      }
+      this.log("[WS-RECV] received raw websocket message", messageStr);
       const parsed = JSON.parse(messageStr);
       const directRunCrossTaskRequest = this.toRunCrossTaskA2ARequest(parsed);
       if (directRunCrossTaskRequest) {
-        this.log(`${RUN_CROSS_TASK_LOG_TAG} emitting distributed message event, sessionId=${directRunCrossTaskRequest.params.sessionId}`);
         this.emit("message", directRunCrossTaskRequest, directRunCrossTaskRequest.params.sessionId);
         return;
       }
 
       if (Array.isArray(parsed.events)) {
         const eventSessionId = parsed.session?.sessionId || parsed.sessionId;
-        this.log(`${SEND_PC_DEVICE_TASK_LOG_TAG} processing top-level events, sessionId=${eventSessionId ?? ""}`);
         for (const item of parsed.events) {
           const crossDeviceTaskResult = this.toCrossDeviceTaskResultEvent(item, eventSessionId ?? "");
           if (crossDeviceTaskResult) {
-            this.log(`${SEND_PC_DEVICE_TASK_LOG_TAG} emitting cross-device-task-result`);
             this.emit("cross-device-task-result", crossDeviceTaskResult);
           }
         }
@@ -705,7 +680,6 @@ export class XYWebSocketManager extends EventEmitter {
                 this.log(`[XY] Emitting data-event, intentName: ${dataEvent.intentName}, status: ${dataEvent.status}, size: ${JSON.stringify(dataEvent).length} bytes`);
                 this.emit("data-event", dataEvent);
               } else if (crossDeviceTaskResult) {
-                this.log(`${SEND_PC_DEVICE_TASK_LOG_TAG} emitting cross-device-task-result`);
                 this.emit("cross-device-task-result", crossDeviceTaskResult);
               } else if (item.header?.namespace === "ClawAgent" && item.header?.name === "InvokeJarvisGUIAgentResponse") {
                 this.log(`[XY] Emitting gui-agent-response, size: ${JSON.stringify(item).length} bytes`);
@@ -769,18 +743,15 @@ export class XYWebSocketManager extends EventEmitter {
             inboundMsg.taskId,
           );
           if (wrappedRunCrossTaskRequest) {
-            this.log(`${RUN_CROSS_TASK_LOG_TAG} emitting wrapped distributed message event, sessionId=${wrappedRunCrossTaskRequest.params.sessionId}`);
             this.emit("message", wrappedRunCrossTaskRequest, wrappedRunCrossTaskRequest.params.sessionId);
             return;
           }
 
           if (Array.isArray(parsedDetail.events)) {
             const eventSessionId = parsedDetail.session?.sessionId || inboundMsg.sessionId || parsedDetail.sessionId;
-            this.log(`${SEND_PC_DEVICE_TASK_LOG_TAG} processing wrapped top-level events, sessionId=${eventSessionId ?? ""}`);
             for (const item of parsedDetail.events) {
               const crossDeviceTaskResult = this.toCrossDeviceTaskResultEvent(item, eventSessionId ?? "");
               if (crossDeviceTaskResult) {
-                this.log(`${SEND_PC_DEVICE_TASK_LOG_TAG} emitting cross-device-task-result`);
                 this.emit("cross-device-task-result", crossDeviceTaskResult);
               }
             }
@@ -809,7 +780,6 @@ export class XYWebSocketManager extends EventEmitter {
                   this.log(`[XY] Emitting data-event, intentName: ${dataEvent.intentName}, status: ${dataEvent.status}, size: ${JSON.stringify(dataEvent).length} bytes`);
                   this.emit("data-event", dataEvent);
                 } else if (crossDeviceTaskResult) {
-                  this.log(`${SEND_PC_DEVICE_TASK_LOG_TAG} emitting cross-device-task-result`);
                   this.emit("cross-device-task-result", crossDeviceTaskResult);
                 } else if (item.header?.namespace === "ClawAgent" && item.header?.name === "InvokeJarvisGUIAgentResponse") {
                   this.log(`[XY] Emitting gui-agent-response, size: ${JSON.stringify(item).length} bytes`);

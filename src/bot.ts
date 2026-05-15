@@ -191,14 +191,6 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
       logger.log(`[BOT] 📱 Extracted deviceType from user message: ${deviceType}`);
     }
     const runCrossTaskContext = extractRunCrossTaskContext(parsed.parts);
-    if (runCrossTaskContext) {
-      logger.log("[RunCrossTask] extracted distributed task context", {
-        sessionId: parsed.sessionId,
-        taskId: parsed.taskId,
-        agentId: runCrossTaskContext.agentId,
-        networkId: runCrossTaskContext.networkId,
-      });
-    }
 
     // Resolve configuration (needed for status updates)
     const config = resolveXYConfig(cfg);

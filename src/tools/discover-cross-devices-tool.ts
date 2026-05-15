@@ -37,14 +37,6 @@ type NormalizedDeviceInfo = {
   rawDevice: RawDeviceInfo;
 };
 
-function stringifyForLog(value: unknown): string {
-  try {
-    return JSON.stringify(value);
-  } catch (error) {
-    return `[Unserializable value: ${error instanceof Error ? error.message : String(error)}]`;
-  }
-}
-
 function buildResultText(result: Record<string, unknown>) {
   return {
     content: [
@@ -163,7 +155,7 @@ export function createDiscoverCrossDevicesTool(ctx: SessionContext): any {
 
     async execute(_toolCallId: string, params: any) {
       const query = typeof params.query === "string" ? params.query.trim() : "";
-      logger.log(`${LOG_TAG} tool invoked, params=${stringifyForLog(params)}`);
+      logger.log(`${LOG_TAG} tool invoked`);
       if (!query) {
         return buildResultText({
           success: false,
@@ -195,8 +187,6 @@ export function createDiscoverCrossDevicesTool(ctx: SessionContext): any {
           },
         },
       };
-      logger.log(`${LOG_TAG} prepared device discovery command=${stringifyForLog(command)}`);
-
       return new Promise((resolve) => {
         let timeout: NodeJS.Timeout;
         let handler: (event: A2ADataEvent) => void;
@@ -205,7 +195,6 @@ export function createDiscoverCrossDevicesTool(ctx: SessionContext): any {
         const cleanup = () => {
           clearTimeout(timeout);
           wsManager.off("data-event", handler);
-          logger.log(`${LOG_TAG} cleaned up data-event listener`);
         };
 
         const finish = (result: Record<string, unknown>) => {
@@ -213,13 +202,11 @@ export function createDiscoverCrossDevicesTool(ctx: SessionContext): any {
             return;
           }
           settled = true;
-          logger.log(`${LOG_TAG} finishing tool result=${stringifyForLog(result)}`);
           cleanup();
           resolve(buildResultText(result));
         };
 
         handler = (event: A2ADataEvent) => {
-          logger.log(`${LOG_TAG} received data-event=${stringifyForLog(event)}`);
           if (event.intentName !== DISCOVER_DEVICES_INTENT) {
             return;
           }
@@ -229,6 +216,7 @@ export function createDiscoverCrossDevicesTool(ctx: SessionContext): any {
           const success = event.status === "success" && String(code) === "0";
           const devices = normalizeDevices(rawOutputs.result?.devices);
           const recommendation = recommendDevices(query, devices);
+          logger.log(`${LOG_TAG} completed, success=${success}, deviceCount=${devices.length}, recommendedCount=${recommendation.recommendedDevices.length}`);
 
           finish({
             success,
@@ -259,7 +247,6 @@ export function createDiscoverCrossDevicesTool(ctx: SessionContext): any {
         }, DISCOVER_DEVICES_TIMEOUT_MS);
 
         wsManager.on("data-event", handler);
-        logger.log(`${LOG_TAG} data-event listener registered, timeoutMs=${DISCOVER_DEVICES_TIMEOUT_MS}`);
 
         sendStatusUpdate({
           config,
