@@ -66,6 +66,7 @@
     "@types/node": "^20.8.0",
     "@types/uuid": "^9.0.5",
     "@types/ws": "^8.5.8",
+    "openclaw": "^2026.5.7",
     "typescript": "^5.9.2"
   }
 }
