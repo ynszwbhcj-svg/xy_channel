@@ -791,77 +791,79 @@ async function executeCloudTool(
         log('ERROR', 'CLOUD', `PluginExecutor SSE 返回错误: ${response.status}`, { traceId, pluginId, toolName });
         return generateError('UPSTREAM_ERROR', `PluginExecutor 返回错误: ${response.status}`, response.status >= 500, { status: response.status });
       }
-      
-      const text = await response.text();
-      const events = text.split('\n\n');
-      log('DEBUG', 'CLOUD', `SSE 流接收完毕，共 ${events.length} 个事件帧`, { traceId });
-      
+
+      const reader = response.body?.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
       let lastItems: any[] | null = null;
-      let frameCount = 0;
       
-      for (const event of events) {
-        let dataStr = event.split('\n')[-1];
+      while (true) {
+        const { done, value } = await reader!.read();
+        if (done) break;
 
-        if (dataStr.startsWith('data:')) {
-          dataStr = dataStr.substring(5).trim(); // 'data:'.length = 5
-        } else if (dataStr.startsWith('data: ')) {
-          dataStr = dataStr.substring(6).trim();
-        }
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        
+        // 保留最后一个可能不完整的行
+        buffer = lines.pop() || '';
 
-        log('DEBUG', 'CLOUD', `dataStr: ${dataStr.substring(0, 100)}`);
-
-          if (!dataStr || dataStr === '[DONE]') {
-            if (dataStr === '[DONE]') log('DEBUG', 'CLOUD', `SSE 收到 [DONE] 信号`);
-            continue;
-          }
-          try {
-            const data = JSON.parse(dataStr);
-            frameCount++;
-            log('DEBUG', 'CLOUD', `SSE 有效帧 #${frameCount}`, data);
-      
-            // 检查顶层 code
-            if (data.code !== '200' && data.code !== 200) {
-              log('WARN', 'CLOUD', `SSE 帧业务错误: code=${data.code}, desc=${data.desc}`);
-              continue;
-            }
-      
-            const abilityInfos: any[] = data.abilityInfos ?? [];
-            for (const ability of abilityInfos) {
-              const result = ability?.actionExecutorResult;
-              if (!result) continue;
-      
-              if (result.code !== '0' && result.code !== 0) {
-                log('WARN', 'CLOUD', `actionExecutorResult 错误: code=${result.code}, desc=${result.desc}`);
+        for (const line of lines) {
+          if (line.trim() === '') continue; // 空行表示一个消息结束
+          
+          // 手动解析 SSE 帧格式
+          if (line.startsWith('data: ')) {
+            const dataStr = line.slice(6);
+            try {
+              const data = JSON.parse(dataStr);
+              log('DEBUG', 'CLOUD', `SSE 有效帧： `, data);
+        
+              // 检查顶层 code
+              if (data.code !== '200' && data.code !== 200) {
+                log('WARN', 'CLOUD', `SSE 帧业务错误: code=${data.code}, desc=${data.desc}`);
                 continue;
               }
-      
-              const streamType = result?.reply?.streamInfo?.streamType;
-              const items = result?.reply?.items;
-      
-              log('DEBUG', 'CLOUD', `streamType=${streamType}，items 数量=${items?.length ?? 0}`);
-      
-              // 遇到 final 帧，记录 items 并停止遍历
-              if (streamType === 'final') {
-                lastItems = items ?? [];
-                log('INFO', 'CLOUD', `收到 final 帧，items=${JSON.stringify(lastItems)}`);
-                break;
+        
+              const abilityInfos: any[] = data.abilityInfos ?? [];
+              for (const ability of abilityInfos) {
+                const result = ability?.actionExecutorResult;
+                if (!result) continue;
+        
+                if (result.code !== '0' && result.code !== 0) {
+                  log('WARN', 'CLOUD', `actionExecutorResult 错误: code=${result.code}, desc=${result.desc}`);
+                  continue;
+                }
+        
+                const streamType = result?.reply?.streamInfo?.streamType;
+                const items = result?.reply?.items;
+        
+                log('DEBUG', 'CLOUD', `streamType=${streamType}，items 数量=${items?.length ?? 0}`);
+        
+                // 遇到 final 帧，记录 items 并停止遍历
+                if (streamType === 'final') {
+                  lastItems = items ?? [];
+                  log('INFO', 'CLOUD', `收到 final 帧，items=${JSON.stringify(lastItems)}`);
+                  break;
+                }
               }
+        
+              // 已找到 final 帧，跳出外层循环
+              if (lastItems !== null) break;
+        
+            } catch {
+              log('WARN', 'CLOUD', `SSE 帧 JSON 解析失败，跳过: ${dataStr.substring(0, 200)}`);
             }
-      
-            // 已找到 final 帧，跳出外层循环
-            if (lastItems !== null) break;
-      
-          } catch {
-            log('WARN', 'CLOUD', `SSE 帧 JSON 解析失败，跳过: ${dataStr.substring(0, 200)}`);
           }
+        }
+        // 已找到 final 帧，跳出外层循环
+        if (lastItems !== null) break;
       }
       
       if (lastItems !== null) {
-        log('INFO', 'CLOUD', `SSE 工具执行成功: ${pluginId}/${toolName}，有效帧 ${frameCount} 个，items 数量 ${lastItems.length}`);
+        log('INFO', 'CLOUD', `SSE 工具执行成功: ${pluginId}/${toolName}, items 数量 ${lastItems.length}`);
         return generateSuccess(lastItems);
       } else {
-        log('ERROR', 'CLOUD', `SSE 流结束但无 final 帧: ${pluginId}/${toolName}`, { traceId, streamPreview: text.substring(0, 200) });
-        return generateError('UPSTREAM_ERROR', 'SSE 流结束但未收到 final 帧', false, { streamContent: text.substring(0, 200) });
+        log('ERROR', 'CLOUD', `SSE 流结束但无 final 帧: ${pluginId}/${toolName}`, { traceId, streamPreview: buffer.substring(0, 200) });
+        return generateError('UPSTREAM_ERROR', 'SSE 流结束但未收到 final 帧', false, { streamContent: buffer.substring(0, 200) });
       }
     }
   } catch (error) {
