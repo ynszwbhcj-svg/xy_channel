@@ -800,7 +800,8 @@ async function executeCloudTool(
       let frameCount = 0;
       
       for (const event of events) {
-        let dataStr = event;
+        let dataStr = event.split('\n')[-1];
+
         if (dataStr.startsWith('data:')) {
           dataStr = dataStr.substring(5).trim(); // 'data:'.length = 5
         } else if (dataStr.startsWith('data: ')) {
