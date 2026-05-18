@@ -800,7 +800,13 @@ async function executeCloudTool(
       let frameCount = 0;
       
       for (const event of events) {
-        const dataStr = event.replace(/^data:\s*/, '').trim();
+        let dataStr = event;
+        if (dataStr.startsWith('data:')) {
+          dataStr = dataStr.substring(5).trim(); // 'data:'.length = 5
+        } else if (dataStr.startsWith('data: ')) {
+          dataStr = dataStr.substring(6).trim();
+        }
+
         log('DEBUG', 'CLOUD', `dataStr: ${dataStr.substring(0, 100)}`);
 
           if (!dataStr || dataStr === '[DONE]') {
@@ -845,8 +851,7 @@ async function executeCloudTool(
             if (lastItems !== null) break;
       
           } catch {
-            log('WARN', 'CLOUD', `SSE 帧 JSON 解析失败，跳过: ${dataStr.substring(0, 200
-            )}`);
+            log('WARN', 'CLOUD', `SSE 帧 JSON 解析失败，跳过: ${dataStr.substring(0, 200)}`);
           }
       }
       
