@@ -5,7 +5,7 @@
 // Tools NOT listed in any device entry → available to all devices (no restriction).
 
 /** Known device type enum. */
-export const DEVICE_TYPES = ["car", "2in1", "phone"] as const;
+export const DEVICE_TYPES = ["car", "2in1", "phone", "web"] as const;
 export type DeviceType = (typeof DEVICE_TYPES)[number];
 
 interface DeviceToolPolicy {
@@ -25,10 +25,16 @@ const DEVICE_TOOL_POLICY: Partial<Record<DeviceType, DeviceToolPolicy>> = {
       "search_message",
       "search_contact",
       "get_contact_tool_schema",
-      "query_collection",
-      "add_collection",
-      "delete_collection",
-      "get_collection_tool_schema",
+    ],
+  },
+  "web": {
+    allowlist: true,
+    tools: [
+      "send_file_to_user",
+      "view_push_result",
+      "image_reading",
+      "convert_time_to_utc8_time",
+      "save_self_evolution_skill",
     ],
   },
 };
