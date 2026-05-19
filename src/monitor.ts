@@ -134,9 +134,12 @@ export async function monitorXYProvider(opts: MonitorXYOpts = {}): Promise<void>
           });
         } catch (err) {
           // ✅ Only log error, don't re-throw to prevent gateway restart
-          releaseGate();
           logger.error(`XY gateway: error handling message from ${serverId}: ${String(err)}`);
         } finally {
+          // 🔑 确保门控始终被释放。handleXYMessage 内部会 catch 所有异常
+          // 且某些提前返回路径（clearContext、tasks/cancel 等）不会调用
+          // onInitComplete，因此必须在 finally 中兜底释放。
+          releaseGate();
           // Remove from active messages when done
           activeMessages.delete(messageKey);
         }
