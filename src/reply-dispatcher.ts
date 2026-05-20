@@ -1,10 +1,11 @@
 // Reply dispatcher - completely following feishu/reply-dispatcher.ts pattern
 import type { ClawdbotConfig, RuntimeEnv, ReplyPayload } from "openclaw/plugin-sdk";
 import { getXYRuntime } from "./runtime.js";
-import { sendA2AResponse, sendStatusUpdate, sendReasoningTextUpdate } from "./formatter.js";
+import { sendA2AResponse, sendStatusUpdate, sendReasoningTextUpdate, sendCommand } from "./formatter.js";
 import { resolveXYConfig } from "./config.js";
 import { getCurrentTaskId, getCurrentMessageId } from "./task-manager.js";
-import type { XYChannelConfig } from "./types.js";
+import type { A2ACommand, RunCrossTaskContext, XYChannelConfig } from "./types.js";
+import { getCurrentSessionContext } from "./tools/session-manager.js";
 import fs from "fs/promises";
 import path from "path";
 import { logger } from "./utils/logger.js";
@@ -20,6 +21,62 @@ export interface CreateXYReplyDispatcherParams {
 }
 
 const TEMP_FILE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+const RUN_CROSS_TASK_LOG_TAG = "[RunCrossTask]";
+
+function buildDistributionStatusCommand(context: RunCrossTaskContext): A2ACommand {
+  return {
+    header: {
+      namespace: "DistributionInteraction",
+      name: "DistributionStatus",
+    },
+    payload: {
+      agentId: context.agentId,
+      isDistributed: true,
+      networkId: context.networkId,
+      distributionType: "softbus",
+      distributionExecutePolicy: "backgroundExecution",
+    },
+  };
+}
+
+function buildCrossTaskExecuteResultCommand(code: string, message: string, fileUrls: string[] = []): A2ACommand {
+  return {
+    header: {
+      namespace: "DistributionInteraction",
+      name: "CrossTaskExecuteResult",
+    },
+    payload: {
+      code,
+      message,
+      fileUrls,
+    },
+  };
+}
+
+async function sendRunCrossTaskResult(params: {
+  config: XYChannelConfig;
+  sessionId: string;
+  taskId: string;
+  messageId: string;
+  context: RunCrossTaskContext;
+  resultCode: string;
+  resultMessage: string;
+}): Promise<void> {
+  const { config, sessionId, taskId, messageId, context, resultCode, resultMessage } = params;
+  const fileUrls = Array.isArray(context.fileUrls) ? context.fileUrls : [];
+  const statusCommand = buildDistributionStatusCommand(context);
+  const resultCommand = buildCrossTaskExecuteResultCommand(resultCode, resultMessage, fileUrls);
+
+  await sendCommand({
+    config,
+    sessionId,
+    taskId,
+    messageId,
+    commands: [statusCommand, resultCommand],
+  });
+
+  logger.log(`${RUN_CROSS_TASK_LOG_TAG} sent cross-task result, sessionId=${sessionId}, taskId=${taskId}, code=${resultCode}, fileUrlCount=${fileUrls.length}, messageLength=${resultMessage.length}`);
+}
 
 /**
  * 清理 /tmp/xy_channel 目录中超过 24 小时的旧文件
@@ -95,6 +152,11 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
   let hasSentResponse = false;
   let finalSent = false;
   let accumulatedText = "";
+  const initialRunCrossTaskContext = getCurrentSessionContext()?.runCrossTaskContext;
+
+  const getRunCrossTaskContext = (): RunCrossTaskContext | undefined => {
+    return getCurrentSessionContext()?.runCrossTaskContext ?? initialRunCrossTaskContext;
+  };
 
   /**
    * Start the status update interval
@@ -224,6 +286,19 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
         if (hasSentResponse && !finalSent) {
           scopedLog().log(`[ON-IDLE] Sending accumulated text, length=${accumulatedText.length}`);
           try {
+            const runCrossTaskContext = getRunCrossTaskContext();
+            if (runCrossTaskContext) {
+              await sendRunCrossTaskResult({
+                config,
+                sessionId,
+                taskId: currentTaskId,
+                messageId: currentMessageId,
+                context: runCrossTaskContext,
+                resultCode: "0",
+                resultMessage: accumulatedText,
+              });
+            }
+
             // 🔑 使用动态taskId发送完成状态
             await sendStatusUpdate({
               config,
@@ -254,6 +329,19 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
           // 正常失败场景（非steered）
           scopedLog().log(`[ON-IDLE] Skipping final message: hasSentResponse=${hasSentResponse}, finalSent=${finalSent}`);
           try {
+            const runCrossTaskContext = getRunCrossTaskContext();
+            if (runCrossTaskContext) {
+              await sendRunCrossTaskResult({
+                config,
+                sessionId,
+                taskId: currentTaskId,
+                messageId: currentMessageId,
+                context: runCrossTaskContext,
+                resultCode: "1",
+                resultMessage: "任务执行异常，请重试",
+              });
+            }
+
             await sendStatusUpdate({
               config,
               sessionId,

@@ -87,6 +87,25 @@ export interface A2ADataEvent {
   status: "success" | "failed";
 }
 
+export interface CrossDeviceTaskResultEvent {
+  sessionId: string;
+  code: string;
+  message: string;
+  fileUrls: string[];
+  status: "success" | "failed";
+  rawEvent: any;
+}
+
+export interface RunCrossTaskContext {
+  agentId: string;
+  sessionId: string;
+  isDistributed: boolean;
+  networkId: string;
+  isSupportAgent: boolean;
+  fileUrls?: string[];
+  rawContext: any;
+}
+
 // ============================================================================
 // Response/Event Types
 // ============================================================================

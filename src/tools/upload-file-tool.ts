@@ -2,7 +2,7 @@
 import type { ChannelAgentTool } from "openclaw/plugin-sdk";
 import { getXYWebSocketManager } from "../client.js";
 import { sendCommand } from "../formatter.js";
-import type { SessionContext } from "./session-manager.js";
+import { appendRunCrossTaskFileUrls, type SessionContext } from "./session-manager.js";
 import { getCurrentTaskId } from "../task-manager.js";
 import { logger } from "../utils/logger.js";
 import type { A2ADataEvent } from "../types.js";
@@ -122,6 +122,10 @@ export function createUploadFileTool(ctx: SessionContext): any {
     const currentTaskId = getCurrentTaskId(sessionId) ?? taskId;
     const fileUrls = await getFileUrls(wsManager, config, sessionId, currentTaskId, messageId, fileInfos, params.udid);
 
+    if (ctx.runCrossTaskContext && fileUrls.length > 0) {
+      const cachedFileUrls = appendRunCrossTaskFileUrls(fileUrls, ctx.runCrossTaskContext);
+      logger.log(`[RunCrossTask] cached ${fileUrls.length} upload_file URL(s) for cross-task result, total=${cachedFileUrls.length}`);
+    }
 
     return {
       content: [

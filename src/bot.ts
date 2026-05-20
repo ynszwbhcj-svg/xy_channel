@@ -2,7 +2,7 @@
 import type { ClawdbotConfig, RuntimeEnv, ReplyPayload } from "openclaw/plugin-sdk";
 import { getXYRuntime } from "./runtime.js";
 import { createXYReplyDispatcher } from "./reply-dispatcher.js";
-import { parseA2AMessage, extractTextFromParts, extractFileParts, extractPushId, extractDeviceType, extractTriggerData, isClearContextMessage, isTasksCancelMessage } from "./parser.js";
+import { parseA2AMessage, extractTextFromParts, extractFileParts, extractPushId, extractDeviceType, extractTriggerData, extractRunCrossTaskContext, isClearContextMessage, isTasksCancelMessage } from "./parser.js";
 import { downloadFilesFromParts } from "./file-download.js";
 import { resolveXYConfig } from "./config.js";
 import { sendStatusUpdate, sendClearContextResponse, sendTasksCancelResponse, sendA2AResponse } from "./formatter.js";
@@ -52,6 +52,10 @@ export interface HandleXYMessageParams {
  */
 export async function handleXYMessage(params: HandleXYMessageParams): Promise<void> {
   const { cfg, runtime, message, accountId, webSocketSessionId } = params;
+  const distributionSessionId =
+    typeof (message as any)?.sessionId === "string" && (message as any).sessionId.length > 0
+      ? (message as any).sessionId
+      : undefined;
 
   // Cache context for CSPL steer injection (after_tool_call hook)
   setCsplSteerContext(cfg, runtime);
@@ -186,6 +190,7 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
     if (deviceType) {
       log.log(`[BOT] Extracted deviceType: ${deviceType}`);
     }
+    const runCrossTaskContext = extractRunCrossTaskContext(parsed.parts);
 
     // Resolve configuration (needed for status updates)
     const config = resolveXYConfig(cfg);
@@ -210,10 +215,12 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
       registerSession(route.sessionKey, {
         config,
         sessionId: parsed.sessionId,
+        distributionSessionId,
         taskId: parsed.taskId,
         messageId: parsed.messageId,
         agentId: route.accountId,
         deviceType,
+        runCrossTaskContext: runCrossTaskContext ?? undefined,
       });
 
       // 🔑 发送初始状态更新
@@ -375,10 +382,12 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
     const sessionContext = {
       config,
       sessionId: parsed.sessionId,
+      distributionSessionId,
       taskId: parsed.taskId,
       messageId: parsed.messageId,
       agentId: route.accountId,
       deviceType,
+      runCrossTaskContext: runCrossTaskContext ?? undefined,
     };
 
     log.log(`[BOT-DISPATCH] withReplyDispatcher starting, sessionKey=${route.sessionKey}`);
