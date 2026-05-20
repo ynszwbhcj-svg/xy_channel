@@ -181,6 +181,7 @@ export function createSaveFileToPhoneTool(ctx: SessionContext): any {
         taskId: currentTaskId,
         messageId,
         command,
+        toolCallId,
       })
         .then(() => {
         })

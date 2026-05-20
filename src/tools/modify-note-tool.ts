@@ -129,6 +129,7 @@ export function createModifyNoteTool(ctx: SessionContext): any {
         taskId: currentTaskId,
         messageId,
         command,
+        toolCallId,
       })
         .then(() => {
         })

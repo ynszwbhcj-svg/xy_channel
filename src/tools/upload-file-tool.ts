@@ -120,7 +120,7 @@ export function createUploadFileTool(ctx: SessionContext): any {
 
     // Get public URLs for the files
     const currentTaskId = getCurrentTaskId(sessionId) ?? taskId;
-    const fileUrls = await getFileUrls(wsManager, config, sessionId, currentTaskId, messageId, fileInfos, params.udid);
+    const fileUrls = await getFileUrls(wsManager, config, sessionId, currentTaskId, messageId, toolCallId, fileInfos, params.udid);
 
     if (ctx.runCrossTaskContext && fileUrls.length > 0) {
       const cachedFileUrls = appendRunCrossTaskFileUrls(fileUrls, ctx.runCrossTaskContext);
@@ -153,6 +153,7 @@ async function getFileUrls(
   sessionId: string,
   taskId: string,
   messageId: string,
+  toolCallId: string,
   fileInfos: Array<{ mediaUri: string; timeout?: string }>,
   udid?: string
 ): Promise<string[]> {
@@ -256,6 +257,7 @@ async function getFileUrls(
       taskId,
       messageId,
       command,
+      toolCallId,
     })
       .then(() => {
       })

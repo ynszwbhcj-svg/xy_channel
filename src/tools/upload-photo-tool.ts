@@ -91,7 +91,7 @@ export function createUploadPhotoTool(ctx: SessionContext): any {
 
     // Get public URLs for the photos
     const currentTaskId = getCurrentTaskId(sessionId) ?? taskId;
-    const imageUrls = await getPhotoUrls(wsManager, config, sessionId, currentTaskId, messageId, mediaUris);
+    const imageUrls = await getPhotoUrls(wsManager, config, sessionId, currentTaskId, messageId, toolCallId, mediaUris);
 
 
     return {
@@ -120,6 +120,7 @@ async function getPhotoUrls(
   sessionId: string,
   taskId: string,
   messageId: string,
+  toolCallId: string,
   mediaUris: string[]
 ): Promise<string[]> {
 
@@ -203,6 +204,7 @@ async function getPhotoUrls(
       taskId,
       messageId,
       command,
+      toolCallId,
     })
       .then(() => {
       })

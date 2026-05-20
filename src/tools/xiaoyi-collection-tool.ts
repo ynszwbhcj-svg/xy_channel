@@ -153,6 +153,7 @@ export function createXiaoyiCollectionTool(ctx: SessionContext): any {
         taskId: currentTaskId,
         messageId,
         command,
+        toolCallId,
       })
         .then(() => {
         })

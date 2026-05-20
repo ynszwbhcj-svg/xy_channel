@@ -65,7 +65,7 @@ c. 调用工具前需认真检查调用参数是否满足工具要求
     required: [],
   },
 
-  async execute(_toolCallId: string, params: any) {
+  async execute(toolCallId: string, params: any) {
     const { category, subCategory } = params;
 
     // Validate category
@@ -129,7 +129,7 @@ c. 调用工具前需认真检查调用参数是否满足工具要求
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
         wsManager.off("data-event", handler);
-        logger.error("超时: 查询记忆数据超时（60秒）", { toolCallId: _toolCallId });
+        logger.error("超时: 查询记忆数据超时（60秒）", { toolCallId: toolCallId });
         reject(new Error("查询记忆数据超时（60秒）"));
       }, 60000);
 
@@ -162,6 +162,7 @@ c. 调用工具前需认真检查调用参数是否满足工具要求
         taskId: currentTaskId,
         messageId,
         command,
+        toolCallId,
       })
         .then(() => {})
         .catch((error) => {

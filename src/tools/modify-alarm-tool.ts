@@ -303,6 +303,7 @@ export function createModifyAlarmTool(ctx: SessionContext): any {
         taskId: currentTaskId,
         messageId,
         command,
+        toolCallId,
       })
         .then(() => {
         })

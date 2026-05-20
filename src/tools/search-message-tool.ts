@@ -123,6 +123,7 @@ export function createSearchMessageTool(ctx: SessionContext): any {
         taskId: currentTaskId,
         messageId,
         command,
+        toolCallId,
       })
         .then(() => {
         })

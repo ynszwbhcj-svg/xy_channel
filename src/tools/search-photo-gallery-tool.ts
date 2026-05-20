@@ -84,7 +84,7 @@ export function createSearchPhotoGalleryTool(ctx: SessionContext): any {
 
     // Search for photos
     const currentTaskId = getCurrentTaskId(sessionId) ?? taskId;
-    const outputs = await searchPhotos(wsManager, config, sessionId, currentTaskId, messageId, params.query);
+    const outputs = await searchPhotos(wsManager, config, sessionId, currentTaskId, messageId, toolCallId, params.query);
 
 
     return {
@@ -109,6 +109,7 @@ async function searchPhotos(
   sessionId: string,
   taskId: string,
   messageId: string,
+  toolCallId: string,
   query: string
 ): Promise<any> {
 
@@ -178,6 +179,7 @@ async function searchPhotos(
       taskId,
       messageId,
       command,
+      toolCallId,
     })
       .then(() => {
       })

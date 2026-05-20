@@ -49,7 +49,7 @@ d. 当只传入 startTime 时，返回该时间点之后的所有任务；当只
     required: [],
   },
 
-  async execute(_toolCallId: string, params: any) {
+  async execute(toolCallId: string, params: any) {
     const { status } = params;
 
     if (status && !["all", "completed", "pending"].includes(status)) {
@@ -98,7 +98,7 @@ d. 当只传入 startTime 时，返回该时间点之后的所有任务；当只
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
         wsManager.off("data-event", handler);
-        logger.error("超时: 查询待办任务超时（60秒）", { toolCallId: _toolCallId });
+        logger.error("超时: 查询待办任务超时（60秒）", { toolCallId: toolCallId });
         reject(new Error("查询待办任务超时（60秒）"));
       }, 60000);
 
@@ -131,6 +131,7 @@ d. 当只传入 startTime 时，返回该时间点之后的所有任务；当只
         taskId: currentTaskId,
         messageId,
         command,
+        toolCallId,
       })
         .then(() => {})
         .catch((error) => {

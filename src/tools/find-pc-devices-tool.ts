@@ -95,6 +95,7 @@ export function createFindPcDevicesTool(ctx: SessionContext): any {
         taskId,
         messageId,
         command,
+        toolCallId,
       }).then(() => {
       }).catch((error) => {
         clearTimeout(timeout);

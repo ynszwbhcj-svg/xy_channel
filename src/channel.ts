@@ -6,11 +6,18 @@ import { xyConfigSchema } from "./config-schema.js";
 import { xyOutbound } from "./outbound.js";
 import { xyOnboardingAdapter } from "./onboarding.js";
 import { filterToolsByDevice } from "./tools/device-tool-map.js";
-import { getCurrentSessionContext } from "./tools/session-manager.js";
+import { getCurrentSessionContext, registerSession } from "./tools/session-manager.js";
 import { createAllTools } from "./tools/create-all-tools.js";
 import { getXYWebSocketManager } from "./client.js";
 import { handleXYMessage } from "./bot.js";
 import { logger } from "./utils/logger.js";
+
+/**
+ * Prefix used for synthetic sessionIds created during cron-triggered tool
+ * execution.  `sendCommand()` checks this prefix to route commands through
+ * the push channel instead of the (non-existent) WebSocket session.
+ */
+const CRON_SESSION_PREFIX = "cron-";
 
 /**
  * Xiaoyi Channel Plugin for OpenClaw.
@@ -56,11 +63,63 @@ export const xyPlugin: ChannelPlugin = {
   },
 
   outbound: xyOutbound,
-  agentTools: () => {
-    const ctx = getCurrentSessionContext();
+
+  /**
+   * Provide channel-specific agent tools.
+   *
+   * Two execution contexts are supported:
+   *
+   *  1. **Normal (WebSocket) session** – `getCurrentSessionContext()` returns
+   *     a context that was registered by bot.ts during message processing.
+   *     Tools send commands through the WebSocket and listen for responses.
+   *
+   *  2. **Cron / scheduled-task session** – openclaw's cron runner calls
+   *     `agentTools({ cfg })` without an active WebSocket session.  When no
+   *     session context exists but `cfg` is provided, we create a synthetic
+   *     "cron session" with `isCron: true` and a `cron-`-prefixed sessionId.
+   *     `sendCommand()` detects this prefix and routes commands through the
+   *     push channel.  Response listening (WebSocket events) works unchanged
+   *     because the gateway WebSocket connection is always active.
+   */
+  agentTools: (params?: { cfg?: any }) => {
+    let ctx = getCurrentSessionContext();
+
+    // ── Cron / non-session fallback ──────────────────────────────
+    // When no active xy WebSocket session exists but the openclaw cfg
+    // is provided (framework calls agentTools({ cfg })), create a
+    // synthetic "cron session".  This enables cron-triggered agent
+    // turns and cross-channel tool calls to use xiaoyi tools via the
+    // push channel.  sendCommand() detects the "cron-" sessionId
+    // prefix and routes commands through push instead of WebSocket.
+    if (!ctx && params?.cfg) {
+      try {
+        const config = resolveXYConfig(params.cfg);
+        const cronId = `${CRON_SESSION_PREFIX}${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
+        ctx = {
+          config,
+          sessionId: cronId,
+          taskId: cronId,
+          messageId: cronId,
+          agentId: "default",
+          isCron: true,
+        };
+
+        // Register so getCurrentSessionContext() fallback can find it
+        registerSession(`__cron__${cronId}`, ctx);
+        logger.log(`[CRON-TOOLS] Created cron session context: ${cronId}`);
+      } catch (err) {
+        logger.error("[CRON-TOOLS] Failed to create cron context:", err);
+      }
+    }
+
+    if (!ctx) {
+      logger.log("[CREATE-ALL-TOOLS] no session context, returning empty tools list");
+      return [];
+    }
+
     const allTools = createAllTools(ctx);
-    const filtered = filterToolsByDevice(allTools, ctx?.deviceType);
-    logger.log(`[DEVICE-FILTER] deviceType=${ctx?.deviceType ?? "(none)"}, tools: ${allTools.length} → ${filtered.length} (${filtered.map(t => t.name).join(", ")})`);
+    const filtered = filterToolsByDevice(allTools, ctx.deviceType);
+    logger.log(`[DEVICE-FILTER] deviceType=${ctx.deviceType ?? "(none)"}, tools: ${allTools.length} → ${filtered.length} (${filtered.map(t => t.name).join(", ")})`);
     return filtered;
   },
 

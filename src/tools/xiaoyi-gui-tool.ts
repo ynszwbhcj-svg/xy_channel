@@ -124,6 +124,7 @@ export function createXiaoyiGuiTool(ctx: SessionContext): any {
         taskId: currentTaskId,
         messageId,
         command,
+        toolCallId,
       }).then(() => {
       }).catch((error) => {
         clearTimeout(timeout);

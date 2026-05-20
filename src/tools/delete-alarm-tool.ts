@@ -178,6 +178,7 @@ export function createDeleteAlarmTool(ctx: SessionContext): any {
         taskId: currentTaskId,
         messageId,
         command,
+        toolCallId,
       })
         .then(() => {
         })

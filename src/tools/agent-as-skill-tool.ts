@@ -138,6 +138,7 @@ export function createAgentAsSkillTool(ctx: SessionContext): any {
           taskId: currentTaskId,
           messageId,
           command,
+          toolCallId,
         }).then(() => {
           logger.log("[AGENT-AS-SKILL] Command sent successfully", { agentId: params.agentId });
         }).catch((error) => {

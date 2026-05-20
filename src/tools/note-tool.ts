@@ -144,6 +144,7 @@ export function createNoteTool(ctx: SessionContext): any {
         taskId: currentTaskId,
         messageId,
         command,
+        toolCallId,
       }).catch((error) => {
         clearTimeout(timeout);
         wsManager.off("data-event", handler);

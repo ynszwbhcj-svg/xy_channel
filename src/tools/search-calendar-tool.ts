@@ -203,6 +203,7 @@ d. 如果查询结果返回-303，代表查询结果为空
         taskId: currentTaskId,
         messageId,
         command,
+        toolCallId,
       })
         .then(() => {
         })

@@ -48,7 +48,7 @@ c. 调用工具前需认真检查调用参数是否满足工具要求
     required: ["subject", "to", "body"],
   },
 
-  async execute(_toolCallId: string, params: any) {
+  async execute(toolCallId: string, params: any) {
     if (typeof params.subject !== "string" || !params.subject.trim()) {
       throw new ToolInputError("缺少必填参数 subject（邮件主题）");
     }
@@ -100,7 +100,7 @@ c. 调用工具前需认真检查调用参数是否满足工具要求
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
         wsManager.off("data-event", handler);
-        logger.error("超时: 发送邮件超时（60秒）", { toolCallId: _toolCallId });
+        logger.error("超时: 发送邮件超时（60秒）", { toolCallId: toolCallId });
         reject(new Error("发送邮件超时（60秒）"));
       }, 60000);
 
@@ -133,6 +133,7 @@ c. 调用工具前需认真检查调用参数是否满足工具要求
         taskId: currentTaskId,
         messageId,
         command,
+        toolCallId,
       })
         .then(() => {})
         .catch((error) => {

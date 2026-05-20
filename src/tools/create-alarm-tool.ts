@@ -290,6 +290,7 @@ b. 使用该工具之前需获取当前真实时间
         taskId: currentTaskId,
         messageId,
         command,
+        toolCallId,
       })
         .then(() => {
         })

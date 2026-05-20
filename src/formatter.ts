@@ -5,6 +5,7 @@ import { logger } from "./utils/logger.js";
 import { getCurrentTaskId, getCurrentMessageId } from "./task-manager.js";
 import { redactSensitiveText, containsSensitiveInfo } from "./sensitive-redactor.js";
 import { rewriteOutboundApprovalText } from "./approval-bridge.js";
+import { isCronToolCall } from "./tools/session-manager.js";
 import type {
   XYChannelConfig,
   A2AJsonRpcResponse,
@@ -286,19 +287,37 @@ export interface SendCommandParams {
   messageId: string;
   command?: A2ACommand;
   commands?: A2ACommand[];
+  /** toolCallId from the tool's execute() — used for cron detection via hook-set Map. */
+  toolCallId?: string;
 }
 
 /**
  * Send a command as an artifact update (final=false).
+ *
+ * Cron-aware: if the sessionId starts with the cron prefix ("cron-"),
+ * the command is delivered through the push channel instead of the
+ * WebSocket session, because cron-triggered tool calls have no active
+ * WebSocket session.  The device receives the push, executes the command,
+ * and returns results through the normal WebSocket path — so response
+ * listening in the calling tool works unchanged.
  */
 export async function sendCommand(params: SendCommandParams): Promise<void> {
-  const { config, sessionId, taskId, messageId } = params;
+  const { config, sessionId, taskId, messageId, toolCallId } = params;
   const commands = params.commands ?? (params.command ? [params.command] : []);
 
   if (commands.length === 0) {
     throw new Error("sendCommand requires command or commands.");
   }
 
+  // ── Cron mode: route through push channel ──────────────────────
+  // Detected via: (a) sessionId "cron-" prefix from synthetic session, OR
+  //               (b) toolCallId marked by before_tool_call hook from openclaw's sessionKey.
+  if (sessionId.startsWith("cron-") || isCronToolCall(toolCallId)) {
+    const { sendCommandViaPush } = await import("./cron-command.js");
+    return sendCommandViaPush({ config, command: commands[0] });
+  }
+
+  // ── Normal mode: WebSocket ─────────────────────────────────────
   // Dynamic lookup: use latest taskId/messageId from task-manager (handles steer/interrupt),
   // fall back to closure-captured values
   const currentTaskId = getCurrentTaskId(sessionId) ?? taskId;

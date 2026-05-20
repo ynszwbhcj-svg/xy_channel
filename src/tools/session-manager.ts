@@ -16,6 +16,9 @@ export interface SessionContext {
   agentId: string;
   deviceType?: string;
   runCrossTaskContext?: RunCrossTaskContext;
+  /** When true, this context was created for a cron/scheduled task execution.
+   *  Tools should use the push channel instead of WebSocket sendCommand. */
+  isCron?: boolean;
 }
 
 /** 最大 session 存活时间（毫秒），超过此时间且无新消息的 session 视为僵尸。
@@ -46,6 +49,32 @@ if (!_g.__xyLastRegisteredSessionKey) {
 }
 const getLastRegisteredKey = () => _g.__xyLastRegisteredSessionKey as string;
 const setLastRegisteredKey = (key: string) => { _g.__xyLastRegisteredSessionKey = key; };
+
+// ── Cron tool-call tracking ─────────────────────────────────────────
+// Global Map keyed by toolCallId to track whether a specific tool call
+// originated from a cron/scheduled task.  Populated by the
+// `before_tool_call` hook (which receives openclaw's sessionKey with
+// "cron:" prefix), consumed by sendCommand() to route through push channel.
+if (!_g.__xyCronToolCallMap) {
+  _g.__xyCronToolCallMap = new Map<string, boolean>();
+}
+const cronToolCallMap = _g.__xyCronToolCallMap as Map<string, boolean>;
+
+/** Mark a toolCallId as originating from a cron trigger. */
+export function markCronToolCall(toolCallId: string): void {
+  cronToolCallMap.set(toolCallId, true);
+}
+
+/** Check whether a toolCallId is from a cron trigger. */
+export function isCronToolCall(toolCallId?: string): boolean {
+  if (!toolCallId) return false;
+  return cronToolCallMap.get(toolCallId) === true;
+}
+
+/** Clean up a cron tool call marker after use. */
+export function clearCronToolCall(toolCallId: string): void {
+  cronToolCallMap.delete(toolCallId);
+}
 
 // AsyncLocalStorage for thread-safe session context isolation
 export const asyncLocalStorage = new AsyncLocalStorage<SessionContext>();

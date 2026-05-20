@@ -5,9 +5,32 @@ import { xiaoyiProvider } from "./src/provider.js";
 import { xyPlugin } from "./src/channel.js";
 import registerSentinelHook from "./src/cspl/sentinel_hook.js";
 import { setXYRuntime } from "./src/runtime.js";
+import { markCronToolCall, clearCronToolCall } from "./src/tools/session-manager.js";
 import { registerSelfEvolutionToolResultNudge } from "./src/self-evolution-tool-result-nudge.js";
 import { createBeforePromptBuildHandler } from "./src/skill-retriever/hooks.js";
 import { normalizeToolRetrieverConfig } from "./src/skill-retriever/config.js";
+
+/**
+ * Register the cron detection hook.
+ *
+ * When openclaw's cron runner triggers a tool call, the sessionKey has the
+ * format "cron:<jobId>".  We use this to mark the toolCallId in a global Map
+ * so that sendCommand() can route the command through the push channel
+ * instead of the (non-existent) WebSocket session.
+ */
+function registerCronDetectionHook(api: OpenClawPluginApi) {
+  api.on("before_tool_call", async (event, ctx) => {
+    if (ctx.sessionKey?.startsWith("cron:") && event.toolCallId) {
+      markCronToolCall(event.toolCallId);
+    }
+  });
+
+  api.on("after_tool_call", async (event, ctx) => {
+    if (event.toolCallId) {
+      clearCronToolCall(event.toolCallId);
+    }
+  });
+}
 
 function registerFullHooks(api: OpenClawPluginApi) {
   // SKILL RETRIEVER HOOK: before_prompt_build hook
@@ -54,6 +77,8 @@ export default definePluginEntry({
       registerFullHooks(api);
       // CSPL sentinel hook: before_tool_call + after_tool_call security scanning
       registerSentinelHook(api);
+      // Cron detection hook: marks toolCallIds from cron sessions
+      registerCronDetectionHook(api);
     }
   },
 });

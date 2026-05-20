@@ -189,6 +189,7 @@ export function createSaveMediaToGalleryTool(ctx: SessionContext): any {
         taskId: currentTaskId,
         messageId,
         command,
+        toolCallId,
       })
         .then(() => {
         })

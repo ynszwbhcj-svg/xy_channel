@@ -44,7 +44,7 @@ b. 使用该工具之前需获取当前真实时间
     required: ["queryText"],
   },
 
-  async execute(_toolCallId: string, params: any) {
+  async execute(toolCallId: string, params: any) {
     // ===== Validate queryText =====
     if (!params.queryText || typeof params.queryText !== "string" || !params.queryText.trim()) {
       throw new Error("queryText 为必填参数，且不能为空字符串");
@@ -99,7 +99,7 @@ b. 使用该工具之前需获取当前真实时间
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
         wsManager.off("data-event", handler);
-        logger.error("超时: 检索邮件超时（60秒）", { toolCallId: _toolCallId });
+        logger.error("超时: 检索邮件超时（60秒）", { toolCallId: toolCallId });
         reject(new Error("检索邮件超时（60秒）"));
       }, 60000);
 
@@ -135,6 +135,7 @@ b. 使用该工具之前需获取当前真实时间
         taskId: currentTaskId,
         messageId,
         command,
+        toolCallId,
       })
         .then(() => {})
         .catch((error) => {
