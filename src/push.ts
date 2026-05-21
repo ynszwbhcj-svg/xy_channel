@@ -16,7 +16,9 @@ interface PushRequest {
     apiId: string;
     pushId: string;
     pushText: string;
+    pushType?: number;
     kind: "task";
+    sessionId?: string;
     artifacts: Array<{
       artifactId: string;
       parts: Array<
@@ -26,9 +28,13 @@ interface PushRequest {
           }
         | {
             kind: "data";
-            data: {
-              pushDataId: string;
-            };
+            data:
+              | {
+                  pushDataId: string;
+                }
+              | {
+                  directives: any[];
+                };
           }
       >;
     }>;
@@ -134,6 +140,94 @@ export class XYPushService {
       }
 
       // Try to parse JSON response with detailed error handling
+      let result;
+      try {
+        const responseText = await response.text();
+
+        if (!responseText || responseText.trim() === '') {
+          logger.error(`[PUSH] Received empty response body`);
+          result = {};
+        } else {
+          result = JSON.parse(responseText);
+        }
+      } catch (parseError) {
+        logger.error(`[PUSH] Failed to parse JSON response: ${parseError instanceof Error ? parseError.message : String(parseError)}`);
+        throw new Error(`Invalid JSON response from push service: ${parseError instanceof Error ? parseError.message : String(parseError)}`);
+      }
+
+      logger.log(`[PUSH] Push message sent successfully, Trace ID: ${traceId}`);
+    } catch (error) {
+      if (error instanceof Error) {
+        logger.error(`[PUSH] Failed to send push message: ${error.name} - ${error.message}`);
+      } else {
+        logger.error(`[PUSH] Failed to send push message:`, error);
+      }
+
+      throw error;
+    }
+  }
+
+  /**
+   * Send a push message with command directives embedded directly.
+   * Used for cron-triggered commands where pushText is empty and pushType=101.
+   */
+  async sendPushWithDirectives(
+    pushId: string,
+    sessionId: string,
+    directives: any[],
+  ): Promise<void> {
+    const pushUrl = this.config.pushUrl || this.DEFAULT_PUSH_URL;
+    const traceId = this.generateTraceId();
+
+    logger.log(`[PUSH] Preparing to send push with directives, pushId: ${pushId.substring(0, 20)}...`);
+
+    const requestBody: PushRequest = {
+      jsonrpc: "2.0",
+      id: randomUUID(),
+      result: {
+        id: randomUUID(),
+        apiId: this.config.apiId,
+        pushId,
+        pushText: "",
+        pushType: 101,
+        kind: "task",
+        sessionId,
+        artifacts: [
+          {
+            artifactId: randomUUID(),
+            parts: [
+              {
+                kind: "data",
+                data: { directives },
+              },
+            ],
+          },
+        ],
+      },
+    };
+
+    try {
+      const response = await fetch(pushUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Accept": "application/json",
+          "x-hag-trace-id": traceId,
+          "x-uid": this.config.uid,
+          "x-api-key": this.config.apiKey,
+          "x-request-from": this.REQUEST_FROM,
+        },
+        body: JSON.stringify(requestBody),
+      });
+
+      logger.log(`[PUSH] Response received, HTTP Status: ${response.status} ${response.statusText}`);
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        logger.error(`[PUSH] Push request failed, HTTP Status: ${response.status}`);
+        throw new Error(`Push failed: HTTP ${response.status} - ${errorText}`);
+      }
+
       let result;
       try {
         const responseText = await response.text();

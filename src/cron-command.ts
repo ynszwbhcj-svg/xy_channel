@@ -6,9 +6,9 @@
 // results through the normal WebSocket connection, so response listening
 // works the same as for regular tool calls.
 
+import { randomUUID } from "crypto";
 import type { XYChannelConfig, A2ACommand } from "./types.js";
 import { XYPushService } from "./push.js";
-import { savePushData } from "./utils/pushdata-manager.js";
 import { getAllPushIds } from "./utils/pushid-manager.js";
 import { logger } from "./utils/logger.js";
 
@@ -21,16 +21,14 @@ export interface SendCommandViaPushParams {
  * Send a tool command through the push channel (for cron-triggered tool calls).
  *
  * Flow:
- *  1. Command JSON is persisted via savePushData → pushDataId
- *  2. Push notification is sent to all registered pushIds, referencing pushDataId
- *  3. Device receives push → retrieves command → executes it
- *  4. Device returns result via WebSocket (data-event / gui-agent-response / …)
- *  5. The calling tool listens on the WebSocket manager as usual
+ *  1. Push notification is sent with command embedded in data.directives
+ *  2. Device receives push → extracts directives → executes command
+ *  3. Device returns result via WebSocket (data-event / gui-agent-response / …)
+ *  4. The calling tool listens on the WebSocket manager as usual
  */
 export async function sendCommandViaPush(params: SendCommandViaPushParams): Promise<void> {
   const { config, command } = params;
 
-  const commandJson = JSON.stringify(command);
   const intentName =
     command.payload?.executeParam?.intentName ??
     command.header?.name ??
@@ -38,55 +36,30 @@ export async function sendCommandViaPush(params: SendCommandViaPushParams): Prom
 
   logger.log(`[CRON-CMD] Sending command via push, intent=${intentName}`);
 
-  // 1. Persist command data
-  let pushDataId = "";
+  // 1. Load push IDs, use first one
+  let pushId: string = config.pushId;
   try {
-    pushDataId = await savePushData(commandJson);
-    logger.log(
-      `[CRON-CMD] Command data saved, pushDataId=${pushDataId.substring(0, 20)}`,
-    );
-  } catch (error) {
-    logger.error("[CRON-CMD] Failed to save command data:", error);
-  }
-
-  // 2. Load push IDs
-  let pushIdList: string[] = [];
-  try {
-    pushIdList = await getAllPushIds();
+    const pushIdList = await getAllPushIds();
+    if (pushIdList.length > 0) {
+      pushId = pushIdList[0];
+    }
   } catch (error) {
     logger.error("[CRON-CMD] Failed to load pushIds:", error);
   }
-  if (pushIdList.length === 0) {
-    pushIdList = [config.pushId];
-  }
 
-  // 3. Broadcast push notification
+  // 2. Build and send push notification with command in directives
   const pushService = new XYPushService(config);
-  const title = `定时任务: ${intentName}`;
-  const pushText =
-    commandJson.length > 1000 ? commandJson.slice(0, 1000) : commandJson;
+  const sessionId = randomUUID();
 
-  let successCount = 0;
-  for (const pushId of pushIdList) {
-    try {
-      await pushService.sendPush(
-        pushText,
-        title,
-        undefined,
-        config.defaultSessionId || "",
-        pushDataId,
-        pushId,
-      );
-      successCount++;
-    } catch (error) {
-      logger.error(
-        `[CRON-CMD] Failed to send push to pushId=${pushId.substring(0, 20)}`,
-        error,
-      );
-    }
+  try {
+    await pushService.sendPushWithDirectives(
+      pushId,
+      sessionId,
+      [command],
+    );
+    logger.log(`[CRON-CMD] Push sent successfully, intent=${intentName}`);
+  } catch (error) {
+    logger.error(`[CRON-CMD] Failed to send push`, error);
+    throw error;
   }
-
-  logger.log(
-    `[CRON-CMD] Push sent to ${successCount}/${pushIdList.length} pushId(s), intent=${intentName}`,
-  );
 }
