@@ -126,7 +126,7 @@ export async function handleSelfEvolutionStateGetEvent(
         kind: "artifact-update",
         append: false,
         lastChunk: true,
-        final: false,
+        final: true,
         artifact: {
           artifactId: uuidv4(),
           parts: [{

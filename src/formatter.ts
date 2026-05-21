@@ -289,6 +289,8 @@ export interface SendCommandParams {
   commands?: A2ACommand[];
   /** toolCallId from the tool's execute() — used for cron detection via hook-set Map. */
   toolCallId?: string;
+  /** When true, the artifact-update is sent with final=true. Default: false. */
+  final?: boolean;
 }
 
 /**
@@ -331,7 +333,7 @@ export async function sendCommand(params: SendCommandParams): Promise<void> {
     kind: "artifact-update",
     append: false,
     lastChunk: true,
-    final: false, // Commands are not final
+    final: params.final ?? false,
     artifact: {
       artifactId: uuidv4(),
       parts: [

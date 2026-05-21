@@ -10,6 +10,7 @@ import { sendA2AResponse } from "./formatter.js";
 import { handleTriggerEvent } from "./trigger-handler.js";
 import { handleSelfEvolutionEvent, handleSelfEvolutionStateGetEvent } from "./self-evolution-handler.js";
 import { handleLoginTokenEvent } from "./login-token-handler.js";
+import { handleCronQueryEvent } from "./cron-query-handler.js";
 import { cleanupStaleTempFiles } from "./reply-dispatcher.js";
 import { cleanupStaleSessions, getActiveSessionCount, cleanupAllSessions } from "./tools/session-manager.js";
 import { logger } from "./utils/logger.js";
@@ -224,6 +225,13 @@ export async function monitorXYProvider(opts: MonitorXYOpts = {}): Promise<void>
       handleLoginTokenEvent(context, runtime);
     };
 
+    const cronQueryEventHandler = (context: any) => {
+      logger.log(`[MONITOR] Received cron-query-event, dispatching to handler...`);
+      handleCronQueryEvent(context, cfg).catch((err) => {
+        logger.error(`[MONITOR] Failed to handle cron-query-event:`, err);
+      });
+    };
+
     const cleanup = () => {
       logger.log("XY gateway: cleaning up...");
 
@@ -247,6 +255,7 @@ export async function monitorXYProvider(opts: MonitorXYOpts = {}): Promise<void>
       wsManager.off("self-evolution-event", selfEvolutionHandler);
       wsManager.off("self-evolution-state-get-event", selfEvolutionStateGetHandler);
       wsManager.off("login-token-event", loginTokenEventHandler);
+      wsManager.off("cron-query-event", cronQueryEventHandler);
 
       // ✅ Disconnect the wsManager to prevent connection leaks
       // This is safe because each gateway lifecycle should have clean connections
@@ -323,6 +332,7 @@ export async function monitorXYProvider(opts: MonitorXYOpts = {}): Promise<void>
     wsManager.on("self-evolution-event", selfEvolutionHandler);
     wsManager.on("self-evolution-state-get-event", selfEvolutionStateGetHandler);
     wsManager.on("login-token-event", loginTokenEventHandler);
+    wsManager.on("cron-query-event", cronQueryEventHandler);
 
     // Start periodic health check (every 6 hours)
     logger.log("Starting periodic health check (every 6 hours)...");
