@@ -46,10 +46,24 @@ interface PushRequest {
  * Used for outbound messages and scheduled tasks.
  */
 export class XYPushService {
-  private readonly DEFAULT_PUSH_URL = "https://hag.cloud.huawei.com/open-ability-agent/v1/agent-webhook";
+  private readonly PROD_PUSH_URL = "https://hag.cloud.huawei.com/open-ability-agent/v1/agent-webhook";
+  private readonly TEST_PUSH_URL = "https://lfhagcp.hwcloudtest.cn:58447/open-ability-agent/v1/agent-webhook";
   private readonly REQUEST_FROM = "openclaw";
 
   constructor(private config: XYChannelConfig) {}
+
+  /**
+   * Resolve push URL: config.pushUrl > inferred from fileUploadUrl > production default.
+   */
+  private resolvePushUrl(): string {
+    if (this.config.pushUrl) {
+      return this.config.pushUrl;
+    }
+    if (this.config.fileUploadUrl?.includes("lfhagmirror")) {
+      return this.TEST_PUSH_URL;
+    }
+    return this.PROD_PUSH_URL;
+  }
 
   /**
    * Generate a random trace ID for request tracking.
@@ -76,7 +90,7 @@ export class XYPushService {
     pushDataId?: string,
     pushId?: string
   ): Promise<void> {
-    const pushUrl = this.config.pushUrl || this.DEFAULT_PUSH_URL;
+    const pushUrl = this.resolvePushUrl();
     const traceId = this.generateTraceId();
 
     // Use provided pushId or fall back to config pushId
@@ -176,7 +190,7 @@ export class XYPushService {
     sessionId: string,
     directives: any[],
   ): Promise<void> {
-    const pushUrl = this.config.pushUrl || this.DEFAULT_PUSH_URL;
+    const pushUrl = this.resolvePushUrl();
     const traceId = this.generateTraceId();
 
     logger.log(`[PUSH] Preparing to send push with directives, pushId: ${pushId.substring(0, 20)}...`);
