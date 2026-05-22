@@ -468,7 +468,7 @@ export class XYWebSocketManager extends EventEmitter {
     const outputsIntentName = typeof outputs.intentName === "string" ? outputs.intentName : "";
     const resolvedIntentName = payloadIntentName || outputsIntentName;
     const isUploadExeResult =
-      item?.header?.namespace === "Common" &&
+      (item?.header?.namespace === "Common" || item?.header?.namespace === "AgentEvent") &&
       item?.header?.name === "UploadExeResult" &&
       resolvedIntentName.length > 0;
 
@@ -742,6 +742,14 @@ export class XYWebSocketManager extends EventEmitter {
                 this.emit("login-token-event", {
                   event: item,
                 });
+              } else if (item.header?.namespace === "System" && item.header?.name === "CronQuery") {
+                log.log("[XY] System.CronQuery detected, emitting cron-query-event");
+                this.emit("cron-query-event", {
+                  ...(item.payload ?? {}),
+                  sessionId,
+                  taskId: a2aRequest.params?.id,
+                  messageId: a2aRequest.id,
+                });
               } else if (item.header?.namespace === "System" && item.header?.name === "ExecuteAgentAsSkillResponse") {
                 log.log("[XY] ExecuteAgentAsSkillResponse detected, emitting agent-as-skill-response");
                 this.emit("agent-as-skill-response", item);
@@ -831,6 +839,14 @@ export class XYWebSocketManager extends EventEmitter {
                   log.log("[XY] LoginTokenEvent.ClawAutoLogin detected (wrapped format), emitting login-token-event");
                   this.emit("login-token-event", {
                     event: item,
+                  });
+                } else if (item.header?.namespace === "System" && item.header?.name === "CronQuery") {
+                  log.log("[XY] System.CronQuery detected (wrapped format), emitting cron-query-event");
+                  this.emit("cron-query-event", {
+                    ...(item.payload ?? {}),
+                    sessionId: inboundMsg.sessionId || a2aRequest.params?.sessionId,
+                    taskId: inboundMsg.taskId || a2aRequest.params?.id,
+                    messageId: a2aRequest.id,
                   });
                 } else if (item.header?.namespace === "System" && item.header?.name === "ExecuteAgentAsSkillResponse") {
                   log.log("[XY] ExecuteAgentAsSkillResponse detected (wrapped format), emitting agent-as-skill-response");
