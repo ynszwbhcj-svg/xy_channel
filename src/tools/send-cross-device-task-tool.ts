@@ -1,7 +1,7 @@
 import { sendCommand, sendStatusUpdate } from "../formatter.js";
 import { getXYWebSocketManager } from "../client.js";
 import { getCurrentMessageId, getCurrentTaskId } from "../task-manager.js";
-import type { A2ACommand, CrossDeviceTaskResultEvent } from "../types.js";
+import type { A2ACommand, CrossDeviceTaskResultEvent, SentFileParams } from "../types.js";
 import type { SessionContext } from "./session-manager.js";
 import { createSendFileToUserTool } from "./send-file-to-user-tool.js";
 import { logger } from "../utils/logger.js";
@@ -17,7 +17,7 @@ type CrossDeviceInternalResult = {
   success: boolean;
   code: string;
   message: string;
-  fileUrls: string[];
+  sentFiles: SentFileParams[];
   rawEvent: unknown;
   autoSendFileToUser?: {
     success: boolean;
@@ -44,9 +44,9 @@ function buildResultText(result: Record<string, unknown>) {
 }
 
 function buildModelToolResult(result: CrossDeviceInternalResult): Record<string, unknown> {
-  const fileUrls = result.fileUrls;
+  const sentFiles = result.sentFiles;
   const resultStatus: ModelResultStatus = result.success
-    ? fileUrls.length > 0
+    ? sentFiles.length > 0
       ? "对端设备执行任务成功且返回有文件"
       : "对端设备执行任务成功且返回无文件"
     : "对端设备任务失败";
@@ -72,27 +72,18 @@ function buildModelToolResult(result: CrossDeviceInternalResult): Record<string,
   };
 }
 
-function extractFileUrl(message: string): string {
-  const matches = message.match(/https?:\/\/[^\s<>"']+/g);
-  const firstUrl = matches?.[0] ?? "";
-  return firstUrl.replace(/[，。；、！？,.!?;:)\]}]+$/u, "");
-}
-
 function buildCrossDeviceResult(params: {
   success: boolean;
   code: string;
   message: string;
-  fileUrls: string[];
+  sentFiles: SentFileParams[];
   rawEvent: unknown;
 }): CrossDeviceInternalResult {
-  const payloadFileUrls = params.success ? params.fileUrls.filter((url) => typeof url === "string" && url.length > 0) : [];
-  const messageFileUrl = params.success ? extractFileUrl(params.message) : "";
-  const fileUrls = Array.from(new Set([...payloadFileUrls, ...(messageFileUrl ? [messageFileUrl] : [])]));
   const result: CrossDeviceInternalResult = {
     success: params.success,
     code: params.code,
     message: params.message,
-    fileUrls,
+    sentFiles: params.sentFiles,
     rawEvent: params.rawEvent,
   };
 
@@ -103,17 +94,21 @@ async function autoSendFileToUserIfNeeded(
   result: CrossDeviceInternalResult,
   ctx: SessionContext,
 ): Promise<CrossDeviceInternalResult> {
-  const fileUrls = result.fileUrls;
-  if (fileUrls.length === 0) {
+  const sentFiles = Array.isArray(result.sentFiles) ? result.sentFiles : [];
+  if (sentFiles.length === 0) {
     return result;
   }
 
-  logger.log(`${SEND_CROSS_RESULT_LOG_TAG} auto sending ${fileUrls.length} cross-device file(s) to user`);
+  logger.log(`${SEND_CROSS_RESULT_LOG_TAG} auto sending ${sentFiles.length} cross-device file(s) to user`);
   try {
     const sendFileTool = createSendFileToUserTool(ctx);
-    const sendFileResult = await sendFileTool.execute("auto_send_cross_device_file", {
-      fileRemoteUrls: fileUrls,
-    });
+    const sendFileResult = await (async () => {
+      const results: unknown[] = [];
+      for (const sentFileParams of sentFiles) {
+        results.push(await sendFileTool.execute("auto_send_cross_device_file", sentFileParams));
+      }
+      return results;
+    })();
     logger.log(`${SEND_CROSS_RESULT_LOG_TAG} auto send_file_to_user completed`);
     return {
       ...result,
@@ -279,7 +274,7 @@ export function createSendCrossDeviceTaskTool(ctx: SessionContext): any {
           }
           settled = true;
           const modelResult = buildModelToolResult(result);
-          logger.log(`${LOG_TAG} completed, success=${result.success}, code=${result.code}, fileUrlCount=${result.fileUrls.length}`);
+          logger.log(`${LOG_TAG} completed, success=${result.success}, code=${result.code}, sentFileCount=${result.sentFiles.length}`);
           cleanup();
           resolve(buildResultText(modelResult));
         };
@@ -288,7 +283,7 @@ export function createSendCrossDeviceTaskTool(ctx: SessionContext): any {
           if (event.sessionId && event.sessionId !== sessionId && event.sessionId !== distributionSessionId) {
             return;
           }
-          logger.log(`${SEND_CROSS_RESULT_LOG_TAG} received result, status=${event.status}, code=${event.code}, fileUrlCount=${event.fileUrls.length}`);
+          logger.log(`${SEND_CROSS_RESULT_LOG_TAG} received result, status=${event.status}, code=${event.code}, sentFileCount=${event.sentFiles.length}`);
 
           void (async () => {
             if (resultHandlingStarted) {
@@ -312,7 +307,7 @@ export function createSendCrossDeviceTaskTool(ctx: SessionContext): any {
               success: event.status === "success",
               code: event.code,
               message: event.message,
-              fileUrls: event.fileUrls,
+              sentFiles: event.sentFiles,
               rawEvent: event.rawEvent,
             });
             const resultWithFileSend = await autoSendFileToUserIfNeeded(result, ctx);
@@ -326,7 +321,7 @@ export function createSendCrossDeviceTaskTool(ctx: SessionContext): any {
             success: false,
             code: "",
             message: `Cross-device task timed out after ${CROSS_DEVICE_TASK_TIMEOUT_MS / 1000} seconds.`,
-            fileUrls: [],
+            sentFiles: [],
             rawEvent: null,
           });
         }, CROSS_DEVICE_TASK_TIMEOUT_MS);
@@ -354,7 +349,7 @@ export function createSendCrossDeviceTaskTool(ctx: SessionContext): any {
               success: false,
               code: "",
               message: `Failed to send cross-device task command: ${error instanceof Error ? error.message : String(error)}`,
-              fileUrls: [],
+              sentFiles: [],
               rawEvent: null,
             });
           });

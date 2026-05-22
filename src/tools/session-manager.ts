@@ -1,7 +1,7 @@
 // Session manager for XY tool context
 // Stores active session contexts that tools can access
 import { AsyncLocalStorage } from "async_hooks";
-import type { RunCrossTaskContext, XYChannelConfig } from "../types.js";
+import type { RunCrossTaskContext, SentFileParams, XYChannelConfig } from "../types.js";
 import { logger } from "../utils/logger.js";
 import { configManager } from "../utils/config-manager.js";
 import { toolCallNudgeManager } from "../utils/tool-call-nudge-manager.js";
@@ -297,25 +297,47 @@ export function getActiveSessionCount(): number {
   return activeSessions.size;
 }
 
-export function appendRunCrossTaskFileUrls(
-  fileUrls: string[],
-  explicitRunCrossTaskContext?: RunCrossTaskContext,
-): string[] {
-  const context = asyncLocalStorage.getStore() ?? null;
-  const runCrossTaskContext = explicitRunCrossTaskContext ?? context?.runCrossTaskContext;
-  if (!runCrossTaskContext || fileUrls.length === 0) {
-    return runCrossTaskContext?.fileUrls ?? [];
+function normalizeSentFileParams(params: SentFileParams): SentFileParams | null {
+  const fileLocalUrls = Array.isArray(params.fileLocalUrls)
+    ? params.fileLocalUrls.filter((url): url is string => typeof url === "string" && url.length > 0)
+    : [];
+  const fileRemoteUrls = Array.isArray(params.fileRemoteUrls)
+    ? params.fileRemoteUrls.filter((url): url is string => typeof url === "string" && url.length > 0)
+    : [];
+
+  if (fileLocalUrls.length === 0 && fileRemoteUrls.length === 0) {
+    return null;
   }
 
-  const existing = Array.isArray(runCrossTaskContext.fileUrls) ? runCrossTaskContext.fileUrls : [];
-  const merged = Array.from(new Set([...existing, ...fileUrls.filter((url) => typeof url === "string" && url.length > 0)]));
-  runCrossTaskContext.fileUrls = merged;
+  return {
+    ...(fileLocalUrls.length > 0 ? { fileLocalUrls } : {}),
+    ...(fileRemoteUrls.length > 0 ? { fileRemoteUrls } : {}),
+  };
+}
+
+export function appendRunCrossTaskSentFiles(
+  sentFiles: SentFileParams[],
+  explicitRunCrossTaskContext?: RunCrossTaskContext,
+): SentFileParams[] {
+  const context = asyncLocalStorage.getStore() ?? null;
+  const runCrossTaskContext = explicitRunCrossTaskContext ?? context?.runCrossTaskContext;
+  const normalizedSentFiles = sentFiles
+    .map((params) => normalizeSentFileParams(params))
+    .filter((params): params is SentFileParams => params !== null);
+
+  if (!runCrossTaskContext || normalizedSentFiles.length === 0) {
+    return runCrossTaskContext?.sentFiles ?? [];
+  }
+
+  const existing = Array.isArray(runCrossTaskContext.sentFiles) ? runCrossTaskContext.sentFiles : [];
+  const merged = [...existing, ...normalizedSentFiles];
+  runCrossTaskContext.sentFiles = merged;
 
   const sessionWithRef = Array.from(activeSessions.values()).find(
     (session) => session.runCrossTaskContext === runCrossTaskContext,
   );
   if (sessionWithRef?.runCrossTaskContext) {
-    sessionWithRef.runCrossTaskContext.fileUrls = merged;
+    sessionWithRef.runCrossTaskContext.sentFiles = merged;
   }
 
   return merged;

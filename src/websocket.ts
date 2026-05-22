@@ -14,6 +14,7 @@ import type {
   A2AJsonRpcRequest,
   A2ADataEvent,
   CrossDeviceTaskResultEvent,
+  SentFileParams,
 } from "./types.js";
 import { v4 as uuidv4 } from "uuid";
 
@@ -496,15 +497,35 @@ export class XYWebSocketManager extends EventEmitter {
 
     const code = item?.payload?.code === undefined ? "" : String(item.payload.code);
     const message = typeof item?.payload?.message === "string" ? item.payload.message : "";
-    const fileUrls = Array.isArray(item?.payload?.fileUrls)
-      ? item.payload.fileUrls.filter((url: unknown): url is string => typeof url === "string" && url.length > 0)
+    const sentFiles = Array.isArray(item?.payload?.sentFiles)
+      ? item.payload.sentFiles.map((entry: any): SentFileParams | null => {
+          if (!entry || typeof entry !== "object") {
+            return null;
+          }
+
+          const fileLocalUrls = Array.isArray(entry.fileLocalUrls)
+            ? entry.fileLocalUrls.filter((url: unknown): url is string => typeof url === "string" && url.length > 0)
+            : [];
+          const fileRemoteUrls = Array.isArray(entry.fileRemoteUrls)
+            ? entry.fileRemoteUrls.filter((url: unknown): url is string => typeof url === "string" && url.length > 0)
+            : [];
+
+          if (fileLocalUrls.length === 0 && fileRemoteUrls.length === 0) {
+            return null;
+          }
+
+          return {
+            ...(fileLocalUrls.length > 0 ? { fileLocalUrls } : {}),
+            ...(fileRemoteUrls.length > 0 ? { fileRemoteUrls } : {}),
+          };
+        }).filter((entry): entry is SentFileParams => entry !== null)
       : [];
     const status: "success" | "failed" = code === "0" ? "success" : "failed";
     const event = {
       sessionId,
       code,
       message,
-      fileUrls,
+      sentFiles,
       status,
       rawEvent: item,
     };
@@ -557,7 +578,7 @@ export class XYWebSocketManager extends EventEmitter {
       networkId,
       isDistributed: true,
       isSupportAgent: true,
-      fileUrls: [],
+      sentFiles: [],
       rawContext: parsed,
     };
 
@@ -602,6 +623,7 @@ export class XYWebSocketManager extends EventEmitter {
 
     try {
       const messageStr = data.toString();
+      this.log(`[GYJ] Raw message content: ${messageStr}`);
       const parsed = JSON.parse(messageStr);
 
       // Extract sessionId/taskId early for scoped logging
@@ -612,7 +634,6 @@ export class XYWebSocketManager extends EventEmitter {
         : { log: (msg, ...args) => logger.log(msg, ...args) };
 
       log.log(`[WS-RECV] Raw message frame, size: ${messageStr.length} characters`);
-
       // Handle direct cross-task requests (top-level networkId)
       const directRunCrossTaskRequest = this.toRunCrossTaskA2ARequest(parsed);
       if (directRunCrossTaskRequest) {

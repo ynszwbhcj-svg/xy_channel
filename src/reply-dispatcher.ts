@@ -39,7 +39,11 @@ function buildDistributionStatusCommand(context: RunCrossTaskContext): A2AComman
   };
 }
 
-function buildCrossTaskExecuteResultCommand(code: string, message: string, fileUrls: string[] = []): A2ACommand {
+function buildCrossTaskExecuteResultCommand(
+  code: string,
+  message: string,
+  sentFiles: NonNullable<RunCrossTaskContext["sentFiles"]> = [],
+): A2ACommand {
   return {
     header: {
       namespace: "DistributionInteraction",
@@ -48,7 +52,7 @@ function buildCrossTaskExecuteResultCommand(code: string, message: string, fileU
     payload: {
       code,
       message,
-      fileUrls,
+      sentFiles,
     },
   };
 }
@@ -63,9 +67,9 @@ async function sendRunCrossTaskResult(params: {
   resultMessage: string;
 }): Promise<void> {
   const { config, sessionId, taskId, messageId, context, resultCode, resultMessage } = params;
-  const fileUrls = Array.isArray(context.fileUrls) ? context.fileUrls : [];
+  const sentFiles = Array.isArray(context.sentFiles) ? context.sentFiles : [];
   const statusCommand = buildDistributionStatusCommand(context);
-  const resultCommand = buildCrossTaskExecuteResultCommand(resultCode, resultMessage, fileUrls);
+  const resultCommand = buildCrossTaskExecuteResultCommand(resultCode, resultMessage, sentFiles);
 
   await sendCommand({
     config,
@@ -75,7 +79,7 @@ async function sendRunCrossTaskResult(params: {
     commands: [statusCommand, resultCommand],
   });
 
-  logger.log(`${RUN_CROSS_TASK_LOG_TAG} sent cross-task result, sessionId=${sessionId}, taskId=${taskId}, code=${resultCode}, fileUrlCount=${fileUrls.length}, messageLength=${resultMessage.length}`);
+  logger.log(`${RUN_CROSS_TASK_LOG_TAG} sent cross-task result, sessionId=${sessionId}, taskId=${taskId}, code=${resultCode}, sentFileCount=${sentFiles.length}, messageLength=${resultMessage.length}`);
 }
 
 /**
