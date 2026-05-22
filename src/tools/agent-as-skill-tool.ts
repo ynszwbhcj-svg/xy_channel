@@ -4,6 +4,7 @@ import { sendCommand } from "../formatter.js";
 import type { SessionContext } from "./session-manager.js";
 import { getCurrentTaskId } from "../task-manager.js";
 import { logger } from "../utils/logger.js";
+import { XYFileUploadService } from "../file-upload.js";
 
 /**
  * Agent-as-skill tool - invokes a registered agent by agentId as a skill.
@@ -13,7 +14,7 @@ import { logger } from "../utils/logger.js";
 export function createAgentAsSkillTool(ctx: SessionContext): any {
   const { config, sessionId, taskId, messageId } = ctx;
   return {
-    name: "agent-as-skill-tool",
+    name: "agent_as_a_tool",
     label: "Agent as Skill Tool",
     description: `智能体作为skill的执行元工具。当需要调用其他已注册的Agent来执行特定任务时使用此工具。
 该工具会将用户请求和可选的附件文件转发给目标Agent执行，并返回执行结果。
@@ -40,8 +41,7 @@ export function createAgentAsSkillTool(ctx: SessionContext): any {
           description: "用户原始请求文本，原样转发给目标Agent执行",
         },
         filesInfo: {
-          type: "array",
-          description: "附件文件/图片信息列表，无文件时可传null或空数组",
+          description: "附件文件/图片信息列表，无文件时可传null或空数组，支持传入数组或JSON字符串",
           items: {
             type: "object",
             properties: {
@@ -57,6 +57,10 @@ export function createAgentAsSkillTool(ctx: SessionContext): any {
               fileUrl: {
                 type: "string",
                 description: "文件可访问下载链接（完整HTTP/HTTPS地址）",
+              },
+              fileUrlLocal: {
+                type: "string",
+                description: "文件本地路径，如果提供此字段，工具会自动上传文件并将公网URL填入fileUrl",
               },
             },
           },
@@ -77,6 +81,54 @@ export function createAgentAsSkillTool(ctx: SessionContext): any {
         throw new Error("Missing or invalid required parameter: query must be a non-empty string");
       }
 
+      // Robust parsing: normalize filesInfo from array or JSON string
+      let filesInfo: any[] | null = null;
+      if (params.filesInfo) {
+        if (Array.isArray(params.filesInfo)) {
+          filesInfo = params.filesInfo;
+        } else if (typeof params.filesInfo === 'string') {
+          try {
+            const parsed = JSON.parse(params.filesInfo);
+            if (Array.isArray(parsed)) {
+              filesInfo = parsed;
+            } else {
+              throw new Error("filesInfo must be an array or a JSON string representing an array");
+            }
+          } catch (parseError) {
+            throw new Error(`filesInfo JSON解析失败: ${parseError instanceof Error ? parseError.message : String(parseError)}`);
+          }
+        } else {
+          filesInfo = null;
+        }
+      }
+
+      // Upload local files and fill fileUrl
+      if (filesInfo && filesInfo.length > 0) {
+        const uploadService = new XYFileUploadService(
+          config.fileUploadUrl,
+          config.apiKey,
+          config.uid
+        );
+
+        for (const fileInfo of filesInfo) {
+          if (fileInfo.fileUrlLocal && !fileInfo.fileUrl) {
+            try {
+              const publicUrl = await uploadService.uploadFileAndGetUrl(fileInfo.fileUrlLocal, "TEMPORARY_MATERIAL_DOC");
+              if (publicUrl) {
+                fileInfo.fileUrl = publicUrl;
+              } else {
+                logger.warn("[AGENT-AS-SKILL] 上传文件未返回公网URL", { fileUrlLocal: fileInfo.fileUrlLocal });
+              }
+            } catch (uploadError) {
+              logger.error("[AGENT-AS-SKILL] 上传本地文件失败", { fileUrlLocal: fileInfo.fileUrlLocal, error: uploadError });
+              throw new Error(`上传本地文件失败 (${fileInfo.fileUrlLocal}): ${uploadError instanceof Error ? uploadError.message : String(uploadError)}`);
+            }
+          }
+          // Remove fileUrlLocal from the final payload
+          delete fileInfo.fileUrlLocal;
+        }
+      }
+
       // Get WebSocket manager
       const wsManager = getXYWebSocketManager(config);
 
@@ -89,7 +141,7 @@ export function createAgentAsSkillTool(ctx: SessionContext): any {
         payload: {
           agentId: params.agentId,
           query: params.query,
-          filesInfo: params.filesInfo || null,
+          filesInfo: filesInfo || null,
         },
       };
 
