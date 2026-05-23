@@ -28,7 +28,7 @@ export function createXiaoyiDeleteCollectionTool(ctx: SessionContext): any {
   return {
   name: "delete_collection",
   label: "Delete XiaoYi Collection",
-  description: `从小艺收藏中删除之前已保存的公共知识数据。任何用户希望删除已保存到个人知识库的数据都可以调用本技能。如果用户想更新之前的收藏数据，需要先query获取itemId然后再delete，最后执行Add，按照这个步骤完成收藏数据更新。
+  description: `从小艺收藏（也叫小艺帮记）中删除之前已保存的公共知识数据。任何用户希望删除已保存到个人知识库的数据都可以调用本技能。如果用户想更新之前的收藏数据，需要先query获取itemId然后再delete，最后执行Add，按照这个步骤完成收藏数据更新。
   注意:
   a. 操作超时时间为60秒,请勿重复调用此工具
   b. 如果遇到各类调用失败场景,最多只能重试一次，不可以重复调用多次。

@@ -29,7 +29,7 @@ export function createXiaoyiAddCollectionTool(ctx: SessionContext): any {
   return {
   name: "add_collection",
   label: "Add XiaoYi Collection",
-  description: `向小艺收藏中添加公共知识数据，可以给用户提供个性化体验。任何用户希望保存到个人化知识库中的数据都可以调用本技能。不同类型的数据对应的数据要求如下：
+  description: `向小艺收藏（也叫小艺帮记）中添加公共知识数据，可以给用户提供个性化体验。任何用户希望保存到个人化知识库中的数据都可以调用本技能。不同类型的数据对应的数据要求如下：
 请求入参说明：
 ● content:必填字段，数据类型为string，功能描述是该字段是用户添加收藏的链接url或文本原文。适用于HYPER_LINK和TEXT类型。
 ● uri:必填字段，数据类型为string，功能描述是该字段是图片或文件的端存储地址链接。适用于IMAGE和FILE类型。
