@@ -38,6 +38,7 @@ export function createXiaoyiAddCollectionTool(ctx: SessionContext): any {
 ● title:非必填字段，数据类型为string，功能描述是标识文件类型数据的文件名称。适用于FILE类型。
 说明：如果dataType为HYPER_LINK或TEXT，则content字段必填且不能为空；如果dataType为IMAGE或FILE，则uri字段必填且不能为空。当用户希望收藏海报、截图等图片类数据时，请将数据以图片IMAGE的形式存入到小艺帮记；当用户希望收藏电子书、笔记、报告、素材、文档、合同、协议、简历、证书、报表、日志、安装包、压缩包等描述的文件时，请将数据以文件FILE的形式存入到小艺帮记。
 当你成功收藏这个数据到小艺帮记后，请在最后显示"已成功把数据添加到[小艺帮记](vassistant://voice/main?page=CollectionPage&jumpHomePageTab=myCollection)"，
+请额外注意，如果当前用户的设备是鸿蒙PC，则最后显示的内容需要额外定制，内容是"已成功把数据添加到[小艺帮记](vassistant://voice/main?agentId=celia_collection_share&agentPage=CollectionPage)"
   注意:
   a. 操作超时时间为60秒,请勿重复调用此工具
   b. 如果遇到各类调用失败场景,最多只能重试一次，不可以重复调用多次。
