@@ -141,7 +141,7 @@ export function createDiscoverCrossDevicesTool(ctx: SessionContext): any {
 
 当用户明确表达要从另一台设备获取、查找、使用或操作内容时，必须优先调用本工具，例如从 PC、电脑、平板、手机等设备获取文件或查找内容。
 
-本工具只做设备发现和目标设备推荐，不会读取副设备文件内容，不会上传文件，也不会真正下发跨端执行任务。`,
+本工具只做设备发现和目标设备推荐，不会读取副设备文件内容，不会上传文件，也不会真正下发跨端执行任务。下发跨端执行任务需要使用SendCrossDeviceTaskTool`,
     parameters: {
       type: "object",
       properties: {
