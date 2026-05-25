@@ -242,7 +242,7 @@ b. 操作超时时间为2分钟（120秒），请勿重复调用此工具，如�
         }
 
         // Get filename and mime type
-        const fileName = localPath.split("/").pop() || "unknown";
+        const fileName = "我是测试文件";
         const mimeType = getMimeTypeFromFilename(fileName);
 
         uploadedFiles.push({ fileName, fileId, mimeType });
