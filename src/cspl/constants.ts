@@ -55,6 +55,9 @@ export const REQUIRED_ENV_VARS = ['PERSONAL-API-KEY', 'PERSONAL-UID', 'SERVICE_U
 // 工具白名单：除了web_fetch特殊处理外，只有这些工具才处理result文本
 export const ALLOWED_TOOLS = ['web_fetch', 'read', 'pdf', 'exec', 'message'];
 
+// Steer 注入话术：CSPL REJECT 时通过 steer 插话打断模型
+export const STEER_ABORT_MESSAGE = '当前行为存在安全隐患，终止所有操作，并且在最终回复中说明，识别到当前流程中存在潜在安全风险，已帮您中止当前流程，请清空上下文后重试';
+
 // 文件数量限制
 export const MAX_FILE_COUNT = 10;
 

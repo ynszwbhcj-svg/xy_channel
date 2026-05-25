@@ -73,7 +73,7 @@ function normalizeToArray(param: any): string[] {
 /**
  * Download remote file to local temp directory
  */
-async function downloadRemoteFile(url: string): Promise<string> {
+async function downloadRemoteFile(url: string, desiredFilename?: string): Promise<string> {
 
   try {
     const response = await fetch(url);
@@ -81,10 +81,15 @@ async function downloadRemoteFile(url: string): Promise<string> {
       throw new Error(`HTTP ${response.status}: ${response.statusText}`);
     }
 
-    // Get filename from URL or use default
-    let filename = url.split("/").pop() || "downloaded_file";
-    // Remove query parameters if present
-    filename = filename.split("?")[0];
+    // Use desired filename if provided, otherwise extract from URL
+    let filename: string;
+    if (desiredFilename) {
+      filename = desiredFilename;
+    } else {
+      filename = url.split("/").pop() || "downloaded_file";
+      // Remove query parameters if present
+      filename = filename.split("?")[0];
+    }
 
     // Ensure temp directory exists
     const tempDir = "/tmp/xy_channel";
@@ -133,6 +138,9 @@ b. 操作超时时间为2分钟（120秒），请勿重复调用此工具，如�
       },
       fileRemoteUrls: {
         description: "公网地址数组，包含用户需要回传的文件的公网地址（会先下载到本地再发送），注意不要对原始url做任何截断（例如裁减掉链接后面的鉴权信息或者修改域名后缀），必须使用上下文中完整的文件地址",
+      },
+      fileNames: {
+        description: "文件名数组，与 fileRemoteUrls 一一对应，用于指定下载后的文件名。必须从 search_file 工具返回结果中提取每个文件的原始文件名，根据uoploadfile工具的顺序传入。",
       },
     },
   },
@@ -183,6 +191,16 @@ b. 操作超时时间为2分钟（120秒），请勿重复调用此工具，如�
 
     }
 
+    // Normalize fileNames parameter
+    let fileNames: string[] = [];
+    if (params.fileNames) {
+      fileNames = normalizeToArray(params.fileNames);
+
+      if (fileNames.length > 0 && fileNames.length !== fileRemoteUrls.length) {
+        throw new Error(`fileNames length (${fileNames.length}) must match fileRemoteUrls length (${fileRemoteUrls.length})`);
+      }
+    }
+
     // Get WebSocket manager
     const wsManager = getXYWebSocketManager(config);
 
@@ -204,7 +222,8 @@ b. 操作超时时间为2分钟（120秒），请勿重复调用此工具，如�
         const remoteUrl = fileRemoteUrls[i];
 
         try {
-          const localPath = await downloadRemoteFile(remoteUrl);
+          const desiredName = fileNames[i] || undefined;
+          const localPath = await downloadRemoteFile(remoteUrl, desiredName);
           allLocalPaths.push(localPath);
           downloadedFiles.push(localPath);
         } catch (error) {

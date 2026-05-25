@@ -721,8 +721,8 @@ export class XYWebSocketManager extends EventEmitter {
                 this.emit("login-token-event", {
                   event: item,
                 });
-              } else if (item.header?.namespace === "System" && item.header?.name === "CronQuery") {
-                log.log("[XY] System.CronQuery detected, emitting cron-query-event");
+              } else if (item.header?.namespace === "AgentEvent" && item.header?.name === "CronQuery") {
+                log.log("[XY] AgentEvent.CronQuery detected, emitting cron-query-event");
                 this.emit("cron-query-event", {
                   ...(item.payload ?? {}),
                   sessionId,
@@ -819,8 +819,8 @@ export class XYWebSocketManager extends EventEmitter {
                   this.emit("login-token-event", {
                     event: item,
                   });
-                } else if (item.header?.namespace === "System" && item.header?.name === "CronQuery") {
-                  log.log("[XY] System.CronQuery detected (wrapped format), emitting cron-query-event");
+                } else if (item.header?.namespace === "AgentEvent" && item.header?.name === "CronQuery") {
+                  log.log("[XY] AgentEvent.CronQuery detected (wrapped format), emitting cron-query-event");
                   this.emit("cron-query-event", {
                     ...(item.payload ?? {}),
                     sessionId: inboundMsg.sessionId || a2aRequest.params?.sessionId,
