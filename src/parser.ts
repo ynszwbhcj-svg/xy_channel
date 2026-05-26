@@ -72,6 +72,41 @@ export function extractDataEvents(parts: A2AMessagePart[]): A2ADataEvent[] {
 }
 
 export function extractRunCrossTaskContext(parts: A2AMessagePart[]): RunCrossTaskContext | null {
+  const normalizeSentFiles = (value: unknown) => {
+    if (!Array.isArray(value)) {
+      return [];
+    }
+
+    return value
+      .map((item) => {
+        if (!item || typeof item !== "object") {
+          return null;
+        }
+
+        const candidate = item as Record<string, unknown>;
+        const fileLocalUrls = Array.isArray(candidate.fileLocalUrls)
+          ? candidate.fileLocalUrls.filter((url): url is string => typeof url === "string" && url.length > 0)
+          : [];
+        const fileRemoteUrls = Array.isArray(candidate.fileRemoteUrls)
+          ? candidate.fileRemoteUrls.filter((url): url is string => typeof url === "string" && url.length > 0)
+          : [];
+        const fileNames = Array.isArray(candidate.fileNames)
+          ? candidate.fileNames.filter((name): name is string => typeof name === "string" && name.length > 0)
+          : [];
+
+        if (fileLocalUrls.length === 0 && fileRemoteUrls.length === 0) {
+          return null;
+        }
+
+        return {
+          ...(fileLocalUrls.length > 0 ? { fileLocalUrls } : {}),
+          ...(fileRemoteUrls.length > 0 ? { fileRemoteUrls } : {}),
+          ...(fileNames.length > 0 && fileNames.length === fileRemoteUrls.length ? { fileNames } : {}),
+        };
+      })
+      .filter((item): item is { fileLocalUrls?: string[]; fileRemoteUrls?: string[]; fileNames?: string[] } => item !== null);
+  };
+
   for (const part of parts) {
     if (part.kind !== "data" || !part.data) {
       continue;
@@ -93,7 +128,7 @@ export function extractRunCrossTaskContext(parts: A2AMessagePart[]): RunCrossTas
       isDistributed: context.isDistributed === true,
       networkId,
       isSupportAgent: context.isSupportAgent !== false,
-      fileUrls: Array.isArray(context.fileUrls) ? context.fileUrls.filter((url): url is string => typeof url === "string") : [],
+      sentFiles: normalizeSentFiles(context.sentFiles),
       rawContext: context,
     };
   }

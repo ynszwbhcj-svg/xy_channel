@@ -2,7 +2,7 @@
 import type { ChannelAgentTool } from "openclaw/plugin-sdk";
 import { getXYWebSocketManager } from "../client.js";
 import { XYFileUploadService } from "../file-upload.js";
-import type { SessionContext } from "./session-manager.js";
+import { appendRunCrossTaskSentFiles, type SessionContext } from "./session-manager.js";
 import { logger } from "../utils/logger.js";
 import type { OutboundWebSocketMessage } from "../types.js";
 import { getCurrentTaskId, getCurrentMessageId } from "../task-manager.js";
@@ -199,6 +199,20 @@ b. 操作超时时间为2分钟（120秒），请勿重复调用此工具，如�
       if (fileNames.length > 0 && fileNames.length !== fileRemoteUrls.length) {
         throw new Error(`fileNames length (${fileNames.length}) must match fileRemoteUrls length (${fileRemoteUrls.length})`);
       }
+    }
+
+    if (ctx.runCrossTaskContext && (fileLocalUrls.length > 0 || fileRemoteUrls.length > 0)) {
+      const cachedSentFiles = appendRunCrossTaskSentFiles(
+        [
+          {
+            ...(fileLocalUrls.length > 0 ? { fileLocalUrls } : {}),
+            ...(fileRemoteUrls.length > 0 ? { fileRemoteUrls } : {}),
+            ...(fileNames.length > 0 ? { fileNames } : {}),
+          },
+        ],
+        ctx.runCrossTaskContext,
+      );
+      logger.log(`[RunCrossTask] cached ${cachedSentFiles.length} send_file_to_user input(s) for cross-task result`);
     }
 
     // Get WebSocket manager
