@@ -24,19 +24,14 @@ export function createUploadFileTool(ctx: SessionContext): any {
   return {
   name: "upload_file",
   label: "Upload File",
-  description: `工具能力描述：将手机或PC/电脑本地文件上传并获取可公网访问的 URL。
+  description: `工具能力描述：将用户设备（可以使手机或者鸿蒙PC等）本地文件上传并获取可公网访问的 URL。
 
   前置工具调用：此工具使用前必须先通过call_device_tool调用 search_file 或者 query_collection 工具获取文件的 uri
-
-  使用场景与调用流程：
-  1. 上传手机文件：直接调用此工具，无需传入 udid。
-  2. 上传PC/电脑文件：当用户要求上传PC/电脑上的文件时，需要先通过 find_pc_devices 工具获取设备ID（udid），然后将 udid 传入此工具。
 
   工具参数说明：
   a. 入参中的fileInfos数组，每个元素必须包含mediaUri字段（对应于search_file工具或者query_collection返回结果中的uri），必须与search_file或者query_collection结果中对应的uri完全保持一致，不要自行修改。
   b. fileInfos中的timeout字段是可选的，表示上传文件超时时间，单位是毫秒，默认是20000（20秒）。
   c. fileInfos 是文件在本地的信息数组（从 search_file 工具或者query_collection 工具响应中获取）。限制：每次最多支持传入 5 条文件信息。
-  d. udid 是PC/电脑设备ID，仅在上传PC/电脑文件时需要传入（通过 find_pc_devices 工具获取）。
 
   注意事项：
   a. 操作超时时间为60秒,请勿重复调用此工具,如果超时或失败,最多重试一次。
@@ -48,11 +43,7 @@ export function createUploadFileTool(ctx: SessionContext): any {
         // 不指定 type，允许传入数组或 JSON 字符串
         // 具体的类型验证和转换在 execute 函数内部进行
         description: "文件信息数组，每个元素包含mediaUri（必需）和timeout（可选，默认20000）。必须先通过 search_file 工具获取。每次最多支持 5 条文件信息。",
-      },
-      udid: {
-        type: "string",
-        description: "PC/电脑设备ID。当上传PC/电脑上的文件时，需要先通过 find_pc_devices 工具获取设备ID后传入。上传手机文件时不需要传入此参数。",
-      },
+      }
     },
     required: ["fileInfos"],
   },
