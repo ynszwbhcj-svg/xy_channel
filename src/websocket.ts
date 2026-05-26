@@ -623,7 +623,6 @@ export class XYWebSocketManager extends EventEmitter {
 
     try {
       const messageStr = data.toString();
-      this.log(`[GYJ] Raw message content: ${messageStr}`);
       const parsed = JSON.parse(messageStr);
 
       // Extract sessionId/taskId early for scoped logging
