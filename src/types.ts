@@ -226,7 +226,6 @@ export interface FileUploadPrepareResponse {
 export interface FileUploadCompleteRequest {
   objectId: string;
   draftId: string;
-  expireTime?: number;
 }
 
 export interface FileUploadCompleteResponse {

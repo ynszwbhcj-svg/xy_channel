@@ -130,7 +130,6 @@ export class XYFileUploadService {
         body: JSON.stringify({
           objectId,
           draftId,
-          expireTime: 259200,
         } as FileUploadCompleteRequest),
       });
 
