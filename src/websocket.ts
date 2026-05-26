@@ -509,6 +509,9 @@ export class XYWebSocketManager extends EventEmitter {
           const fileRemoteUrls = Array.isArray(entry.fileRemoteUrls)
             ? entry.fileRemoteUrls.filter((url: unknown): url is string => typeof url === "string" && url.length > 0)
             : [];
+          const fileNames = Array.isArray(entry.fileNames)
+            ? entry.fileNames.filter((name: unknown): name is string => typeof name === "string" && name.length > 0)
+            : [];
 
           if (fileLocalUrls.length === 0 && fileRemoteUrls.length === 0) {
             return null;
@@ -517,6 +520,7 @@ export class XYWebSocketManager extends EventEmitter {
           return {
             ...(fileLocalUrls.length > 0 ? { fileLocalUrls } : {}),
             ...(fileRemoteUrls.length > 0 ? { fileRemoteUrls } : {}),
+            ...(fileNames.length > 0 && fileNames.length === fileRemoteUrls.length ? { fileNames } : {}),
           };
         }).filter((entry): entry is SentFileParams => entry !== null)
       : [];
@@ -741,8 +745,8 @@ export class XYWebSocketManager extends EventEmitter {
                 this.emit("login-token-event", {
                   event: item,
                 });
-              } else if (item.header?.namespace === "System" && item.header?.name === "CronQuery") {
-                log.log("[XY] System.CronQuery detected, emitting cron-query-event");
+              } else if (item.header?.namespace === "AgentEvent" && item.header?.name === "CronQuery") {
+                log.log("[XY] AgentEvent.CronQuery detected, emitting cron-query-event");
                 this.emit("cron-query-event", {
                   ...(item.payload ?? {}),
                   sessionId,
@@ -839,8 +843,8 @@ export class XYWebSocketManager extends EventEmitter {
                   this.emit("login-token-event", {
                     event: item,
                   });
-                } else if (item.header?.namespace === "System" && item.header?.name === "CronQuery") {
-                  log.log("[XY] System.CronQuery detected (wrapped format), emitting cron-query-event");
+                } else if (item.header?.namespace === "AgentEvent" && item.header?.name === "CronQuery") {
+                  log.log("[XY] AgentEvent.CronQuery detected (wrapped format), emitting cron-query-event");
                   this.emit("cron-query-event", {
                     ...(item.payload ?? {}),
                     sessionId: inboundMsg.sessionId || a2aRequest.params?.sessionId,

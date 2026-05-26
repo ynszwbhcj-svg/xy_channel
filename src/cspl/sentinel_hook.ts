@@ -19,9 +19,12 @@ import {
     ALLOWED_TOOLS,
     MAX_TEXT_LENGTH,
     MAX_TOTAL_LENGTH,
-    MIN_TEXT_LENGTH
+    MIN_TEXT_LENGTH,
+    STEER_ABORT_MESSAGE
 } from './constants.js';
 import { logger } from '../utils/logger.js';
+import { getSessionContext } from '../tools/session-manager.js';
+import { tryInjectSteer } from './steer-context.js';
 
 // 主入口模块
 export default function register(api: OpenClawPluginApi) {
@@ -96,7 +99,18 @@ export default function register(api: OpenClawPluginApi) {
                 const result = parseSecurityResult(response);
                 logger.log(`[SENTINEL HOOK] TOOL_OUTPUT response: status=${result.status}.`);
                 if (result.status === 'REJECT') {
-                    logger.warn('[SENTINEL HOOK] Interrupt handler');
+                    logger.warn('[SENTINEL HOOK] REJECT detected, attempting steer injection');
+                    const sessionCtx = ctx.sessionKey ? getSessionContext(ctx.sessionKey) : null;
+                    if (sessionCtx?.sessionId && sessionCtx?.taskId) {
+                        await tryInjectSteer({
+                            sessionId: sessionCtx.sessionId,
+                            taskId: sessionCtx.taskId,
+                            message: STEER_ABORT_MESSAGE,
+                            source: 'cspl',
+                        });
+                    } else {
+                        logger.warn(`[SENTINEL HOOK] Cannot inject steer: sessionKey=${ctx.sessionKey}, sessionCtx found=${!!sessionCtx}`);
+                    }
                 }
             } catch (error) {
                 throw new Error(`[SENTINEL HOOK] API call failed: ${error}`);

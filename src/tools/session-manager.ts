@@ -304,6 +304,9 @@ function normalizeSentFileParams(params: SentFileParams): SentFileParams | null 
   const fileRemoteUrls = Array.isArray(params.fileRemoteUrls)
     ? params.fileRemoteUrls.filter((url): url is string => typeof url === "string" && url.length > 0)
     : [];
+  const fileNames = Array.isArray(params.fileNames)
+    ? params.fileNames.filter((name): name is string => typeof name === "string" && name.length > 0)
+    : [];
 
   if (fileLocalUrls.length === 0 && fileRemoteUrls.length === 0) {
     return null;
@@ -312,6 +315,7 @@ function normalizeSentFileParams(params: SentFileParams): SentFileParams | null 
   return {
     ...(fileLocalUrls.length > 0 ? { fileLocalUrls } : {}),
     ...(fileRemoteUrls.length > 0 ? { fileRemoteUrls } : {}),
+    ...(fileNames.length > 0 && fileNames.length === fileRemoteUrls.length ? { fileNames } : {}),
   };
 }
 

@@ -109,6 +109,7 @@ export interface RunCrossTaskContext {
 export interface SentFileParams {
   fileLocalUrls?: string[];
   fileRemoteUrls?: string[];
+  fileNames?: string[];
 }
 
 // ============================================================================

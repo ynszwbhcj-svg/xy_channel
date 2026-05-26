@@ -110,7 +110,7 @@ export async function handleCronQueryEvent(
       const config = resolveXYConfig(cfg);
       const command: A2ACommand = {
         header: {
-          namespace: "System",
+          namespace: "AgentEvent",
           name: "CronQuery",
         },
         payload: {

@@ -90,6 +90,9 @@ export function extractRunCrossTaskContext(parts: A2AMessagePart[]): RunCrossTas
         const fileRemoteUrls = Array.isArray(candidate.fileRemoteUrls)
           ? candidate.fileRemoteUrls.filter((url): url is string => typeof url === "string" && url.length > 0)
           : [];
+        const fileNames = Array.isArray(candidate.fileNames)
+          ? candidate.fileNames.filter((name): name is string => typeof name === "string" && name.length > 0)
+          : [];
 
         if (fileLocalUrls.length === 0 && fileRemoteUrls.length === 0) {
           return null;
@@ -98,9 +101,10 @@ export function extractRunCrossTaskContext(parts: A2AMessagePart[]): RunCrossTas
         return {
           ...(fileLocalUrls.length > 0 ? { fileLocalUrls } : {}),
           ...(fileRemoteUrls.length > 0 ? { fileRemoteUrls } : {}),
+          ...(fileNames.length > 0 && fileNames.length === fileRemoteUrls.length ? { fileNames } : {}),
         };
       })
-      .filter((item): item is { fileLocalUrls?: string[]; fileRemoteUrls?: string[] } => item !== null);
+      .filter((item): item is { fileLocalUrls?: string[]; fileRemoteUrls?: string[]; fileNames?: string[] } => item !== null);
   };
 
   for (const part of parts) {
