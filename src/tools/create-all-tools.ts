@@ -27,6 +27,7 @@ import { createLoginTokenTool } from "./login-token-tool.js";
 import { createAgentAsSkillTool } from "./agent-as-skill-tool.js";
 import { createDiscoverCrossDevicesTool } from "./discover-cross-devices-tool.js";
 import { createSendCrossDeviceTaskTool } from "./send-cross-device-task-tool.js";
+import { createDisplayA2UICardTool } from "./display-a2ui-card-tool.js";
 import { logger } from "../utils/logger.js";
 
 /**
@@ -47,6 +48,7 @@ export function createAllTools(ctx: SessionContext | null): ChannelAgentTool[] {
     createLocationTool(ctx),
     createDiscoverCrossDevicesTool(ctx),
     createSendCrossDeviceTaskTool(ctx),
+    createDisplayA2UICardTool(ctx),
     createCallDeviceTool(ctx),
     createGetNoteToolSchemaTool(ctx),
     createGetCalendarToolSchemaTool(ctx),
