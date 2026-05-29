@@ -5,7 +5,7 @@ import { sendA2AResponse, sendStatusUpdate, sendReasoningTextUpdate, sendCommand
 import { resolveXYConfig } from "./config.js";
 import { getCurrentTaskId, getCurrentMessageId } from "./task-manager.js";
 import type { A2ACommand, RunCrossTaskContext, XYChannelConfig } from "./types.js";
-import { getCurrentSessionContext } from "./tools/session-manager.js";
+import { clearRunCrossTaskSentFiles, getCurrentSessionContext } from "./tools/session-manager.js";
 import fs from "fs/promises";
 import path from "path";
 import { logger } from "./utils/logger.js";
@@ -78,8 +78,9 @@ async function sendRunCrossTaskResult(params: {
     messageId,
     commands: [statusCommand, resultCommand],
   });
+  clearRunCrossTaskSentFiles(context);
 
-  logger.log(`${RUN_CROSS_TASK_LOG_TAG} sent cross-task result, sessionId=${sessionId}, taskId=${taskId}, code=${resultCode}, sentFileCount=${sentFiles.length}, messageLength=${resultMessage.length}`);
+  logger.log(`${RUN_CROSS_TASK_LOG_TAG} sent cross-task result, sessionId=${sessionId}, taskId=${taskId}, code=${resultCode}, sentFileCount=${sentFiles.length}, clearedSentFileCount=${sentFiles.length}, messageLength=${resultMessage.length}`);
 }
 
 /**

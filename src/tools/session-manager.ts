@@ -347,6 +347,25 @@ export function appendRunCrossTaskSentFiles(
   return merged;
 }
 
+export function clearRunCrossTaskSentFiles(
+  explicitRunCrossTaskContext?: RunCrossTaskContext,
+): void {
+  const context = asyncLocalStorage.getStore() ?? null;
+  const runCrossTaskContext = explicitRunCrossTaskContext ?? context?.runCrossTaskContext;
+
+  if (!runCrossTaskContext) {
+    return;
+  }
+
+  runCrossTaskContext.sentFiles = [];
+
+  for (const sessionWithRef of activeSessions.values()) {
+    if (sessionWithRef.runCrossTaskContext === runCrossTaskContext) {
+      sessionWithRef.runCrossTaskContext.sentFiles = [];
+    }
+  }
+}
+
 /**
  * Enrich a base session context with the latest taskId/messageId
  * from task-manager (supports interruption scenarios).
