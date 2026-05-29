@@ -3,6 +3,7 @@ import { getXYWebSocketManager } from "../client.js";
 import { sendCommand } from "../formatter.js";
 import type { SessionContext } from "./session-manager.js";
 import { getCurrentTaskId } from "../task-manager.js";
+import { isCronToolCall } from "./session-manager.js";
 import { logger } from "../utils/logger.js";
 
 /**
@@ -50,6 +51,11 @@ export function createXiaoyiGuiTool(ctx: SessionContext): any {
     // Validate parameters
     if (!params.query || typeof params.query !== "string") {
       throw new Error("Missing or invalid required parameter: query must be a non-empty string");
+    }
+
+    // GUI agent only works in active WebSocket sessions — reject cron-triggered calls
+    if (sessionId.startsWith("cron-") || isCronToolCall(toolCallId)) {
+      throw new Error("xiaoyi_gui_agent 不支持定时任务触发，只能在活跃对话中使用");
     }
 
     // Get WebSocket manager

@@ -574,27 +574,30 @@ export const xiaoyiProvider: ProviderPlugin = {
           "$1\n\n$2",
         );
 
-        // (1) 提取 ## Skills (mandatory) 到 </available_skills> 作为第一部分
-        const skillsMatch = sp.match(/(## Skills \(mandatory\)[\s\S]*?<\/available_skills>)/);
-        const part1 = skillsMatch ? skillsMatch[0] : '';
-
-        // (2) 提取 ## /home/sandbox/.openclaw/workspace/SOUL.md 到 ## /home/sandbox/.openclaw/workspace/TOOLS.md 之前的内容作为第二部分
-        const soulMatch = sp.match(/(## \/home\/sandbox\/\.openclaw\/workspace\/SOUL\.md[\s\S]*?)(?=## \/home\/sandbox\/\.openclaw\/workspace\/TOOLS\.md)/);
-        const part2 = soulMatch ? soulMatch[1].trim() : '';
-
-        if (part1 || part2) {
-          // 从原始位置删除已提取的部分
-          if (skillsMatch) sp = sp.replace(skillsMatch[0], '');
-          if (soulMatch) sp = sp.replace(soulMatch[1], '');
-          // 清理多余空行
-          sp = sp.replace(/\n{3,}/g, '\n\n');
-
-          // (3) 将 第二部分 + 第一部分 插入到 ## Runtime 上面
-          const combined = (part2 + '\n\n' + part1).trim();
-          if (combined && sp.includes('## Runtime')) {
-            sp = sp.replace('## Runtime', combined + '\n\n## Runtime');
+        // (1) Skills 部分：移动到 ## Runtime 之前
+        if (sp.includes('## Runtime')) {
+          // 提取 ## Skills (mandatory) 到 </available_skills> 作为第一部分
+          const skillsMatch = sp.match(/(## Skills \(mandatory\)[\s\S]*?<\/available_skills>)/);
+          if (skillsMatch) {
+            const part1 = skillsMatch[0];
+            sp = sp.replace(part1, '');
+            sp = sp.replace('## Runtime', part1 + '\n\n## Runtime');
           }
         }
+
+        // (2) SOUL.md 部分：移动到 ## Silent Replies 之前
+        if (sp.includes('## Silent Replies')) {
+          // 提取 ## /home/sandbox/.openclaw/workspace/SOUL.md 到 其特定脚注结束标志 的内容作为第二部分
+          const soulMatch = sp.match(/(## \/home\/sandbox\/\.openclaw\/workspace\/SOUL\.md[\s\S]*?_This file is yours to evolve\. As you learn who you are, update it\._)/);
+          if (soulMatch) {
+            const part2 = soulMatch[1].trim();
+            sp = sp.replace(soulMatch[1], '');
+            sp = sp.replace('## Silent Replies', part2 + '\n\n## Silent Replies');
+          }
+        }
+
+        // 清理多余空行
+        sp = sp.replace(/\n{3,}/g, '\n\n');
 
         logger.log(`[xiaoyiprovider] system prompt optimized: ${beforeLen} -> ${sp.length}`);
         context.systemPrompt = sp;
