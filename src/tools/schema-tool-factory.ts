@@ -32,7 +32,7 @@ export function createSchemaTool(options: SchemaToolOptions) {
         content: [
           {
             type: "text" as const,
-            text: JSON.stringify(schemas, null, 2),
+            text: "以下为工具列表。请仔细阅读，使用call_device_tool进行调用：\n" + JSON.stringify(schemas, null, 2),
           },
         ],
       };

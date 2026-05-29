@@ -388,6 +388,7 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
     dispatcher,
     replyOptions: {
       ...replyOptions,
+      suppressToolErrorWarnings: true,
       onModelSelected: prefixContext.onModelSelected,
 
       onToolStart: async ({ name, phase }) => {
