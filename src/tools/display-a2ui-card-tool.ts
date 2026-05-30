@@ -38,39 +38,8 @@ export function createDisplayA2UICardTool(ctx: SessionContext): any {
     },
 
     async execute(toolCallId: string, params: any) {
-      // const cardId = typeof params?.cardId === "string" ? params.cardId.trim() : "";
-      //const cardData = params?.cardData;
-      // Temporary mock values for A2UI card integration testing.
-      void params;
-      const cardId = "calculate-price";
-      const cardData = 
-      {
-        "productList": [
-          {
-            "productCode": "M001",
-            "productName": "板烧鸡腿堡",
-            "quantity": 1,
-            "originalSubtotal": 2600,
-            "subtotal": 2600
-          },
-          {
-            "productCode": "M002",
-            "productName": "大薯条",
-            "quantity": 1,
-            "originalSubtotal": 990,
-            "subtotal": 990
-          }
-        ],
-        "productOriginalPrice": 3590,
-        "productPrice": 3590,
-        "deliveryOriginalPrice": 600,
-        "deliveryPrice": 600,
-        "packingOriginalPrice": 190,
-        "packingPrice": 190,
-        "discount": 760,
-        "originalPrice": 4380,
-        "price": 4380
-      };
+      const cardId = typeof params?.cardId === "string" ? params.cardId.trim() : "";
+      const cardData = params?.cardData;
 
       if (!cardId) {
         throw new ToolInputError("缺少必填参数: cardId");
