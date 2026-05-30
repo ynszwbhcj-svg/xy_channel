@@ -3,10 +3,10 @@
  */
 
 import fs from 'fs';
+import path from 'path';
 
-import {HttpHeaders, ENV_FILE_PATH, API_URL_SUFFIX, REQUIRED_ENV_VARS} from './constants.js';
+import {HttpHeaders, CONFIG_FILE_NAME, ENV_FILE_PATH, API_URL_SUFFIX, REQUIRED_ENV_VARS} from './constants.js';
 import { logger } from '../utils/logger.js';
-import defaultConfig from './configs.json' with { type: 'json' };
 
 export interface ApiConfig {
     url: string;
@@ -69,31 +69,54 @@ export function getConfig(api): Config {
         return cachedConfig;
     }
 
-    // Use imported JSON (bundled at compile time, no runtime file read needed)
-    const config = { ...defaultConfig } as Partial<Config>;
+    const configPath = path.join(__dirname, CONFIG_FILE_NAME);
+
+    if (!fs.existsSync(configPath)) {
+        throw new Error(`Config file not found: ${CONFIG_FILE_NAME}`);
+    }
+
+    let configData: string;
+    try {
+        configData = fs.readFileSync(configPath, 'utf-8');
+    } catch (error) {
+        throw new Error(`Failed to read config file: ${CONFIG_FILE_NAME}.`);
+    }
+
+    let parsedConfig: unknown;
+    try {
+        parsedConfig = JSON.parse(configData);
+    } catch (error) {
+        throw new Error(`Failed to parse config file: ${CONFIG_FILE_NAME}.`);
+    }
+
+    if (!parsedConfig || typeof parsedConfig !== 'object') {
+        throw new Error(`Invalid config structure: ${CONFIG_FILE_NAME}. Expected an object.`);
+    }
+
+    const config = parsedConfig as Partial<Config>;
 
     if (!config.api || typeof config.api !== 'object') {
-        throw new Error(`Invalid config: missing or invalid 'api' section`);
+        throw new Error(`Invalid config: missing or invalid 'api' section in ${CONFIG_FILE_NAME}`);
     }
 
     if (!config.api.timeout || typeof config.api.timeout !== 'number') {
-        throw new Error(`Invalid config: missing or invalid 'api.timeout'`);
+        throw new Error(`Invalid config: missing or invalid 'api.timeout' in ${CONFIG_FILE_NAME}`);
     }
 
     if (!config.skillId || typeof config.skillId !== 'string') {
-        throw new Error(`Invalid config: missing or invalid 'skillId'`);
+        throw new Error(`Invalid config: missing or invalid 'skillId' in ${CONFIG_FILE_NAME}`);
     }
 
     if (!config.requestFrom || typeof config.requestFrom !== 'string') {
-        throw new Error(`Invalid config: missing or invalid 'requestFrom'`);
+        throw new Error(`Invalid config: missing or invalid 'requestFrom' in ${CONFIG_FILE_NAME}`);
     }
 
     if (!config.textSource || typeof config.textSource !== 'string') {
-        throw new Error(`Invalid config: missing or invalid 'textSource'`);
+        throw new Error(`Invalid config: missing or invalid 'textSource' in ${CONFIG_FILE_NAME}`);
     }
 
     if (!config.action || typeof config.action !== 'string') {
-        throw new Error(`Invalid config: missing or invalid 'action'`);
+        throw new Error(`Invalid config: missing or invalid 'action' in ${CONFIG_FILE_NAME}`);
     }
 
     let env: Record<string, string>;

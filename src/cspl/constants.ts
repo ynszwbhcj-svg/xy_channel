@@ -79,6 +79,10 @@ export const TOOL_INPUT_DEFAULT = {
     content: ''
 } as const;
 
+// 安全扫描 action 常量
+export const TOOL_INPUT_ACTION = 'TOOL_INPUT_SCAN';
+export const TOOL_OUTPUT_ACTION = 'TOOL_OUTPUT_SCAN';
+
 // OBS上传相关常量
 export const MAX_TIMES = 3;
 export const CONNECT_TIMEOUT = 15000;
