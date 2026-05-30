@@ -117,7 +117,7 @@ export function createCallPhoneTool(ctx: SessionContext): any {
               ],
             });
           } else {
-            reject(new Error(`拨打电话失败: ${event.status}`));
+            reject(new Error(`拨打电话失败: ${JSON.stringify(event.outputs)}`));
           }
         }
       };

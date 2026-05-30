@@ -119,7 +119,7 @@ b. 使用该工具之前需获取当前真实时间
               ],
             });
           } else {
-            reject(new Error(`检索邮件失败: ${event.status}`));
+            reject(new Error(`检索邮件失败: ${JSON.stringify(event.outputs)}`));
           }
         }
       };

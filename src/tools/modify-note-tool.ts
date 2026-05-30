@@ -113,7 +113,7 @@ export function createModifyNoteTool(ctx: SessionContext): any {
               ],
             });
           } else {
-            reject(new Error(`修改备忘录失败: ${event.status}`));
+            reject(new Error(`修改备忘录失败: ${JSON.stringify(event.outputs)}`));
           }
         }
       };

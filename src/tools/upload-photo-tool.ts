@@ -191,7 +191,7 @@ async function getPhotoUrls(
 
           resolve(imageUrls);
         } else {
-          reject(new Error(`获取照片URL失败: ${event.status}`));
+          reject(new Error(`获取照片URL失败: ${JSON.stringify(event.outputs)}`));
         }
       }
     };

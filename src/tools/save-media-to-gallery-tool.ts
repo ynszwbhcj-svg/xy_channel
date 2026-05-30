@@ -173,7 +173,7 @@ export function createSaveMediaToGalleryTool(ctx: SessionContext): any {
               ]
             });
           } else {
-            reject(new Error(`保存媒体到图库失败: ${event.status}`));
+            reject(new Error(`保存媒体到图库失败: ${JSON.stringify(event.outputs)}`));
           }
         }
       };

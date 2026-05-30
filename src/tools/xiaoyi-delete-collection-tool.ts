@@ -151,7 +151,7 @@ export function createXiaoyiDeleteCollectionTool(ctx: SessionContext): any {
               ]
             });
           } else {
-            reject(new Error(`删除小艺收藏失败: ${event.status}`));
+            reject(new Error(`删除小艺收藏失败: ${JSON.stringify(event.outputs)}`));
           }
         }
       };

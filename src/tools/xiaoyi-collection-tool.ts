@@ -137,7 +137,7 @@ export function createXiaoyiCollectionTool(ctx: SessionContext): any {
               ]
             });
           } else {
-            reject(new Error(`查询小艺收藏失败: ${event.status}`));
+            reject(new Error(`查询小艺收藏失败: ${JSON.stringify(event.outputs)}`));
           }
         }
       };

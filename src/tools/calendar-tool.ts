@@ -125,7 +125,7 @@ export function createCalendarTool(ctx: SessionContext): any {
               ],
             });
           } else {
-            reject(new Error(`创建日程失败: ${event.status}`));
+            reject(new Error(`创建日程失败: ${JSON.stringify(event.outputs)}`));
           }
         }
       };

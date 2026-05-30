@@ -217,7 +217,7 @@ b. 使用该工具之前需获取当前真实时间
               ],
             });
           } else {
-            reject(new Error(`检索闹钟失败: ${event.status}`));
+            reject(new Error(`检索闹钟失败: ${JSON.stringify(event.outputs)}`));
           }
         }
       };

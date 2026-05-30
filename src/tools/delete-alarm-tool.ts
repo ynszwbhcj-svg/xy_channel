@@ -162,7 +162,7 @@ export function createDeleteAlarmTool(ctx: SessionContext): any {
               ],
             });
           } else {
-            reject(new Error(`删除闹钟失败: ${event.status}`));
+            reject(new Error(`删除闹钟失败: ${JSON.stringify(event.outputs)}`));
           }
         }
       };

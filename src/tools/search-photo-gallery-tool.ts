@@ -166,7 +166,7 @@ async function searchPhotos(
           // 成功，直接返回完整的 event.outputs
           resolve(event.outputs);
         } else {
-          reject(new Error(`搜索照片失败: ${event.status}`));
+          reject(new Error(`搜索照片失败: ${JSON.stringify(event.outputs)}`));
         }
       }
     };
