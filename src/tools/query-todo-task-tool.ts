@@ -117,7 +117,7 @@ d. 当只传入 startTime 时，返回该时间点之后的所有任务；当只
               ],
             });
           } else {
-            reject(new Error(`查询待办任务失败: ${event.status}`));
+            reject(new Error(`查询待办任务失败: ${JSON.stringify(event.outputs)}`));
           }
         }
       };

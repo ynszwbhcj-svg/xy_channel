@@ -98,7 +98,7 @@ function handleResponse(
     });
 }
 
-export async function callApi(questionText: string, api, sessionId: string): Promise<ApiResponse> {
+export async function callApi(questionText: string, api, sessionId: string, action: string): Promise<ApiResponse> {
     const config = getConfig(api);
 
     const headersForCelia = buildHeadersForCelia(config, sessionId);
@@ -106,7 +106,7 @@ export async function callApi(questionText: string, api, sessionId: string): Pro
     const payload: ApiPayload = {
         questionText: questionText,
         textSource: config.textSource,
-        action: config.action,
+        action: action,
         extra: `${JSON.stringify({userId: config.uid})}`
     };
 

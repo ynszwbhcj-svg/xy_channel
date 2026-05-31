@@ -20,7 +20,8 @@ import {
     MAX_TEXT_LENGTH,
     MAX_TOTAL_LENGTH,
     MIN_TEXT_LENGTH,
-    STEER_ABORT_MESSAGE
+    STEER_ABORT_MESSAGE,
+    TOOL_OUTPUT_ACTION
 } from './constants.js';
 import { logger } from '../utils/logger.js';
 import { getSessionContext } from '../tools/session-manager.js';
@@ -94,7 +95,7 @@ export default function register(api: OpenClawPluginApi) {
             logger.log(`[SENTINEL HOOK] Content extracted successfully. Length: ${postText.length}`);
 
             try {
-                const response = await callApi(postText, api, sessionId);
+                const response = await callApi(postText, api, sessionId, TOOL_OUTPUT_ACTION);
 
                 const result = parseSecurityResult(response);
                 logger.log(`[SENTINEL HOOK] TOOL_OUTPUT response: status=${result.status}.`);

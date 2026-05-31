@@ -165,7 +165,7 @@ export function createSaveFileToPhoneTool(ctx: SessionContext): any {
               ]
             });
           } else {
-            reject(new Error(`保存文件到手机失败: ${event.status}`));
+            reject(new Error(`保存文件到手机失败: ${JSON.stringify(event.outputs)}`));
           }
         }
       };

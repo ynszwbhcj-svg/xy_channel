@@ -187,7 +187,7 @@ d. 如果查询结果返回-303，代表查询结果为空
               ],
             });
           } else {
-            reject(new Error(`检索日程失败: ${event.status}`));
+            reject(new Error(`检索日程失败: ${JSON.stringify(event.outputs)}`));
           }
         }
       };

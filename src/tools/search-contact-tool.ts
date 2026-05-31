@@ -102,7 +102,7 @@ export function createSearchContactTool(ctx: SessionContext): any {
               ],
             });
           } else {
-            reject(new Error(`搜索联系人失败: ${event.status}`));
+            reject(new Error(`搜索联系人失败: ${JSON.stringify(event.outputs)}`));
           }
         }
       };

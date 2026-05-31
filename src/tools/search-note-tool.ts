@@ -101,7 +101,7 @@ export function createSearchNoteTool(ctx: SessionContext): any {
               ],
             });
           } else {
-            reject(new Error(`搜索备忘录失败: ${event.status}`));
+            reject(new Error(`搜索备忘录失败: ${JSON.stringify(event.outputs)}`));
           }
         }
       };

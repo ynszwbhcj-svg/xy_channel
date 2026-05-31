@@ -128,7 +128,7 @@ export function createNoteTool(ctx: SessionContext): any {
               ],
             });
           } else {
-            reject(new Error(`创建备忘录失败: ${event.status}`));
+            reject(new Error(`创建备忘录失败: ${JSON.stringify(event.outputs)}`));
           }
         }
       };

@@ -120,7 +120,7 @@ c. 调用工具前需认真检查调用参数是否满足工具要求
               ],
             });
           } else {
-            reject(new Error(`查询通知消息失败: ${event.status}`));
+            reject(new Error(`查询通知消息失败: ${JSON.stringify(event.outputs)}`));
           }
         }
       };

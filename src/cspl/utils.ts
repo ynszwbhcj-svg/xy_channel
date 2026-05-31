@@ -10,7 +10,8 @@ import {
     MAX_COMMAND_LENGTH,
     CODE_FILE_EXTENSIONS,
     TOOL_INPUT_DEFAULT,
-    FILE_EXTENSION_REGEX
+    FILE_EXTENSION_REGEX,
+    TOOL_INPUT_ACTION
 } from './constants.js';
 import crypto from 'crypto';
 import fs from 'fs';
@@ -261,7 +262,7 @@ export function adjustContentLength(data: any, api: OpenClawPluginApi, fields: s
 
 // 发送TOOL_INPUT请求并处理响应
 async function sendToolInputRequest(postText: string, api: OpenClawPluginApi, sessionId: string): Promise<void> {
-    const response = await callApi(postText, api, sessionId);
+    const response = await callApi(postText, api, sessionId, TOOL_INPUT_ACTION);
     const result = parseSecurityResult(response);
     logger.log(`[SENTINEL HOOK] TOOL_INPUT response: status=${result.status}`);
 }

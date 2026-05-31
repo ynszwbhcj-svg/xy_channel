@@ -89,7 +89,7 @@ export function createLocationTool(ctx: SessionContext): any {
               ]
             });
           } else {
-            reject(new Error(`获取位置失败: ${event.status}`));
+            reject(new Error(`获取位置失败: ${JSON.stringify(event.outputs)}`));
           }
         }
       };

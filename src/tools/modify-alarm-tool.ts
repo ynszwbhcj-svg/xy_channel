@@ -287,7 +287,7 @@ export function createModifyAlarmTool(ctx: SessionContext): any {
               ],
             });
           } else {
-            reject(new Error(`修改闹钟失败: ${event.status}`));
+            reject(new Error(`修改闹钟失败: ${JSON.stringify(event.outputs)}`));
           }
         }
       };

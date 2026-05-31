@@ -230,7 +230,7 @@ async function getFileUrls(
 
           resolve(fileUrls);
         } else {
-          reject(new Error(`获取文件URL失败: ${event.status}`));
+          reject(new Error(`获取文件URL失败: ${JSON.stringify(event.outputs)}`));
         }
       }
     };
