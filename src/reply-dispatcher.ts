@@ -525,10 +525,10 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
               taskId: currentTaskId,
               messageId: currentMessageId,
               text,
-              append: true,
+              append: false,
               final: false,
             });
-            scopedLog().log(`[PARTIAL-REPLY] Sent via sendA2AResponse(append:true, final:false)`);
+            scopedLog().log(`[PARTIAL-REPLY] Sent via sendA2AResponse(append:false, final:false)`);
           }
         } catch (err) {
           scopedLog().error(`[PARTIAL-REPLY] Failed to send partial reply:`, err);
