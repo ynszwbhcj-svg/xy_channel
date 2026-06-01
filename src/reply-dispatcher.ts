@@ -514,7 +514,7 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
               sessionId,
               taskId: currentTaskId,
               messageId: currentMessageId,
-              text,
+              text: accumulatedText,
               append: false,
               final: false,
               log: false,
