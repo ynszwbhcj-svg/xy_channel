@@ -119,7 +119,7 @@ export async function handleCronQueryEvent(context, cfg) {
  *   [ { "YYYY-MM-DD": [ { run record with .name }, ... ] }, ... ]
  */
 async function queryTimeListLocal() {
-    const cronDir = join(os.homedir(), " .openclaw", "cron");
+    const cronDir = join(os.homedir(), ".openclaw", "cron");
     const jobsPath = join(cronDir, "jobs.json");
     const runsDir = join(cronDir, "runs");
 
