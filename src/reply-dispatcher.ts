@@ -517,6 +517,7 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
               text,
               append: false,
               final: false,
+              log: false,
             });
           }
         } catch (err) {
