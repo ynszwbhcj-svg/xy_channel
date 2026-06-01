@@ -229,17 +229,19 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
 
           accumulatedText += text;
           hasSentResponse = true;
-          scopedLog().log(`[DELIVER] Accumulated text, length=${accumulatedText.length}`);
+          scopedLog().log(`[DELIVER] Sending text chunk via A2A response, length=${text.length}`);
 
-          // 🔑 使用动态taskId发送reasoningText更新
-          await sendReasoningTextUpdate({
+          // 🔑 使用动态taskId发送A2A响应（流式append）
+          await sendA2AResponse({
             config,
             sessionId,
             taskId: currentTaskId,
             messageId: currentMessageId,
             text,
+            append: true,
+            final: false,
           });
-          scopedLog().log(`[DELIVER] Sent deliver text as reasoningText update`);
+          scopedLog().log(`[DELIVER] Sent deliver text as A2A response`);
         } catch (deliverError) {
           scopedLog().error(`Failed to deliver message:`, deliverError);
         }
@@ -315,18 +317,18 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
             });
             scopedLog().log(`[ON-IDLE] Sent completion status update`);
 
-            // 🔑 使用动态taskId发送最终响应
+            // 🔑 使用动态taskId发送最终响应（空字符串表示流结束）
             await sendA2AResponse({
               config,
               sessionId,
               taskId: currentTaskId,
               messageId: currentMessageId,
-              text: accumulatedText,
+              text: "",
               append: false,
               final: true,
             });
             finalSent = true;
-            scopedLog().log(`[ON-IDLE] Sent final response`);
+            scopedLog().log(`[ON-IDLE] Sent final response (empty, stream end)`);
           } catch (err) {
             scopedLog().error(`[ON-IDLE] Failed to send final response:`, err);
           }
@@ -466,11 +468,27 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
           return;
         }
 
+        const currentTaskId = getActiveTaskId();
+        const currentMessageId = getActiveMessageId();
         const text = payload.text ?? "";
+
         scopedLog().log(`[REASONING-STREAM] Reasoning chunk received, text.length: ${text.length}`);
 
-        // Reasoning stream 目前被注释掉
-        // 如果需要可以启用
+        try {
+          if (text.length > 0) {
+            // 🔑 将模型真实的thinking/reasoning内容通过reasoningText转发
+            await sendReasoningTextUpdate({
+              config,
+              sessionId,
+              taskId: currentTaskId,
+              messageId: currentMessageId,
+              text,
+              append: true,
+            });
+          }
+        } catch (err) {
+          scopedLog().error(`[REASONING-STREAM] Failed to send reasoning text:`, err);
+        }
       },
 
       onPartialReply: async (payload: ReplyPayload) => {
