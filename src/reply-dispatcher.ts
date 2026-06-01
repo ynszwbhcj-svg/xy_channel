@@ -219,8 +219,7 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
         const currentTaskId = getActiveTaskId();
         const currentMessageId = getActiveMessageId();
 
-        // 🔑 诊断日志：确认 deliver 是否被调用及与 onPartialReply 的时序关系
-        scopedLog().log(`[DELIVER] Called, kind=${info?.kind}, text.length=${text.length}, hasSentResponse=${hasSentResponse}, preview="${text.slice(0, 50)}"`);
+        scopedLog().log(`[DELIVER] kind=${info?.kind}, text.length=${text.length}`);
 
         try {
           if (!text.trim()) {
@@ -230,13 +229,12 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
 
           // 🔑 如果 onPartialReply 已经流式发送过文本，deliver 不再重复发送
           if (hasSentResponse) {
-            scopedLog().log(`[DELIVER SKIP] Already sent via onPartialReply, skipping duplicate delivery`);
+            scopedLog().log(`[DELIVER SKIP] Already sent via onPartialReply`);
             return;
           }
 
           accumulatedText += text;
           hasSentResponse = true;
-          scopedLog().log(`[DELIVER] First delivery, sending via A2A response, length=${text.length}`);
 
           // 🔑 使用动态taskId发送A2A响应（流式append）
           await sendA2AResponse({
@@ -248,7 +246,6 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
             append: true,
             final: false,
           });
-          scopedLog().log(`[DELIVER] Sent deliver text as A2A response`);
         } catch (deliverError) {
           scopedLog().error(`Failed to deliver message:`, deliverError);
         }
@@ -479,8 +476,7 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
         const currentMessageId = getActiveMessageId();
         const text = payload.text ?? "";
 
-        // 🔑 诊断日志：确认 onReasoningStream 是否被触发
-        scopedLog().log(`[REASONING-STREAM] *** CALLED *** text.length=${text.length}, preview="${text.slice(0, 80)}"`);
+        scopedLog().log(`[REASONING-STREAM] text.length=${text.length}`);
 
         try {
           if (text.length > 0) {
@@ -493,7 +489,6 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
               text,
               append: true,
             });
-            scopedLog().log(`[REASONING-STREAM] Sent via sendReasoningTextUpdate(append:true)`);
           }
         } catch (err) {
           scopedLog().error(`[REASONING-STREAM] Failed to send reasoning text:`, err);
@@ -510,8 +505,7 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
         const currentMessageId = getActiveMessageId();
         const text = payload.text ?? "";
 
-        // 🔑 诊断日志：确认 onPartialReply 是否被调用及内容
-        scopedLog().log(`[PARTIAL-REPLY] Called, text.length=${text.length}, preview="${text.slice(0, 50)}"`);
+        scopedLog().log(`[PARTIAL-REPLY] text.length=${text.length}`);
 
         try {
           if (text.length > 0) {
@@ -528,7 +522,6 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
               append: false,
               final: false,
             });
-            scopedLog().log(`[PARTIAL-REPLY] Sent via sendA2AResponse(append:false, final:false)`);
           }
         } catch (err) {
           scopedLog().error(`[PARTIAL-REPLY] Failed to send partial reply:`, err);
