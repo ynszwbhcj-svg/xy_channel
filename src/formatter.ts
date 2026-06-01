@@ -135,12 +135,16 @@ export async function sendA2AResponse(params: SendA2AResponseParams): Promise<vo
     msgDetail: JSON.stringify(jsonRpcResponse),
   };
 
-  // Log complete response body
-  const redactedText = redactSensitiveText(bridgedText ?? "");
-  log.log(`[A2A_RESPONSE] Sending artifact-update, append=${append}, final=${final}, text=${buildTextPreview(redactedText)}, files=${files?.length ?? 0}, sensitive=${containsSensitiveInfo(bridgedText ?? "")}`);
+  // Log only for non-streaming responses (final=true or has error/files) to reduce noise
+  if (final || files?.length || errorCode !== undefined) {
+    const redactedText = redactSensitiveText(bridgedText ?? "");
+    log.log(`[A2A_RESPONSE] Sending artifact-update, append=${append}, final=${final}, text=${buildTextPreview(redactedText)}, files=${files?.length ?? 0}, sensitive=${containsSensitiveInfo(bridgedText ?? "")}`);
+  }
 
   await wsManager.sendMessage(sessionId, outboundMessage);
-  log.log(`[A2A_RESPONSE] Message sent successfully`);
+  if (final || files?.length || errorCode !== undefined) {
+    log.log(`[A2A_RESPONSE] Message sent successfully`);
+  }
 }
 
 /**

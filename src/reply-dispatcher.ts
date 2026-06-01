@@ -476,8 +476,6 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
         const currentMessageId = getActiveMessageId();
         const text = payload.text ?? "";
 
-        scopedLog().log(`[REASONING-STREAM] text.length=${text.length}`);
-
         try {
           if (text.length > 0) {
             // 🔑 将模型真实的thinking/reasoning内容通过reasoningText转发
@@ -504,8 +502,6 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
         const currentTaskId = getActiveTaskId();
         const currentMessageId = getActiveMessageId();
         const text = payload.text ?? "";
-
-        scopedLog().log(`[PARTIAL-REPLY] text.length=${text.length}`);
 
         try {
           if (text.length > 0) {
