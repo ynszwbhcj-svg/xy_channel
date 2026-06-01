@@ -487,7 +487,7 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
               taskId: currentTaskId,
               messageId: currentMessageId,
               text,
-              append: true,
+              append: false,
             });
           }
         } catch (err) {
