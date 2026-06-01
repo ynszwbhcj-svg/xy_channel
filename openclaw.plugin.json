@@ -1,0 +1,36 @@
+{
+  "id": "xiaoyi-channel",
+  "channels": ["xiaoyi-channel"],
+  "providers": ["xiaoyiprovider"],
+  "providerDiscoveryEntry": "./dist/provider-discovery.js",
+  "contracts": {
+    "agentToolResultMiddleware": ["pi"]
+  },
+  "skills": [],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  },
+  "channelConfigs": {
+    "xiaoyi-channel": {
+      "schema": {
+        "type": "object",
+        "properties": {
+          "enabled": { "type": "boolean", "description": "Enable/disable the XY channel", "default": false },
+          "wsUrl1": { "type": "string", "description": "Primary WebSocket URL" },
+          "wsUrl2": { "type": "string", "description": "Secondary WebSocket URL" },
+          "apiKey": { "type": "string", "description": "API key for authentication" },
+          "uid": { "type": "string", "description": "User ID for file upload" },
+          "agentId": { "type": "string", "description": "Agent ID for this bot instance" },
+          "apiId": { "type": "string", "description": "API ID for push messages" },
+          "fileUploadUrl": { "type": "string", "description": "Base URL for file upload service" },
+          "pushUrl": { "type": "string", "description": "URL for push message service" }
+        },
+        "required": []
+      },
+      "label": "Xiaoyi Channel",
+      "description": "Xiaoyi A2A protocol integration"
+    }
+  }
+}
