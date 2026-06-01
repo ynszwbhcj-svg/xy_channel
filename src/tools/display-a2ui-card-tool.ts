@@ -11,8 +11,8 @@ class ToolInputError extends Error {
   }
 }
 
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === "object" && !Array.isArray(value);
+function isJsonObjectOrArray(value: unknown): value is Record<string, unknown> | unknown[] {
+  return !!value && typeof value === "object";
 }
 
 export function createDisplayA2UICardTool(ctx: SessionContext): any {
@@ -30,8 +30,11 @@ export function createDisplayA2UICardTool(ctx: SessionContext): any {
           description: "A2UI card 的唯一标识。",
         },
         cardData: {
-          type: "object",
-          description: "A2UI card 渲染所需的数据对象，由模型根据 MCP 工具返回结果填充。",
+          oneOf: [
+            { type: "object" },
+            { type: "array" },
+          ],
+          description: "A2UI card 渲染所需的 JSON 对象或 JSON 数组，由模型根据 MCP 工具返回结果填充。",
         },
       },
       required: ["cardId", "cardData"],
@@ -45,8 +48,8 @@ export function createDisplayA2UICardTool(ctx: SessionContext): any {
         throw new ToolInputError("缺少必填参数: cardId");
       }
 
-      if (!isPlainObject(cardData)) {
-        throw new ToolInputError("缺少必填参数: cardData，且必须是对象");
+      if (!isJsonObjectOrArray(cardData)) {
+        throw new ToolInputError("缺少必填参数: cardData，且必须是 JSON 对象或 JSON 数组");
       }
 
       const currentTaskId = getCurrentTaskId(sessionId) ?? taskId;
