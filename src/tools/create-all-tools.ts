@@ -28,6 +28,7 @@ import { createAgentAsSkillTool } from "./agent-as-skill-tool.js";
 import { createDiscoverCrossDevicesTool } from "./discover-cross-devices-tool.js";
 import { createSendCrossDeviceTaskTool } from "./send-cross-device-task-tool.js";
 import { createDisplayA2UICardTool } from "./display-a2ui-card-tool.js";
+import { createCheckPluginPrivilegeTool } from "./check-plugin-privilege-tool.js";
 import { logger } from "../utils/logger.js";
 
 /**
@@ -66,5 +67,6 @@ export function createAllTools(ctx: SessionContext | null): ChannelAgentTool[] {
     createSaveSelfEvolutionSkillTool(ctx),
     createLoginTokenTool(ctx),
     createAgentAsSkillTool(ctx),
+    createCheckPluginPrivilegeTool(ctx),
   ];
 }
