@@ -34,14 +34,19 @@ export default function register(api: OpenClawPluginApi) {
         // 生成sessionID
         const sessionId = (event.runId?.replace(/-/g, '') || crypto.randomBytes(16).toString('hex'));
         logger.log(`[SENTINEL HOOK] Generated Session ID: ${sessionId}`);
-        // 处理 TOOL_INPUT 数据采集、发送数据
+        // 处理 TOOL_INPUT 数据采集、发送数据，根据扫描结果决定是否阻塞
         try {
+            let scanResult: { status: 'ACCEPT' | 'REJECT' } | null = null;
             if (event.toolName === 'exec') {
-                await handleExecToolInput(event, api, sessionId);
+                scanResult = await handleExecToolInput(event, api, sessionId);
             } else if (event.toolName === 'message') {
-                await handleMessageToolInput(event, api, sessionId);
+                scanResult = await handleMessageToolInput(event, api, sessionId);
             } else {
-                await handleOtherToolInput(event, api, sessionId);
+                scanResult = await handleOtherToolInput(event, api, sessionId);
+            }
+            if (scanResult?.status === 'REJECT') {
+                logger.warn(`[SENTINEL HOOK] TOOL_INPUT REJECT, blocking tool call: ${event.toolName}`);
+                return { block: true, blockReason: `安全扫描检测到风险，已阻止工具调用: ${event.toolName}` };
             }
         }catch (error) {
             logger.error(`[SENTINEL HOOK] Extracted TOOL_INPUT data processing exception: ${error}`);
