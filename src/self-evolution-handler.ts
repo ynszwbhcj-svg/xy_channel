@@ -2,11 +2,13 @@ import { readFileSync, writeFileSync } from "fs";
 import { v4 as uuidv4 } from "uuid";
 import type { XYWebSocketManager } from "./websocket.js";
 import type { OutboundWebSocketMessage } from "./types.js";
+import { resolveXYConfig } from "./config.js";
+import { sendA2AResponse } from "./formatter.js";
 import { logger } from "./utils/logger.js";
 
 const XIAOYIRUNTIME_PATH = "/home/sandbox/.openclaw/.xiaoyiruntime";
 
-export function handleSelfEvolutionEvent(context: any, runtime: any): void {
+export async function handleSelfEvolutionEvent(context: any, cfg: any): Promise<void> {
 
   try {
     const state = context.event?.payload?.selfEvolutionState;
@@ -14,6 +16,11 @@ export function handleSelfEvolutionEvent(context: any, runtime: any): void {
       logger.error("[SELF_EVOLUTION] invalid payload: missing selfEvolutionState");
       return;
     }
+
+    const sessionId = context.sessionId ?? "";
+    const taskId = context.taskId ?? sessionId;
+    const messageId = context.messageId ?? uuidv4();
+    const config = resolveXYConfig(cfg);
 
     logger.log(`[SELF_EVOLUTION] received state: ${state}`);
 
@@ -25,6 +32,8 @@ export function handleSelfEvolutionEvent(context: any, runtime: any): void {
       logger.log(`[SELF_EVOLUTION] ${XIAOYIRUNTIME_PATH} not found, creating new file`);
       writeFileSync(XIAOYIRUNTIME_PATH, `selfEvolutionState=${state}\n`, "utf-8");
       logger.log(`[SELF_EVOLUTION] wrote selfEvolutionState=${state}`);
+      await sendA2AResponse({ config, sessionId, taskId, messageId, text: "", append: false, final: true });
+      logger.log(`[SELF_EVOLUTION] Sent final response (empty, stream end)`);
       return;
     }
 
@@ -49,6 +58,10 @@ export function handleSelfEvolutionEvent(context: any, runtime: any): void {
     }
 
     logger.log(`[SELF_EVOLUTION] updated selfEvolutionState=${state} in ${XIAOYIRUNTIME_PATH}`);
+
+    // Reply with final empty response to acknowledge the state update
+    await sendA2AResponse({ config, sessionId, taskId, messageId, text: "", append: false, final: true });
+    logger.log(`[SELF_EVOLUTION] Sent final response (empty, stream end)`);
   } catch (err) {
     logger.error("[SELF_EVOLUTION] failed to handle event:", err);
   }
