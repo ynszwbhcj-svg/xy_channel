@@ -474,7 +474,13 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
 
         const currentTaskId = getActiveTaskId();
         const currentMessageId = getActiveMessageId();
-        const text = payload.text ?? "";
+        let text = payload.text ?? "";
+
+        // Strip "Reasoning:" prefix that some reasoning models add to their thinking output
+        const lines = text.split(/\r?\n/);
+        if (lines[0]?.trim() === "Reasoning:") {
+          text = lines.slice(1).join("\n").trim();
+        }
 
         try {
           if (text.length > 0) {
