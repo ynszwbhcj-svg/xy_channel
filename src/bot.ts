@@ -68,9 +68,9 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
     const messageMethod = message.method;
 
 
-    // Handle clearContext messages (params only has sessionId)
+    // Handle clearContext messages (sessionId at top level, no params)
     if (messageMethod === "clearContext" || messageMethod === "clear_context") {
-      const sessionId = message.params?.sessionId;
+      const sessionId = message.sessionId ?? message.params?.sessionId;
       if (!sessionId) {
         throw new Error("clearContext request missing sessionId in params");
       }
@@ -85,9 +85,9 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
       return;
     }
 
-    // Handle tasks/cancel messages
+    // Handle tasks/cancel messages (sessionId at top level, no params)
     if (messageMethod === "tasks/cancel" || messageMethod === "tasks_cancel") {
-      const sessionId = message.params?.sessionId;
+      const sessionId = message.sessionId ?? message.params?.sessionId;
       const taskId = message.params?.id || message.id;
       if (!sessionId) {
         throw new Error("tasks/cancel request missing sessionId in params");

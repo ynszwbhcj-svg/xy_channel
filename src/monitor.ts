@@ -147,33 +147,42 @@ export async function monitorXYProvider(opts: MonitorXYOpts = {}): Promise<void>
       };
 
       // 🔑 核心改造：检测steer模式
-      // 需要提前解析消息以获取sessionId
-      try {
-        const parsed = parseA2AMessage(message);
-        const steerMode = cfg.messages?.queue?.mode === "steer";
-        const hasActiveRun = hasActiveTask(parsed.sessionId);
+      // clearContext / tasks/cancel 没有 params，跳过 parseA2AMessage 直接入队
+      const messageMethod = message.method;
+      if (messageMethod === "clearContext" || messageMethod === "clear_context"
+        || messageMethod === "tasks/cancel" || messageMethod === "tasks_cancel") {
+        void enqueue(sessionId, task).catch((err) => {
+          logger.error(`XY gateway: queue processing failed: ${String(err)}`);
+          activeMessages.delete(messageKey);
+        });
+      } else {
+        try {
+          const parsed = parseA2AMessage(message);
+          const steerMode = cfg.messages?.queue?.mode === "steer";
+          const hasActiveRun = hasActiveTask(parsed.sessionId);
 
-        if (steerMode && hasActiveRun) {
-          // Steer模式且有活跃任务：不入队列，直接并发执行
-          logger.log(`[MONITOR-HANDLER] STEER MODE: Executing concurrently for messageKey=${messageKey}`);
-          void task().catch((err) => {
-            logger.error(`XY gateway: concurrent steer task failed for ${messageKey}: ${String(err)}`);
-            activeMessages.delete(messageKey);
-          });
-        } else {
-          // 正常模式：入队列串行执行
+          if (steerMode && hasActiveRun) {
+            // Steer模式且有活跃任务：不入队列，直接并发执行
+            logger.log(`[MONITOR-HANDLER] STEER MODE: Executing concurrently for messageKey=${messageKey}`);
+            void task().catch((err) => {
+              logger.error(`XY gateway: concurrent steer task failed for ${messageKey}: ${String(err)}`);
+              activeMessages.delete(messageKey);
+            });
+          } else {
+            // 正常模式：入队列串行执行
+            void enqueue(sessionId, task).catch((err) => {
+              logger.error(`XY gateway: queue processing failed: ${String(err)}`);
+              activeMessages.delete(messageKey);
+            });
+          }
+        } catch (parseErr) {
+          // 解析失败，回退到正常队列模式
+          logger.error(`[MONITOR-HANDLER] Failed to parse message for steer detection: ${String(parseErr)}`);
           void enqueue(sessionId, task).catch((err) => {
             logger.error(`XY gateway: queue processing failed: ${String(err)}`);
             activeMessages.delete(messageKey);
           });
         }
-      } catch (parseErr) {
-        // 解析失败，回退到正常队列模式
-        logger.error(`[MONITOR-HANDLER] Failed to parse message for steer detection: ${String(parseErr)}`);
-        void enqueue(sessionId, task).catch((err) => {
-          logger.error(`XY gateway: queue processing failed: ${String(err)}`);
-          activeMessages.delete(messageKey);
-        });
       }
     };
 
