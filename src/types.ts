@@ -24,8 +24,10 @@ export interface XYChannelConfig {
 export interface A2AJsonRpcRequest {
   jsonrpc: "2.0";
   method: string;
-  params: A2ARequestParams;
+  params?: A2ARequestParams;
   id: string;
+  /** Top-level sessionId for clearContext/tasks/cancel (no params field) */
+  sessionId?: string;
 }
 
 export interface A2AJsonRpcResponse {
