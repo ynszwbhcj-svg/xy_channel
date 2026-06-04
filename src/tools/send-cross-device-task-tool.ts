@@ -119,7 +119,6 @@ async function sendFileCardsToUser(ctx: SessionContext, fileCards: SentFileCard[
   const sentFileCards: Array<{ fileName: string; fileId: string }> = [];
 
   for (const card of fileCards) {
-    const mimeType = card.mimeType || "application/octet-stream";
     const agentResponse: OutboundWebSocketMessage = {
       msgType: "agent_response",
       agentId: config.agentId,
@@ -140,7 +139,7 @@ async function sendFileCardsToUser(ctx: SessionContext, fileCards: SentFileCard[
                 kind: "file",
                 file: {
                   name: card.fileName,
-                  mimeType,
+                  mimeType: card.mimeType,
                   fileId: card.fileId,
                 },
               },
