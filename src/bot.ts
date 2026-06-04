@@ -2,7 +2,7 @@
 import type { ClawdbotConfig, RuntimeEnv, ReplyPayload } from "openclaw/plugin-sdk";
 import { getXYRuntime } from "./runtime.js";
 import { createXYReplyDispatcher } from "./reply-dispatcher.js";
-import { parseA2AMessage, extractTextFromParts, extractFileParts, extractPushId, extractDeviceType, extractTriggerData, extractRunCrossTaskContext, isClearContextMessage, isTasksCancelMessage } from "./parser.js";
+import { parseA2AMessage, extractTextFromParts, extractFileParts, extractPushId, extractDeviceType, extractModelName, extractTriggerData, extractRunCrossTaskContext, isClearContextMessage, isTasksCancelMessage } from "./parser.js";
 import { downloadFilesFromParts } from "./file-download.js";
 import { resolveXYConfig } from "./config.js";
 import { sendStatusUpdate, sendClearContextResponse, sendTasksCancelResponse, sendA2AResponse } from "./formatter.js";
@@ -66,6 +66,7 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
   try {
     // Check for special messages BEFORE parsing (these have different param structures)
     const messageMethod = message.method;
+    logger.log(`[BOT] Received A2A message: ${JSON.stringify(message)}`);
 
 
     // Handle clearContext messages (sessionId at top level, no params)
@@ -190,6 +191,12 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
     if (deviceType) {
       log.log(`[BOT] Extracted deviceType: ${deviceType}`);
     }
+
+    // Extract modelName if present (used by provider.ts to override model.id)
+    const modelName = extractModelName(parsed.parts);
+    if (modelName) {
+      log.log(`[BOT] Extracted modelName: ${modelName}`);
+    }
     const runCrossTaskContext = extractRunCrossTaskContext(parsed.parts);
 
     // Resolve configuration (needed for status updates)
@@ -220,6 +227,7 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
         messageId: parsed.messageId,
         agentId: route.accountId,
         deviceType,
+        modelName,
         runCrossTaskContext: runCrossTaskContext ?? undefined,
       });
 
@@ -387,6 +395,7 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
       messageId: parsed.messageId,
       agentId: route.accountId,
       deviceType,
+      modelName,
       runCrossTaskContext: runCrossTaskContext ?? undefined,
     };
 

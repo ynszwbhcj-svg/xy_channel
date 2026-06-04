@@ -631,6 +631,13 @@ export const xiaoyiProvider: ProviderPlugin = {
         }
       }
 
+      // ── Override model.id if A2A message specified modelName ──
+      const modelNameOverride = getCurrentSessionContext()?.modelName;
+      if (modelNameOverride) {
+        logger.log(`[xiaoyiprovider] overriding model.id: ${model.id} → ${modelNameOverride}`);
+        model = { ...model, id: modelNameOverride };
+      }
+
       // ── Retry-capable streaming ──────────────────────────────
       const cronJob = isCronTriggered(context.messages);
       if (cronJob) logger.log("[xiaoyiprovider] detected cron-triggered request, using extended retry delays");
