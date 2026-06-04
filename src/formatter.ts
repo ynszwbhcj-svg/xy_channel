@@ -65,13 +65,14 @@ export interface SendA2AResponseParams {
   files?: Array<{ fileName: string; fileType: string; fileId: string }>;
   errorCode?: number | string; // 错误码，用于任务执行异常场景
   errorMessage?: string; // 错误描述
+  log?: boolean; // 是否打印日志，默认 true
 }
 
 /**
  * Send an A2A artifact update response.
  */
 export async function sendA2AResponse(params: SendA2AResponseParams): Promise<void> {
-  const { config, sessionId, taskId, messageId, text, append, final, files, errorCode, errorMessage } = params;
+  const { config, sessionId, taskId, messageId, text, append, final, files, errorCode, errorMessage, log: shouldLog = true } = params;
   const log = logger.withContext(sessionId, taskId);
 
   // 审批桥接：将 OpenClaw 的审批提示翻译成用户友好的确认文案
@@ -135,12 +136,15 @@ export async function sendA2AResponse(params: SendA2AResponseParams): Promise<vo
     msgDetail: JSON.stringify(jsonRpcResponse),
   };
 
-  // Log complete response body
-  const redactedText = redactSensitiveText(bridgedText ?? "");
-  log.log(`[A2A_RESPONSE] Sending artifact-update, append=${append}, final=${final}, text=${buildTextPreview(redactedText)}, files=${files?.length ?? 0}, sensitive=${containsSensitiveInfo(bridgedText ?? "")}`);
+  if (shouldLog) {
+    const redactedText = redactSensitiveText(bridgedText ?? "");
+    log.log(`[A2A_RESPONSE] Sending artifact-update, append=${append}, final=${final}, text=${buildTextPreview(redactedText)}, files=${files?.length ?? 0}, sensitive=${containsSensitiveInfo(bridgedText ?? "")}`);
+  }
 
   await wsManager.sendMessage(sessionId, outboundMessage);
-  log.log(`[A2A_RESPONSE] Message sent successfully`);
+  if (shouldLog) {
+    log.log(`[A2A_RESPONSE] Message sent successfully`);
+  }
 }
 
 /**

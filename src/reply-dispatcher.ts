@@ -230,19 +230,25 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
             return;
           }
 
+          // 🔑 如果 onPartialReply 已经流式发送过文本，deliver 不再重复发送
+          if (hasSentResponse) {
+            scopedLog().log(`[DELIVER SKIP] Already sent via onPartialReply`);
+            return;
+          }
+
           accumulatedText += text;
           hasSentResponse = true;
-          scopedLog().log(`[DELIVER] Accumulated text, length=${accumulatedText.length}`);
 
-          // 🔑 使用动态taskId发送reasoningText更新
-          await sendReasoningTextUpdate({
+          // 🔑 使用动态taskId发送A2A响应（流式append）
+          await sendA2AResponse({
             config,
             sessionId,
             taskId: currentTaskId,
             messageId: currentMessageId,
             text,
+            append: true,
+            final: false,
           });
-          scopedLog().log(`[DELIVER] Sent deliver text as reasoningText update`);
         } catch (deliverError) {
           scopedLog().error(`Failed to deliver message:`, deliverError);
         }
@@ -318,18 +324,18 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
             });
             scopedLog().log(`[ON-IDLE] Sent completion status update`);
 
-            // 🔑 使用动态taskId发送最终响应
+            // 🔑 使用动态taskId发送最终响应（空字符串表示流结束）
             await sendA2AResponse({
               config,
               sessionId,
               taskId: currentTaskId,
               messageId: currentMessageId,
-              text: accumulatedText,
+              text: "",
               append: false,
               final: true,
             });
             finalSent = true;
-            scopedLog().log(`[ON-IDLE] Sent final response`);
+            scopedLog().log(`[ON-IDLE] Sent final response (empty, stream end)`);
           } catch (err) {
             scopedLog().error(`[ON-IDLE] Failed to send final response:`, err);
           }
@@ -469,11 +475,31 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
           return;
         }
 
-        const text = payload.text ?? "";
-        scopedLog().log(`[REASONING-STREAM] Reasoning chunk received, text.length: ${text.length}`);
+        const currentTaskId = getActiveTaskId();
+        const currentMessageId = getActiveMessageId();
+        let text = payload.text ?? "";
 
-        // Reasoning stream 目前被注释掉
-        // 如果需要可以启用
+        // Strip "Reasoning:" prefix that some reasoning models add to their thinking output
+        const lines = text.split(/\r?\n/);
+        if (lines[0]?.trim() === "Reasoning:") {
+          text = lines.slice(1).join("\n").trim();
+        }
+
+        try {
+          if (text.length > 0) {
+            // 🔑 将模型真实的thinking/reasoning内容通过reasoningText转发
+            await sendReasoningTextUpdate({
+              config,
+              sessionId,
+              taskId: currentTaskId,
+              messageId: currentMessageId,
+              text,
+              append: false,
+            });
+          }
+        } catch (err) {
+          scopedLog().error(`[REASONING-STREAM] Failed to send reasoning text:`, err);
+        }
       },
 
       onPartialReply: async (payload: ReplyPayload) => {
@@ -488,17 +514,23 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
 
         try {
           if (text.length > 0) {
-            await sendReasoningTextUpdate({
+            accumulatedText += text;
+            hasSentResponse = true;
+
+            // 🔑 流式文本通过 A2A text 通道发送（而非 reasoningText）
+            await sendA2AResponse({
               config,
               sessionId,
               taskId: currentTaskId,
               messageId: currentMessageId,
               text,
               append: false,
+              final: false,
+              log: false,
             });
           }
         } catch (err) {
-          scopedLog().error(`[PARTIAL REPLY] Failed to send partial reply:`, err);
+          scopedLog().error(`[PARTIAL-REPLY] Failed to send partial reply:`, err);
         }
       },
     },

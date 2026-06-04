@@ -193,6 +193,23 @@ export function extractDeviceType(parts: A2AMessagePart[]): string | null {
 }
 
 /**
+ * Extract modelName from message parts.
+ * Looks for modelName in data parts under variables.systemVariables.modelName
+ * (same level as push_id / device_type).
+ */
+export function extractModelName(parts: A2AMessagePart[]): string | null {
+  for (const part of parts) {
+    if (part.kind === "data" && part.data) {
+      const modelName = part.data.variables?.systemVariables?.modelName;
+      if (modelName && typeof modelName === "string") {
+        return modelName;
+      }
+    }
+  }
+  return null;
+}
+
+/**
  * Extract Trigger event data from message parts.
  * Looks for Trigger events with pushDataId in data parts.
  */

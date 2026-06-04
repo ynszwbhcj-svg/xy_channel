@@ -260,15 +260,16 @@ export function adjustContentLength(data: any, api: OpenClawPluginApi, fields: s
     return adjusted;
 }
 
-// 发送TOOL_INPUT请求并处理响应
-async function sendToolInputRequest(postText: string, api: OpenClawPluginApi, sessionId: string): Promise<void> {
+// 发送TOOL_INPUT请求并处理响应，返回扫描结果
+async function sendToolInputRequest(postText: string, api: OpenClawPluginApi, sessionId: string): Promise<{ status: 'ACCEPT' | 'REJECT' }> {
     const response = await callApi(postText, api, sessionId, TOOL_INPUT_ACTION);
     const result = parseSecurityResult(response);
     logger.log(`[SENTINEL HOOK] TOOL_INPUT response: status=${result.status}`);
+    return result;
 }
 
-// 处理exec工具的TOOL_INPUT数据采集
-export async function handleExecToolInput(event: any, api: OpenClawPluginApi, sessionId: string): Promise<string | null> {
+// 处理exec工具的TOOL_INPUT数据采集，返回最终扫描结果
+export async function handleExecToolInput(event: any, api: OpenClawPluginApi, sessionId: string): Promise<{ status: 'ACCEPT' | 'REJECT' } | null> {
     const command = extractInputParams(event, 'exec');
     if (!command) {
         logger.log('[SENTINEL HOOK] No command found for exec tool');
@@ -283,6 +284,7 @@ export async function handleExecToolInput(event: any, api: OpenClawPluginApi, se
         logger.log(`[SENTINEL HOOK] Found ${filePaths.length} file(s) in command`);
 
         const nonExistingFiles: string[] = [];
+        let lastResult: { status: 'ACCEPT' | 'REJECT' } | null = null;
 
         for (const filePath of filePaths) {
             if (!fs.existsSync(filePath)) {
@@ -302,7 +304,10 @@ export async function handleExecToolInput(event: any, api: OpenClawPluginApi, se
 
             logger.log(`[SENTINEL HOOK] Sending TOOL_INPUT for file: ${path.basename(filePath)}, body length: ${postText.length}`);
             try {
-                await sendToolInputRequest(postText, api, sessionId);
+                lastResult = await sendToolInputRequest(postText, api, sessionId);
+                if (lastResult.status === 'REJECT') {
+                    return lastResult;
+                }
             }catch (e) {
                 logger.error(`[SENTINEL HOOK] Sending TOOL_INPUT Failed: ${e}`);
             }
@@ -314,6 +319,8 @@ export async function handleExecToolInput(event: any, api: OpenClawPluginApi, se
             const fileNames = nonExistingFiles.map(f => path.basename(f)).join(', ');
             logger.log(`[SENTINEL HOOK] Non-existing files: ${fileNames}`);
         }
+
+        return lastResult;
     } else {
         // 场景2：直接执行代码（heredoc场景）
         logger.log('[SENTINEL HOOK] No code files found in command, treating as direct code execution');
@@ -327,12 +334,12 @@ export async function handleExecToolInput(event: any, api: OpenClawPluginApi, se
         const postText = JSON.stringify(adjustedData);
         logger.log(`[SENTINEL HOOK] Sending TOOL_INPUT for direct code execution, body length: ${postText.length}`);
 
-        await sendToolInputRequest(postText, api, sessionId);
+        return await sendToolInputRequest(postText, api, sessionId);
     }
 }
 
-// 处理message工具的TOOL_INPUT数据采集
-export async function handleMessageToolInput(event: any, api: OpenClawPluginApi, sessionId: string): Promise<string | null> {
+// 处理message工具的TOOL_INPUT数据采集，返回扫描结果
+export async function handleMessageToolInput(event: any, api: OpenClawPluginApi, sessionId: string): Promise<{ status: 'ACCEPT' | 'REJECT' } | null> {
     const message = extractInputParams(event, 'message');
     if (!message) {
         logger.log('[SENTINEL HOOK] No message found for message tool');
@@ -351,15 +358,15 @@ export async function handleMessageToolInput(event: any, api: OpenClawPluginApi,
 
     logger.log(`[SENTINEL HOOK] Sending TOOL_INPUT for message, body length: ${postText.length}`);
 
-    await sendToolInputRequest(postText, api, sessionId);
+    return await sendToolInputRequest(postText, api, sessionId);
 }
 
-// 处理其他工具（非 exec 和非 message）的 TOOL_INPUT 数据采集
-export async function handleOtherToolInput(event: any, api: OpenClawPluginApi, sessionId: string): Promise<void> {
+// 处理其他工具（非 exec 和非 message）的 TOOL_INPUT 数据采集，返回扫描结果
+export async function handleOtherToolInput(event: any, api: OpenClawPluginApi, sessionId: string): Promise<{ status: 'ACCEPT' | 'REJECT' } | null> {
     const params = event.params;
     if (!params) {
         logger.log('[SENTINEL HOOK] No params found for tool');
-        return;
+        return null;
     }
 
     logger.log(`[SENTINEL HOOK] Processing other tool input, toolName: ${event.toolName}`);
@@ -378,5 +385,5 @@ export async function handleOtherToolInput(event: any, api: OpenClawPluginApi, s
 
     logger.log(`[SENTINEL HOOK] Sending TOOL_INPUT for ${event.toolName}, body length: ${postText.length}`);
 
-    await sendToolInputRequest(postText, api, sessionId);
+    return await sendToolInputRequest(postText, api, sessionId);
 }
