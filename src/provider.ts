@@ -633,7 +633,7 @@ export const xiaoyiProvider: ProviderPlugin = {
 
       // ── Override model.id if A2A message specified modelName ──
       const modelNameOverride = getCurrentSessionContext()?.modelName;
-      if (modelNameOverride) {
+      if (modelNameOverride && modelNameOverride.trim() !== "" && modelNameOverride.toLowerCase() !== "none") {
         logger.log(`[xiaoyiprovider] overriding model.id: ${model.id} → ${modelNameOverride}`);
         model = { ...model, id: modelNameOverride };
       }
