@@ -1,9 +1,8 @@
 import { sendCommand, sendStatusUpdate } from "../formatter.js";
 import { getXYWebSocketManager } from "../client.js";
 import { getCurrentMessageId, getCurrentTaskId } from "../task-manager.js";
-import type { A2ACommand, CrossDeviceTaskResultEvent, SentFileParams } from "../types.js";
+import type { A2ACommand, CrossDeviceTaskResultEvent, OutboundWebSocketMessage, SentFileCard, SentFileParams } from "../types.js";
 import type { SessionContext } from "./session-manager.js";
-import { createSendFileToUserTool } from "./send-file-to-user-tool.js";
 import { logger } from "../utils/logger.js";
 
 const LOG_TAG = "[SendPcDeviceTask]";
@@ -55,7 +54,7 @@ function buildModelToolResult(result: CrossDeviceInternalResult): Record<string,
 
   if (resultStatus === "对端设备执行任务成功且返回有文件") {
     if (result.autoSendFileToUser?.success) {
-      message += "\n\n对端设备返回了文件，系统已自动通过 send_file_to_user 将文件卡片发送给用户。请你基于跨端任务结果生成最终回复，告知用户任务已完成且文件已发送。";
+      message += "\n\n对端设备返回了文件，系统已自动将文件卡片发送给用户。请你基于跨端任务结果生成最终回复，告知用户任务已完成且文件已发送。";
     } else {
       const errorMessage = result.autoSendFileToUser?.error || "未知错误";
       message += `\n\n对端设备返回了文件，但系统自动发送文件卡片失败：${errorMessage}。请你向用户说明任务已完成但文件发送失败。`;
@@ -90,6 +89,74 @@ function buildCrossDeviceResult(params: {
   return result;
 }
 
+function collectSentFileCards(sentFiles: SentFileParams[]): SentFileCard[] {
+  const cardsByFileId = new Map<string, SentFileCard>();
+  for (const params of sentFiles) {
+    for (const card of params.fileCards ?? []) {
+      const fileId = typeof card.fileId === "string" ? card.fileId.trim() : "";
+      const fileName = typeof card.fileName === "string" ? card.fileName.trim() : "";
+      const mimeType = typeof card.mimeType === "string" ? card.mimeType.trim() : "";
+      if (!fileId || !fileName || cardsByFileId.has(fileId)) {
+        continue;
+      }
+      cardsByFileId.set(fileId, {
+        fileId,
+        fileName,
+        ...(mimeType ? { mimeType } : {}),
+      });
+    }
+  }
+  return Array.from(cardsByFileId.values());
+}
+
+async function sendFileCardsToUser(ctx: SessionContext, fileCards: SentFileCard[]): Promise<Array<{ fileName: string; fileId: string }>> {
+  const { config, sessionId, taskId, messageId } = ctx;
+  const currentTaskId = getCurrentTaskId(sessionId) ?? taskId;
+  const currentMessageId = getCurrentMessageId(sessionId) ?? messageId;
+  const wsManager = getXYWebSocketManager(config);
+  const sentFileCards: Array<{ fileName: string; fileId: string }> = [];
+
+  for (const card of fileCards) {
+    const mimeType = card.mimeType || "application/octet-stream";
+    const agentResponse: OutboundWebSocketMessage = {
+      msgType: "agent_response",
+      agentId: config.agentId,
+      sessionId,
+      taskId: currentTaskId,
+      msgDetail: JSON.stringify({
+        jsonrpc: "2.0",
+        id: currentMessageId,
+        result: {
+          kind: "artifact-update",
+          append: true,
+          lastChunk: false,
+          final: false,
+          artifact: {
+            artifactId: currentTaskId,
+            parts: [
+              {
+                kind: "file",
+                file: {
+                  name: card.fileName,
+                  mimeType,
+                  fileId: card.fileId,
+                },
+              },
+            ],
+          },
+        },
+        error: { code: 0 },
+      }),
+    };
+
+    logger.log(`${SEND_CROSS_RESULT_LOG_TAG} sending file card by fileId, fileName=${card.fileName}`);
+    await wsManager.sendMessage(sessionId, agentResponse);
+    sentFileCards.push({ fileName: card.fileName, fileId: card.fileId });
+  }
+
+  return sentFileCards;
+}
+
 async function autoSendFileToUserIfNeeded(
   result: CrossDeviceInternalResult,
   ctx: SessionContext,
@@ -99,17 +166,26 @@ async function autoSendFileToUserIfNeeded(
     return result;
   }
 
-  logger.log(`${SEND_CROSS_RESULT_LOG_TAG} auto sending ${sentFiles.length} cross-device file(s) to user`);
+  const fileCards = collectSentFileCards(sentFiles);
+
+  if (fileCards.length === 0) {
+    const errorMessage = "Cross-device result contains no valid fileCards.";
+    logger.error(`${SEND_CROSS_RESULT_LOG_TAG} auto send_file_to_user skipped, error=${errorMessage}`);
+    return {
+      ...result,
+      autoSendFileToUser: {
+        success: false,
+        error: errorMessage,
+      },
+    };
+  }
+
+  logger.log(`${SEND_CROSS_RESULT_LOG_TAG} auto sending cross-device file cards, fileCardCount=${fileCards.length}`);
   try {
-    const sendFileTool = createSendFileToUserTool(ctx);
-    const sendFileResult = await (async () => {
-      const results: unknown[] = [];
-      for (const sentFileParams of sentFiles) {
-        results.push(await sendFileTool.execute("auto_send_cross_device_file", sentFileParams));
-      }
-      return results;
-    })();
-    logger.log(`${SEND_CROSS_RESULT_LOG_TAG} auto send_file_to_user completed`);
+    const sendFileResult = {
+      fileCards: await sendFileCardsToUser(ctx, fileCards),
+    };
+    logger.log(`${SEND_CROSS_RESULT_LOG_TAG} auto file card send completed`);
     return {
       ...result,
       autoSendFileToUser: {

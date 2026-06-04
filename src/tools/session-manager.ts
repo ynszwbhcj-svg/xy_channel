@@ -1,7 +1,7 @@
 // Session manager for XY tool context
 // Stores active session contexts that tools can access
 import { AsyncLocalStorage } from "async_hooks";
-import type { RunCrossTaskContext, SentFileParams, XYChannelConfig } from "../types.js";
+import type { RunCrossTaskContext, SentFileCard, SentFileParams, XYChannelConfig } from "../types.js";
 import { logger } from "../utils/logger.js";
 import { configManager } from "../utils/config-manager.js";
 import { toolCallNudgeManager } from "../utils/tool-call-nudge-manager.js";
@@ -298,25 +298,70 @@ export function getActiveSessionCount(): number {
 }
 
 function normalizeSentFileParams(params: SentFileParams): SentFileParams | null {
-  const fileLocalUrls = Array.isArray(params.fileLocalUrls)
-    ? params.fileLocalUrls.filter((url): url is string => typeof url === "string" && url.length > 0)
+  const fileCards = Array.isArray(params.fileCards)
+    ? params.fileCards
+      .map((card): SentFileCard | null => {
+        if (!card || typeof card !== "object") {
+          return null;
+        }
+        const fileName = typeof card.fileName === "string" ? card.fileName.trim() : "";
+        const fileId = typeof card.fileId === "string" ? card.fileId.trim() : "";
+        const mimeType = typeof card.mimeType === "string" ? card.mimeType.trim() : "";
+        if (!fileName || !fileId) {
+          return null;
+        }
+        return {
+          fileName,
+          fileId,
+          ...(mimeType ? { mimeType } : {}),
+        };
+      })
+      .filter((card): card is SentFileCard => card !== null)
     : [];
-  const fileRemoteUrls = Array.isArray(params.fileRemoteUrls)
-    ? params.fileRemoteUrls.filter((url): url is string => typeof url === "string" && url.length > 0)
-    : [];
-  const fileNames = Array.isArray(params.fileNames)
-    ? params.fileNames.filter((name): name is string => typeof name === "string" && name.length > 0)
-    : [];
-
-  if (fileLocalUrls.length === 0 && fileRemoteUrls.length === 0) {
+  if (fileCards.length === 0) {
     return null;
   }
 
   return {
-    ...(fileLocalUrls.length > 0 ? { fileLocalUrls } : {}),
-    ...(fileRemoteUrls.length > 0 ? { fileRemoteUrls } : {}),
-    ...(fileNames.length > 0 && fileNames.length === fileRemoteUrls.length ? { fileNames } : {}),
+    fileCards,
   };
+}
+
+function hasSentFileContent(params: SentFileParams): boolean {
+  return (params.fileCards?.length ?? 0) > 0;
+}
+
+function dedupeSentFilesByFileId(existing: SentFileParams[], incoming: SentFileParams[]): SentFileParams[] {
+  const knownFileIds = new Set<string>();
+  for (const params of existing) {
+    for (const card of params.fileCards ?? []) {
+      if (card.fileId) {
+        knownFileIds.add(card.fileId);
+      }
+    }
+  }
+
+  return incoming
+    .map((params): SentFileParams | null => {
+      if (!params.fileCards?.length) {
+        return params;
+      }
+
+      const fileCards = params.fileCards.filter((card) => {
+        if (knownFileIds.has(card.fileId)) {
+          return false;
+        }
+        knownFileIds.add(card.fileId);
+        return true;
+      });
+
+      const deduped: SentFileParams = {
+        ...(fileCards.length > 0 ? { fileCards } : {}),
+      };
+
+      return hasSentFileContent(deduped) ? deduped : null;
+    })
+    .filter((params): params is SentFileParams => params !== null);
 }
 
 export function appendRunCrossTaskSentFiles(
@@ -334,7 +379,8 @@ export function appendRunCrossTaskSentFiles(
   }
 
   const existing = Array.isArray(runCrossTaskContext.sentFiles) ? runCrossTaskContext.sentFiles : [];
-  const merged = [...existing, ...normalizedSentFiles];
+  const dedupedSentFiles = dedupeSentFilesByFileId(existing, normalizedSentFiles);
+  const merged = [...existing, ...dedupedSentFiles];
   runCrossTaskContext.sentFiles = merged;
 
   const sessionWithRef = Array.from(activeSessions.values()).find(

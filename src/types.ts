@@ -106,10 +106,14 @@ export interface RunCrossTaskContext {
   rawContext: any;
 }
 
+export interface SentFileCard {
+  fileName: string;
+  fileId: string;
+  mimeType?: string;
+}
+
 export interface SentFileParams {
-  fileLocalUrls?: string[];
-  fileRemoteUrls?: string[];
-  fileNames?: string[];
+  fileCards?: SentFileCard[];
 }
 
 // ============================================================================

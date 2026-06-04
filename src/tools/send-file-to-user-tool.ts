@@ -4,7 +4,7 @@ import { getXYWebSocketManager } from "../client.js";
 import { XYFileUploadService } from "../file-upload.js";
 import { appendRunCrossTaskSentFiles, type SessionContext } from "./session-manager.js";
 import { logger } from "../utils/logger.js";
-import type { OutboundWebSocketMessage } from "../types.js";
+import type { OutboundWebSocketMessage, SentFileCard } from "../types.js";
 import { getCurrentTaskId, getCurrentMessageId } from "../task-manager.js";
 import fetch from "node-fetch";
 import fs from "fs/promises";
@@ -201,20 +201,6 @@ b. 操作超时时间为2分钟（120秒），请勿重复调用此工具，如�
       }
     }
 
-    if (ctx.runCrossTaskContext && (fileLocalUrls.length > 0 || fileRemoteUrls.length > 0)) {
-      const cachedSentFiles = appendRunCrossTaskSentFiles(
-        [
-          {
-            ...(fileLocalUrls.length > 0 ? { fileLocalUrls } : {}),
-            ...(fileRemoteUrls.length > 0 ? { fileRemoteUrls } : {}),
-            ...(fileNames.length > 0 ? { fileNames } : {}),
-          },
-        ],
-        ctx.runCrossTaskContext,
-      );
-      logger.log(`[RunCrossTask] cached ${cachedSentFiles.length} send_file_to_user input(s) for cross-task result`);
-    }
-
     // Get WebSocket manager
     const wsManager = getXYWebSocketManager(config);
 
@@ -322,6 +308,14 @@ b. 操作超时时间为2分钟（120秒），请勿重复调用此工具，如�
       // Send WebSocket message
       await wsManager.sendMessage(sessionId, agentResponse);
       logger.log(`[SEND-FILE-TO-USER] send ${fileName} file to user success`)
+      if (ctx.runCrossTaskContext) {
+        const sentFileCard: SentFileCard = { fileName, fileId, mimeType };
+        const cachedSentFiles = appendRunCrossTaskSentFiles(
+          [{ fileCards: [sentFileCard] }],
+          ctx.runCrossTaskContext,
+        );
+        logger.log(`[RunCrossTask] cached file card for cross-task result, fileName=${fileName}, cachedCount=${cachedSentFiles.length}`);
+      }
       sentFiles.push({ fileName, fileId });
     }
 

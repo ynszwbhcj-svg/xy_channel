@@ -71,16 +71,19 @@ async function sendRunCrossTaskResult(params: {
   const statusCommand = buildDistributionStatusCommand(context);
   const resultCommand = buildCrossTaskExecuteResultCommand(resultCode, resultMessage, sentFiles);
 
-  await sendCommand({
-    config,
-    sessionId,
-    taskId,
-    messageId,
-    commands: [statusCommand, resultCommand],
-  });
-  clearRunCrossTaskSentFiles(context);
-
-  logger.log(`${RUN_CROSS_TASK_LOG_TAG} sent cross-task result, sessionId=${sessionId}, taskId=${taskId}, code=${resultCode}, sentFileCount=${sentFiles.length}, clearedSentFileCount=${sentFiles.length}, messageLength=${resultMessage.length}`);
+  try {
+    await sendCommand({
+      config,
+      sessionId,
+      taskId,
+      messageId,
+      commands: [statusCommand, resultCommand],
+    });
+    logger.log(`${RUN_CROSS_TASK_LOG_TAG} sent cross-task result, sessionId=${sessionId}, taskId=${taskId}, code=${resultCode}, sentFileCount=${sentFiles.length}, messageLength=${resultMessage.length}`);
+  } finally {
+    clearRunCrossTaskSentFiles(context);
+    logger.log(`${RUN_CROSS_TASK_LOG_TAG} cleared cross-task sentFiles, sessionId=${sessionId}, taskId=${taskId}, clearedSentFileCount=${sentFiles.length}`);
+  }
 }
 
 /**
