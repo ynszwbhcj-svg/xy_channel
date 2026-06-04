@@ -68,6 +68,7 @@ async function sendRunCrossTaskResult(params: {
 }): Promise<void> {
   const { config, sessionId, taskId, messageId, context, resultCode, resultMessage } = params;
   const sentFiles = Array.isArray(context.sentFiles) ? context.sentFiles : [];
+  const fileCardCount = sentFiles.length;
   const statusCommand = buildDistributionStatusCommand(context);
   const resultCommand = buildCrossTaskExecuteResultCommand(resultCode, resultMessage, sentFiles);
 
@@ -79,10 +80,10 @@ async function sendRunCrossTaskResult(params: {
       messageId,
       commands: [statusCommand, resultCommand],
     });
-    logger.log(`${RUN_CROSS_TASK_LOG_TAG} sent cross-task result, sessionId=${sessionId}, taskId=${taskId}, code=${resultCode}, sentFileCount=${sentFiles.length}, messageLength=${resultMessage.length}`);
+    logger.log(`${RUN_CROSS_TASK_LOG_TAG} sent cross-task result, sessionId=${sessionId}, taskId=${taskId}, code=${resultCode}, fileCardCount=${fileCardCount}, messageLength=${resultMessage.length}`);
   } finally {
     clearRunCrossTaskSentFiles(context);
-    logger.log(`${RUN_CROSS_TASK_LOG_TAG} cleared cross-task sentFiles, sessionId=${sessionId}, taskId=${taskId}, clearedSentFileCount=${sentFiles.length}`);
+    logger.log(`${RUN_CROSS_TASK_LOG_TAG} cleared cross-task sentFiles, sessionId=${sessionId}, taskId=${taskId}, clearedFileCardCount=${fileCardCount}`);
   }
 }
 

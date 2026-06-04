@@ -1,7 +1,7 @@
 // Session manager for XY tool context
 // Stores active session contexts that tools can access
 import { AsyncLocalStorage } from "async_hooks";
-import type { RunCrossTaskContext, SentFileCard, SentFileParams, XYChannelConfig } from "../types.js";
+import type { RunCrossTaskContext, SentFileCard, XYChannelConfig } from "../types.js";
 import { logger } from "../utils/logger.js";
 import { configManager } from "../utils/config-manager.js";
 import { toolCallNudgeManager } from "../utils/tool-call-nudge-manager.js";
@@ -300,82 +300,51 @@ export function getActiveSessionCount(): number {
   return activeSessions.size;
 }
 
-function normalizeSentFileParams(params: SentFileParams): SentFileParams | null {
-  const fileCards = Array.isArray(params.fileCards)
-    ? params.fileCards
-      .map((card): SentFileCard | null => {
-        if (!card || typeof card !== "object") {
-          return null;
-        }
-        const fileName = typeof card.fileName === "string" ? card.fileName.trim() : "";
-        const fileId = typeof card.fileId === "string" ? card.fileId.trim() : "";
-        const mimeType = typeof card.mimeType === "string" ? card.mimeType.trim() : "";
-        if (!fileName || !fileId) {
-          return null;
-        }
-        return {
-          fileName,
-          fileId,
-          ...(mimeType ? { mimeType } : {}),
-        };
-      })
-      .filter((card): card is SentFileCard => card !== null)
-    : [];
-  if (fileCards.length === 0) {
+function normalizeSentFileCard(card: SentFileCard): SentFileCard | null {
+  if (!card || typeof card !== "object") {
+    return null;
+  }
+
+  const fileName = typeof card.fileName === "string" ? card.fileName.trim() : "";
+  const fileId = typeof card.fileId === "string" ? card.fileId.trim() : "";
+  const mimeType = typeof card.mimeType === "string" ? card.mimeType.trim() : "";
+  if (!fileName || !fileId) {
     return null;
   }
 
   return {
-    fileCards,
+    fileName,
+    fileId,
+    ...(mimeType ? { mimeType } : {}),
   };
 }
 
-function hasSentFileContent(params: SentFileParams): boolean {
-  return (params.fileCards?.length ?? 0) > 0;
-}
-
-function dedupeSentFilesByFileId(existing: SentFileParams[], incoming: SentFileParams[]): SentFileParams[] {
+function dedupeSentFilesByFileId(existing: SentFileCard[], incoming: SentFileCard[]): SentFileCard[] {
   const knownFileIds = new Set<string>();
-  for (const params of existing) {
-    for (const card of params.fileCards ?? []) {
-      if (card.fileId) {
-        knownFileIds.add(card.fileId);
-      }
+  for (const card of existing) {
+    if (card.fileId) {
+      knownFileIds.add(card.fileId);
     }
   }
 
-  return incoming
-    .map((params): SentFileParams | null => {
-      if (!params.fileCards?.length) {
-        return params;
-      }
-
-      const fileCards = params.fileCards.filter((card) => {
-        if (knownFileIds.has(card.fileId)) {
-          return false;
-        }
-        knownFileIds.add(card.fileId);
-        return true;
-      });
-
-      const deduped: SentFileParams = {
-        ...(fileCards.length > 0 ? { fileCards } : {}),
-      };
-
-      return hasSentFileContent(deduped) ? deduped : null;
-    })
-    .filter((params): params is SentFileParams => params !== null);
+  return incoming.filter((card) => {
+    if (knownFileIds.has(card.fileId)) {
+      return false;
+    }
+    knownFileIds.add(card.fileId);
+    return true;
+  });
 }
 
 export function appendRunCrossTaskSentFiles(
-  sentFiles: SentFileParams[],
+  sentFiles: SentFileCard[],
   explicitRunCrossTaskContext?: RunCrossTaskContext,
-): SentFileParams[] {
+): SentFileCard[] {
   const context = asyncLocalStorage.getStore() ?? null;
   const runCrossTaskContext = explicitRunCrossTaskContext ?? context?.runCrossTaskContext;
   const normalizedSentFiles = sentFiles
-    .map((params) => normalizeSentFileParams(params))
-    .filter((params): params is SentFileParams => params !== null);
+    .map((card) => normalizeSentFileCard(card))
+    .filter((card): card is SentFileCard => card !== null);
 
   if (!runCrossTaskContext || normalizedSentFiles.length === 0) {
     return runCrossTaskContext?.sentFiles ?? [];

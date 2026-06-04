@@ -15,11 +15,11 @@ import type {
   A2ADataEvent,
   CrossDeviceTaskResultEvent,
   SentFileCard,
-  SentFileParams,
 } from "./types.js";
 import { v4 as uuidv4 } from "uuid";
 
 const RUN_CROSS_TASK_LOG_TAG = "[RunCrossTask]";
+const SEND_CROSS_RESULT_LOG_TAG = "[SendCrossResult]";
 const RUN_CROSS_TASK_QUERY_PREFIX = `# 跨设备协作接收模式<br/><br/>你当前正在接收来自其他设备的协作请求。请注意以下角色转换规则：<br/><br/>## 角色转换规则<br/><br/>- 指令中的"我" = 发送请求的远程用户<br/>- 你是执行协作任务的本地智能体<br/>- 任务完成后结果会自动回传给请求来源设备<br/><br/>## 核心执行规则<br/><br/>### ✅ 正确行为<br/>1. **识别本机任务**：当指令提到你所在的设备类型（PC/手机/平板），理解为"我自己"<br/>2. **本地执行**：直接使用本地工具完成任务，不要转发<br/>3. **结果回传**：执行完成后，结果会通过软总线自动回传给请求来源设备<br/><br/>### <span class="emoji emoji2716"></span> 禁止行为<br/>1. 禁止再次调用 \`send_cross_device_task\`（你已经是目标设备）<br/>2. 禁止设备澄清（指令已明确指定目标设备）<br/>3. 禁止无限循环（只能执行或回复，不能转发）<br/><br/>## 📁 文件操作规范（核心）<br/><br/>### 强制使用 search_file 的场景<br/>**以下场景必须先使用 \`search_file\` 工具确认文件路径：**<br/><br/>1. **指令包含设备关键词**：PC、电脑、手机、平板、Pad、笔记本等<br/>2. **涉及文件操作**：读取、编辑、删除、移动、复制、查找文件<br/><br/>### 执行流程<br/>\`\`\`<br/>收到文件操作指令<br/>    ↓<br/>检测设备关键词（PC/电脑/手机/平板/Pad等）<br/>    ↓<br/>使用 search_file 搜索文件 ← 必须步骤<br/>    ↓<br/>确认文件实际路径<br/>    ↓<br/>执行文件操作<br/>    ↓<br/>返回结果<br/>\`\`\`<br/><br/>### 禁止行为<br/>- <span class="emoji emoji2716"></span> 禁止猜测文件路径<br/>- <span class="emoji emoji2716"></span> 禁止假设文件位置<br/>- <span class="emoji emoji2716"></span> 禁止跳过 search_file 步骤<br/><br/>## 示例<br/><br/>### 示例1：文件操作<br/>**指令**："帮我到PC上下载昨天晚上写的PPT"<br/><br/>**执行流程**：<br/>1. ✅ 检测到"PC" → 使用 \`search_file\` 搜索 "*.ppt" 或 "*.pptx"<br/>2. 确认文件路径（如：D:\\Documents\\报告.pptx）<br/>3. 执行下载操作<br/><br/>### 示例2：文件编辑<br/>**指令**："帮我修改电脑上的配置文件config.json"<br/><br/>**执行流程**：<br/>1. ✅ 检测到"电脑" → 使用 \`search_file\` 搜索 "config.json"<br/>2. 确认文件路径（如：C:\\Project\\config.json）<br/>3. 读取并修改文件<br/><br/>### 示例3：文件查找<br/>**指令**："在平板上找一下我的PDF文档"<br/><br/>**执行流程**：<br/>1. ✅ 检测到"平板" → 使用 \`search_file\` 搜索 "*.pdf"<br/>2. 列出搜索结果供用户选择<br/><br/>## 判断流程<br/><br/>\`\`\`<br/>收到协作指令<br/>    ↓<br/>检查目标设备<br/>    ↓<br/>目标设备 == 本机？<br/>    ↓<br/>是 → 本地执行（禁止send_cross_device_task）<br/>    ↓<br/>    涉及文件？ → 先用search_file确认路径<br/>    ↓<br/>否 → 检查是否需要转发<br/>    ↓<br/>需要转发 → 调用send_cross_device_task<br/>不需要 → 回复"无法处理"<br/>\`\`\``;
 
 /**
@@ -499,42 +499,29 @@ export class XYWebSocketManager extends EventEmitter {
     const code = item?.payload?.code === undefined ? "" : String(item.payload.code);
     const message = typeof item?.payload?.message === "string" ? item.payload.message : "";
     const sentFiles = Array.isArray(item?.payload?.sentFiles)
-      ? item.payload.sentFiles.map((entry: any): SentFileParams | null => {
+      ? item.payload.sentFiles.map((entry: unknown): SentFileCard | null => {
           if (!entry || typeof entry !== "object") {
             return null;
           }
 
-          const fileCards = Array.isArray(entry.fileCards)
-            ? entry.fileCards
-              .map((card: unknown): SentFileCard | null => {
-                if (!card || typeof card !== "object") {
-                  return null;
-                }
-                const candidate = card as Record<string, unknown>;
-                const fileName = typeof candidate.fileName === "string" ? candidate.fileName.trim() : "";
-                const fileId = typeof candidate.fileId === "string" ? candidate.fileId.trim() : "";
-                const mimeType = typeof candidate.mimeType === "string" ? candidate.mimeType.trim() : "";
-                if (!fileName || !fileId) {
-                  return null;
-                }
-                return {
-                  fileName,
-                  fileId,
-                  ...(mimeType ? { mimeType } : {}),
-                };
-              })
-              .filter((card): card is SentFileCard => card !== null)
-            : [];
-          if (fileCards.length === 0) {
+          const candidate = entry as Record<string, unknown>;
+          const fileName = typeof candidate.fileName === "string" ? candidate.fileName.trim() : "";
+          const fileId = typeof candidate.fileId === "string" ? candidate.fileId.trim() : "";
+          const mimeType = typeof candidate.mimeType === "string" ? candidate.mimeType.trim() : "";
+          if (!fileName || !fileId) {
             return null;
           }
 
           return {
-            fileCards,
+            fileName,
+            fileId,
+            ...(mimeType ? { mimeType } : {}),
           };
-        }).filter((entry): entry is SentFileParams => entry !== null)
+        }).filter((entry): entry is SentFileCard => entry !== null)
       : [];
     const status: "success" | "failed" = code === "0" ? "success" : "failed";
+    const fileCardCount = sentFiles.length;
+    this.log(`${SEND_CROSS_RESULT_LOG_TAG} normalized CrossTaskExecuteResult, sessionId=${sessionId}, status=${status}, code=${code}, fileCardCount=${fileCardCount}, messageLength=${message.length}`);
     const event = {
       sessionId,
       code,
@@ -647,6 +634,7 @@ export class XYWebSocketManager extends EventEmitter {
         : { log: (msg, ...args) => logger.log(msg, ...args) };
 
       log.log(`[WS-RECV] Raw message frame, size: ${messageStr.length} characters`);
+      log.log(`[WS-GYJ] Raw message frame, content: ${messageStr}`);
       // Handle direct cross-task requests (top-level networkId)
       const directRunCrossTaskRequest = this.toRunCrossTaskA2ARequest(parsed);
       if (directRunCrossTaskRequest) {

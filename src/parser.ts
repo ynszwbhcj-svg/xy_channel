@@ -1,5 +1,5 @@
 // A2A message parsing utilities
-import type { A2AJsonRpcRequest, A2AMessagePart, A2ADataEvent, RunCrossTaskContext, SentFileCard, SentFileParams } from "./types.js";
+import type { A2AJsonRpcRequest, A2AMessagePart, A2ADataEvent, RunCrossTaskContext, SentFileCard } from "./types.js";
 import { logger } from "./utils/logger.js";
 
 /**
@@ -78,42 +78,26 @@ export function extractRunCrossTaskContext(parts: A2AMessagePart[]): RunCrossTas
     }
 
     return value
-      .map((item): SentFileParams | null => {
+      .map((item): SentFileCard | null => {
         if (!item || typeof item !== "object") {
           return null;
         }
 
         const candidate = item as Record<string, unknown>;
-        const fileCards = Array.isArray(candidate.fileCards)
-          ? candidate.fileCards
-            .map((card): SentFileCard | null => {
-              if (!card || typeof card !== "object") {
-                return null;
-              }
-              const cardCandidate = card as Record<string, unknown>;
-              const fileName = typeof cardCandidate.fileName === "string" ? cardCandidate.fileName.trim() : "";
-              const fileId = typeof cardCandidate.fileId === "string" ? cardCandidate.fileId.trim() : "";
-              const mimeType = typeof cardCandidate.mimeType === "string" ? cardCandidate.mimeType.trim() : "";
-              if (!fileName || !fileId) {
-                return null;
-              }
-              return {
-                fileName,
-                fileId,
-                ...(mimeType ? { mimeType } : {}),
-              };
-            })
-            .filter((card): card is SentFileCard => card !== null)
-          : [];
-        if (fileCards.length === 0) {
+        const fileName = typeof candidate.fileName === "string" ? candidate.fileName.trim() : "";
+        const fileId = typeof candidate.fileId === "string" ? candidate.fileId.trim() : "";
+        const mimeType = typeof candidate.mimeType === "string" ? candidate.mimeType.trim() : "";
+        if (!fileName || !fileId) {
           return null;
         }
 
         return {
-          fileCards,
+          fileName,
+          fileId,
+          ...(mimeType ? { mimeType } : {}),
         };
       })
-      .filter((item): item is SentFileParams => item !== null);
+      .filter((item): item is SentFileCard => item !== null);
   };
 
   for (const part of parts) {

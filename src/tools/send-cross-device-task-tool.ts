@@ -1,7 +1,7 @@
 import { sendCommand, sendStatusUpdate } from "../formatter.js";
 import { getXYWebSocketManager } from "../client.js";
 import { getCurrentMessageId, getCurrentTaskId } from "../task-manager.js";
-import type { A2ACommand, CrossDeviceTaskResultEvent, OutboundWebSocketMessage, SentFileCard, SentFileParams } from "../types.js";
+import type { A2ACommand, CrossDeviceTaskResultEvent, OutboundWebSocketMessage, SentFileCard } from "../types.js";
 import type { SessionContext } from "./session-manager.js";
 import { logger } from "../utils/logger.js";
 
@@ -16,7 +16,7 @@ type CrossDeviceInternalResult = {
   success: boolean;
   code: string;
   message: string;
-  sentFiles: SentFileParams[];
+  sentFiles: SentFileCard[];
   rawEvent: unknown;
   autoSendFileToUser?: {
     success: boolean;
@@ -75,7 +75,7 @@ function buildCrossDeviceResult(params: {
   success: boolean;
   code: string;
   message: string;
-  sentFiles: SentFileParams[];
+  sentFiles: SentFileCard[];
   rawEvent: unknown;
 }): CrossDeviceInternalResult {
   const result: CrossDeviceInternalResult = {
@@ -89,24 +89,26 @@ function buildCrossDeviceResult(params: {
   return result;
 }
 
-function collectSentFileCards(sentFiles: SentFileParams[]): SentFileCard[] {
+function collectSentFileCards(sentFiles: SentFileCard[]): SentFileCard[] {
   const cardsByFileId = new Map<string, SentFileCard>();
-  for (const params of sentFiles) {
-    for (const card of params.fileCards ?? []) {
-      const fileId = typeof card.fileId === "string" ? card.fileId.trim() : "";
-      const fileName = typeof card.fileName === "string" ? card.fileName.trim() : "";
-      const mimeType = typeof card.mimeType === "string" ? card.mimeType.trim() : "";
-      if (!fileId || !fileName || cardsByFileId.has(fileId)) {
-        continue;
-      }
-      cardsByFileId.set(fileId, {
-        fileId,
-        fileName,
-        ...(mimeType ? { mimeType } : {}),
-      });
+  for (const card of sentFiles) {
+    const fileId = typeof card.fileId === "string" ? card.fileId.trim() : "";
+    const fileName = typeof card.fileName === "string" ? card.fileName.trim() : "";
+    const mimeType = typeof card.mimeType === "string" ? card.mimeType.trim() : "";
+    if (!fileId || !fileName || cardsByFileId.has(fileId)) {
+      continue;
     }
+    cardsByFileId.set(fileId, {
+      fileId,
+      fileName,
+      ...(mimeType ? { mimeType } : {}),
+    });
   }
   return Array.from(cardsByFileId.values());
+}
+
+function countSentFileCards(sentFiles: SentFileCard[]): number {
+  return collectSentFileCards(sentFiles).length;
 }
 
 async function sendFileCardsToUser(ctx: SessionContext, fileCards: SentFileCard[]): Promise<Array<{ fileName: string; fileId: string }>> {
@@ -170,7 +172,7 @@ async function autoSendFileToUserIfNeeded(
 
   if (fileCards.length === 0) {
     const errorMessage = "Cross-device result contains no valid fileCards.";
-    logger.error(`${SEND_CROSS_RESULT_LOG_TAG} auto send_file_to_user skipped, error=${errorMessage}`);
+    logger.error(`${SEND_CROSS_RESULT_LOG_TAG} auto file card send skipped, error=${errorMessage}`);
     return {
       ...result,
       autoSendFileToUser: {
@@ -185,7 +187,7 @@ async function autoSendFileToUserIfNeeded(
     const sendFileResult = {
       fileCards: await sendFileCardsToUser(ctx, fileCards),
     };
-    logger.log(`${SEND_CROSS_RESULT_LOG_TAG} auto file card send completed`);
+    logger.log(`${SEND_CROSS_RESULT_LOG_TAG} auto file card send completed, fileCardCount=${sendFileResult.fileCards.length}`);
     return {
       ...result,
       autoSendFileToUser: {
@@ -195,7 +197,7 @@ async function autoSendFileToUserIfNeeded(
     };
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
-    logger.error(`${SEND_CROSS_RESULT_LOG_TAG} auto send_file_to_user failed, error=${errorMessage}`);
+    logger.error(`${SEND_CROSS_RESULT_LOG_TAG} auto file card send failed, error=${errorMessage}`);
     return {
       ...result,
       autoSendFileToUser: {
@@ -350,7 +352,7 @@ export function createSendCrossDeviceTaskTool(ctx: SessionContext): any {
           }
           settled = true;
           const modelResult = buildModelToolResult(result);
-          logger.log(`${LOG_TAG} completed, success=${result.success}, code=${result.code}, sentFileCount=${result.sentFiles.length}`);
+          logger.log(`${LOG_TAG} completed, success=${result.success}, code=${result.code}, fileCardCount=${countSentFileCards(result.sentFiles)}`);
           cleanup();
           resolve(buildResultText(modelResult));
         };
@@ -359,7 +361,7 @@ export function createSendCrossDeviceTaskTool(ctx: SessionContext): any {
           if (event.sessionId && event.sessionId !== sessionId && event.sessionId !== distributionSessionId) {
             return;
           }
-          logger.log(`${SEND_CROSS_RESULT_LOG_TAG} received result, status=${event.status}, code=${event.code}, sentFileCount=${event.sentFiles.length}`);
+          logger.log(`${SEND_CROSS_RESULT_LOG_TAG} received result, status=${event.status}, code=${event.code}, fileCardCount=${countSentFileCards(event.sentFiles)}`);
 
           void (async () => {
             if (resultHandlingStarted) {

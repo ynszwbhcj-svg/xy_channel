@@ -269,6 +269,7 @@ b. 操作超时时间为2分钟（120秒），请勿重复调用此工具，如�
 
     // Build and send agent_response messages for each file
     const sentFiles: Array<{ fileName: string; fileId: string }> = [];
+    let cachedSentFilesForReturn: SentFileCard[] = [];
 
     for (const uploadedFile of uploadedFiles) {
       const { fileName, fileId, mimeType } = uploadedFile;
@@ -311,10 +312,11 @@ b. 操作超时时间为2分钟（120秒），请勿重复调用此工具，如�
       if (ctx.runCrossTaskContext) {
         const sentFileCard: SentFileCard = { fileName, fileId, mimeType };
         const cachedSentFiles = appendRunCrossTaskSentFiles(
-          [{ fileCards: [sentFileCard] }],
+          [sentFileCard],
           ctx.runCrossTaskContext,
         );
-        logger.log(`[RunCrossTask] cached file card for cross-task result, fileName=${fileName}, cachedCount=${cachedSentFiles.length}`);
+        cachedSentFilesForReturn = cachedSentFiles;
+        logger.log(`[RunCrossTask] cached file card for cross-task result, fileName=${fileName}, cachedFileCardCount=${cachedSentFiles.length}`);
       }
       sentFiles.push({ fileName, fileId });
     }
@@ -327,7 +329,8 @@ b. 操作超时时间为2分钟（120秒），请勿重复调用此工具，如�
           text: JSON.stringify({
             sentFiles,
             count: sentFiles.length,
-            message: `成功发送 ${sentFiles.length} 个文件到用户设备`
+            message: `成功发送 ${sentFiles.length} 个文件到用户设备`,
+            cachedSentFiles: cachedSentFilesForReturn
           }),
         },
       ],
