@@ -26,6 +26,12 @@ import {
 } from "./task-manager.js";
 import type { A2AJsonRpcRequest } from "./types.js";
 import { logger } from "./utils/logger.js";
+import {
+  getSubagentWaitState,
+  hasSubagentWaitState,
+  markSubagentWaitParentSettled,
+} from "./subagent-wait-state.js";
+import { markSteeredCompletionPending } from "./steered-completion-state.js";
 
 /**
  * Parameters for handling an XY message.
@@ -44,6 +50,18 @@ export interface HandleXYMessageParams {
    * session refCount.
    */
   skipRegistration?: boolean;
+}
+
+function getRequestTaskId(message: A2AJsonRpcRequest): string {
+  const paramsTaskId = (message.params as any)?.id;
+  if (typeof paramsTaskId === "string" && paramsTaskId.length > 0) {
+    return paramsTaskId;
+  }
+  const topLevelTaskId = (message as any)?.taskId;
+  if (typeof topLevelTaskId === "string" && topLevelTaskId.length > 0) {
+    return topLevelTaskId;
+  }
+  return message.id;
 }
 
 /**
@@ -90,7 +108,7 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
     // Handle tasks/cancel messages (sessionId at top level, no params)
     if (messageMethod === "tasks/cancel" || messageMethod === "tasks_cancel") {
       const sessionId = message.sessionId ?? message.params?.sessionId;
-      const taskId = message.params?.id || message.id;
+      const taskId = getRequestTaskId(message);
       if (!sessionId) {
         throw new Error("tasks/cancel request missing sessionId in params");
       }
@@ -103,6 +121,13 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
         taskId,
         messageId: message.id,
       });
+      if (getSubagentWaitState(sessionId, taskId)) {
+        // Xiaoyi sends tasks/cancel when the foreground task yields control.
+        // Keep the wait state so the eventual subagent result can still close the original A2A task.
+        log.log(`[BOT] Subagent wait active, preserving task/session context after tasks/cancel`);
+      } else {
+        decrementTaskIdRef(sessionId, taskId);
+      }
       return;
     }
 
@@ -151,12 +176,15 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
     }
     // ========================================
 
-    // 🔑 注册taskId（检测是否是已有活跃任务的 session）
-    const isUpdate = hasActiveTask(parsed.sessionId);
+    // 🔑 注册taskId（检测是否是已有可 steer 的运行中 session）
+    const hasTaskBinding = hasActiveTask(parsed.sessionId);
+    const isUpdate = hasTaskBinding && hasSteerableRun(parsed.sessionId);
     const skipReg = params.skipRegistration === true;
 
     if (isUpdate) {
       log.log(`[BOT] STEER MODE - Second message detected, new taskId=${parsed.taskId}`);
+    } else if (hasTaskBinding) {
+      log.log(`[BOT] Active task binding exists but no steerable run; starting a new task`);
     }
 
     // Steer injections skip taskId registration to avoid overwriting the active taskId
@@ -423,6 +451,7 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
       taskId: parsed.taskId,
       messageId: parsed.messageId,
       accountId: route.accountId,
+      sessionKey: route.sessionKey,
       steerState,
     });
 
@@ -458,7 +487,14 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
         }
 
         streamingSignals.delete(parsed.sessionId);
-        decrementTaskIdRef(parsed.sessionId);
+
+        if (hasSubagentWaitState(parsed.sessionId, parsed.taskId)) {
+          markSubagentWaitParentSettled(parsed.sessionId, parsed.taskId);
+          log.log(`[BOT] Subagent wait active, preserving task/session context for completion announce`);
+          return;
+        }
+
+        decrementTaskIdRef(parsed.sessionId, parsed.taskId);
         unregisterSession(route.sessionKey);
         log.log(`[BOT] Cleanup completed`);
       },
@@ -585,6 +621,10 @@ if (!_g.__xySteerQueues) _g.__xySteerQueues = new Map<string, Promise<void>>();
 
 const streamingSignals = _g.__xyStreamingSignals as Map<string, StreamingSignal>;
 const steerQueues = _g.__xySteerQueues as Map<string, Promise<void>>;
+
+export function hasSteerableRun(sessionId: string): boolean {
+  return streamingSignals.has(sessionId);
+}
 
 /**
  * 由 provider.ts 在 wrapStreamFn 调用时触发。
@@ -740,6 +780,7 @@ async function dispatchSteerWhenReady(params: EnqueueSteerParams): Promise<void>
     taskId: params.parsed.taskId,
     messageId: params.parsed.messageId,
     accountId: params.route.accountId,
+    sessionKey: params.route.sessionKey,
     steerState,
   });
 
@@ -751,6 +792,13 @@ async function dispatchSteerWhenReady(params: EnqueueSteerParams): Promise<void>
     agentId: params.route.accountId,
     deviceType: params.deviceType,
   };
+
+  markSteeredCompletionPending({
+    sessionId,
+    sessionKey,
+    taskId: params.parsed.taskId,
+    messageId: params.parsed.messageId,
+  });
 
   log.log(`[STEER-QUEUE] Dispatching steer`);
 

@@ -62,6 +62,7 @@ export interface SendA2AResponseParams {
   text?: string;
   append: boolean;
   final: boolean;
+  artifactId?: string;
   files?: Array<{ fileName: string; fileType: string; fileId: string }>;
   errorCode?: number | string; // 错误码，用于任务执行异常场景
   errorMessage?: string; // 错误描述
@@ -72,7 +73,7 @@ export interface SendA2AResponseParams {
  * Send an A2A artifact update response.
  */
 export async function sendA2AResponse(params: SendA2AResponseParams): Promise<void> {
-  const { config, sessionId, taskId, messageId, text, append, final, files, errorCode, errorMessage, log: shouldLog = true } = params;
+  const { config, sessionId, taskId, messageId, text, append, final, artifactId, files, errorCode, errorMessage, log: shouldLog = true } = params;
   const log = logger.withContext(sessionId, taskId);
 
   // 审批桥接：将 OpenClaw 的审批提示翻译成用户友好的确认文案
@@ -86,7 +87,7 @@ export async function sendA2AResponse(params: SendA2AResponseParams): Promise<vo
     lastChunk: true,
     final,
     artifact: {
-      artifactId: uuidv4(),
+      artifactId: artifactId ?? uuidv4(),
       parts: [],
     },
   };
@@ -218,6 +219,8 @@ export interface SendStatusUpdateParams {
   messageId: string;
   text: string;
   state: "submitted" | "working" | "input-required" | "completed" | "canceled" | "failed" | "unknown";
+  /** Subagent completion must report to its original task, even if a newer user message is active. */
+  useLatestTask?: boolean;
 }
 
 /**
@@ -225,12 +228,12 @@ export interface SendStatusUpdateParams {
  * Follows A2A protocol standard format with nested status object.
  */
 export async function sendStatusUpdate(params: SendStatusUpdateParams): Promise<void> {
-  const { config, sessionId, taskId, messageId, text, state } = params;
+  const { config, sessionId, taskId, messageId, text, state, useLatestTask = true } = params;
 
   // Dynamic lookup: use latest taskId/messageId from task-manager (handles steer/interrupt),
   // fall back to closure-captured values
-  const currentTaskId = getCurrentTaskId(sessionId) ?? taskId;
-  const currentMessageId = getCurrentMessageId(sessionId) ?? messageId;
+  const currentTaskId = useLatestTask ? getCurrentTaskId(sessionId) ?? taskId : taskId;
+  const currentMessageId = useLatestTask ? getCurrentMessageId(sessionId) ?? messageId : messageId;
   const log = logger.withContext(sessionId, currentTaskId);
 
   // 审批桥接和脱敏

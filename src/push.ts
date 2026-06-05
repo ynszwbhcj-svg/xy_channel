@@ -108,6 +108,7 @@ export class XYPushService {
           pushId: actualPushId,
           pushText: title,
           kind: "task",
+          ...(sessionId ? { sessionId } : {}),
           artifacts: [
             {
               artifactId: randomUUID(),
