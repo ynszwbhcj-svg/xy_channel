@@ -161,6 +161,7 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
   let hasSentResponse = false;
   let finalSent = false;
   let accumulatedText = "";
+  let finalReplyText = "";
   const initialRunCrossTaskContext = getCurrentSessionContext()?.runCrossTaskContext;
 
   const getRunCrossTaskContext = (): RunCrossTaskContext | undefined => {
@@ -231,6 +232,11 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
             return;
           }
 
+          if (info?.kind === "final") {
+            finalReplyText = text;
+            scopedLog().log(`[DELIVER] Captured final reply text, length=${finalReplyText.length}`);
+          }
+
           // 🔑 如果 onPartialReply 已经流式发送过文本，deliver 不再重复发送
           if (hasSentResponse) {
             scopedLog().log(`[DELIVER SKIP] Already sent via onPartialReply`);
@@ -299,7 +305,11 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
 
         // 正常模式（或未被steer的dispatch）
         if (hasSentResponse && !finalSent) {
-          scopedLog().log(`[ON-IDLE] Sending accumulated text, length=${accumulatedText.length}`);
+          const trimmedFinalReplyText = finalReplyText.trim();
+          const trimmedAccumulatedText = accumulatedText.trim();
+          const crossTaskResultMessage = trimmedFinalReplyText || trimmedAccumulatedText;
+          const crossTaskResultSource = trimmedFinalReplyText ? "final" : "accumulated";
+          scopedLog().log(`[ON-IDLE] [SendCrossResult]Sending cross-task result, source=${crossTaskResultSource}, resultMessage.length=${crossTaskResultMessage.length}`);
           try {
             const runCrossTaskContext = getRunCrossTaskContext();
             if (runCrossTaskContext) {
@@ -310,7 +320,7 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
                 messageId: currentMessageId,
                 context: runCrossTaskContext,
                 resultCode: "0",
-                resultMessage: accumulatedText,
+                resultMessage: crossTaskResultMessage,
               });
             }
 
