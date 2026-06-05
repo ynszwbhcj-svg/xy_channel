@@ -378,6 +378,91 @@ export async function sendCommand(params: SendCommandParams): Promise<void> {
 }
 
 /**
+ * Parameters for sending a card (e.g., HTML H5 card).
+ */
+export interface SendCardParams {
+  config: XYChannelConfig;
+  sessionId: string;
+  taskId: string;
+  messageId: string;
+  /** toolCallId from the tool's execute() — used for cron detection via hook-set Map. */
+  toolCallId?: string;
+  /** When true, the artifact-update is sent with final=true. Default: false. */
+  final?: boolean;
+  /** Array of card data objects to send. */
+  cardsInfo: CardDataObject[];
+}
+
+/**
+ * Card data object for sending display cards.
+ */
+export interface CardDataObject {
+  cardName: string;
+  cardData: Record<string, any>;
+  displayType: string;
+}
+
+/**
+ * Send a card (e.g., HTML H5 card) as an artifact update (final=false).
+ *
+ * Cron-aware: same routing logic as sendCommand.
+ */
+export async function sendCard(params: SendCardParams): Promise<void> {
+  const { config, sessionId, taskId, messageId, toolCallId } = params;
+
+  // ── Cron mode: route through push channel ──────────────────────
+  if (sessionId.startsWith("cron-") || isCronToolCall(toolCallId)) {
+    throw new Error("sendCard does not support cron mode");
+  }
+
+  // ── Normal mode: WebSocket ─────────────────────────────────────
+  const currentTaskId = getCurrentTaskId(sessionId) ?? taskId;
+  const currentMessageId = getCurrentMessageId(sessionId) ?? messageId;
+  const log = logger.withContext(sessionId, currentTaskId);
+
+  // Build artifact update with cardsInfo as data
+  const artifact: A2ATaskArtifactUpdateEvent = {
+    taskId: currentTaskId,
+    kind: "artifact-update",
+    append: false,
+    lastChunk: true,
+    final: params.final ?? false,
+    artifact: {
+      artifactId: uuidv4(),
+      parts: [
+        {
+          kind: "data",
+          data: {
+            cardsInfo: params.cardsInfo,
+          },
+        },
+      ],
+    },
+  };
+
+  // Build JSON-RPC response
+  const jsonRpcResponse = {
+    jsonrpc: "2.0",
+    id: currentMessageId,
+    result: artifact,
+  };
+
+  // Send via WebSocket
+  const wsManager = getXYWebSocketManager(config);
+  const outboundMessage: OutboundWebSocketMessage = {
+    msgType: "agent_response",
+    agentId: config.agentId,
+    sessionId,
+    taskId: currentTaskId,
+    msgDetail: JSON.stringify(jsonRpcResponse),
+  };
+
+  log.log(`[A2A_CARD] Sending card`);
+  await wsManager.sendMessage(sessionId, outboundMessage);
+  log.log(`[A2A_CARD] Card sent successfully`);
+}
+
+/**
  * Parameters for sending a clearContext response.
  */
 export interface SendClearContextResponseParams {
