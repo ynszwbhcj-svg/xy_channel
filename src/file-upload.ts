@@ -268,6 +268,119 @@ export class XYFileUploadService {
   }
 
   /**
+   * Upload a file and return a preview-able URL (needPreview=true).
+   * Same as uploadFileAndGetUrl but adds needPreview flag to get a directly viewable URL.
+   */
+  async uploadFileAndGetPreviewUrl(filePath: string, objectType: string = "TEMPORARY_MATERIAL_DOC"): Promise<string> {
+    let localFilePath = filePath;
+    let isTempFile = false;
+
+    try {
+      // Handle remote URLs by downloading first
+      if (isRemoteUrl(filePath)) {
+        localFilePath = await downloadToTempFile(filePath);
+        isTempFile = true;
+      }
+
+      // Read file
+      const fileBuffer = await fs.readFile(localFilePath);
+      const fileName = path.basename(localFilePath);
+      const fileSha256 = calculateSHA256(fileBuffer);
+      const fileSize = fileBuffer.length;
+
+      // Phase 1: Prepare
+      logger.log(`[XY File Upload] Phase 1 (preview): Prepare upload for ${fileName}`);
+      const prepareResp = await fetch(`${this.baseUrl}/osms/v1/file/manager/prepare`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-uid": this.uid,
+          "x-api-key": this.apiKey,
+          "x-request-from": "openclaw",
+        },
+        body: JSON.stringify({
+          objectType,
+          fileName,
+          fileSha256,
+          fileSize,
+          fileOwnerInfo: {
+            uid: this.uid,
+            teamId: this.uid,
+          },
+          useEdge: false,
+        } as FileUploadPrepareRequest),
+      });
+
+      if (!prepareResp.ok) {
+        throw new Error(`Prepare failed: HTTP ${prepareResp.status}`);
+      }
+
+      const prepareData = await prepareResp.json() as FileUploadPrepareResponse;
+
+      if (prepareData.code !== "0") {
+        throw new Error(`Prepare failed: ${prepareData.desc}`);
+      }
+
+      const { objectId, draftId, uploadInfos } = prepareData;
+      logger.log(`[XY File Upload] Prepare (preview) complete: objectId=${objectId}, draftId=${draftId}`);
+
+      // Phase 2: Upload
+      logger.log(`[XY File Upload] Phase 2 (preview): Upload file data`);
+      const uploadInfo = uploadInfos[0];
+
+      const uploadResp = await fetch(uploadInfo.url, {
+        method: uploadInfo.method,
+        headers: uploadInfo.headers,
+        body: fileBuffer,
+      });
+
+      if (!uploadResp.ok) {
+        throw new Error(`Upload failed: HTTP ${uploadResp.status}`);
+      }
+
+      logger.log(`[XY File Upload] Upload (preview) complete`);
+
+      // Phase 3: CompleteAndQuery with needPreview=true
+      logger.log(`[XY File Upload] Phase 3 (preview): CompleteAndQuery with needPreview=true`);
+      const completeResp = await fetch(`${this.baseUrl}/osms/v1/file/manager/completeAndQuery`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-uid": this.uid,
+          "x-api-key": this.apiKey,
+          "x-request-from": "openclaw",
+        },
+        body: JSON.stringify({
+          objectId,
+          draftId,
+          needPreview: true,
+        }),
+      });
+
+      if (!completeResp.ok) {
+        throw new Error(`CompleteAndQuery (preview) failed: HTTP ${completeResp.status}`);
+      }
+
+      const completeData = await completeResp.json() as any;
+
+      const fileUrl = completeData?.fileDetailInfo?.url || "";
+      if (!fileUrl) {
+        throw new Error("No file URL returned from completeAndQuery (preview)");
+      }
+
+      logger.log(`[XY File Upload] File upload with preview URL successful`);
+      return fileUrl;
+    } catch (error) {
+      logger.error(`[XY File Upload] File upload with preview URL failed for ${filePath}:`, error);
+      throw error;
+    } finally {
+      if (isTempFile) {
+        try { await fs.unlink(localFilePath); } catch {}
+      }
+    }
+  }
+
+  /**
    * Upload multiple files and return their file IDs.
    */
   async uploadFiles(

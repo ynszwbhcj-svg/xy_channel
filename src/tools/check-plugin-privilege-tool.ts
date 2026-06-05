@@ -117,7 +117,7 @@ export function createCheckPluginPrivilegeTool(ctx: SessionContext): any {
             executeMode: "background",
             intentName: "CheckPlugInPrivilege",
             intentParam: {
-              checkIntentName: "CheckPluginPrivilege",
+              checkIntentName,
               permissionId,
             },
             needUnlock: false,

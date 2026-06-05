@@ -178,14 +178,14 @@ export function extractDeviceType(parts: A2AMessagePart[]): string | null {
 
 /**
  * Extract modelName from message parts.
- * Looks for modelName in data parts under variables.systemVariables.modelName
- * (same level as push_id / device_type).
+ * Looks for modelName in data parts under variables.memoryVariables.modelName
+ * (same level as systemVariables).
  */
 export function extractModelName(parts: A2AMessagePart[]): string | null {
   for (const part of parts) {
     if (part.kind === "data" && part.data) {
-      const modelName = part.data.variables?.systemVariables?.modelName;
-      if (modelName && typeof modelName === "string") {
+      const modelName = part.data.variables?.memoryVariables?.modelName;
+      if (modelName && typeof modelName === "string" && modelName.trim() !== "" && modelName.toLowerCase() !== "none") {
         return modelName;
       }
     }

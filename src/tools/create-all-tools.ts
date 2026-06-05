@@ -10,6 +10,7 @@ import type { SessionContext } from "./session-manager.js";
 import { createLocationTool } from "./location-tool.js";
 import { createXiaoyiGuiTool } from "./xiaoyi-gui-tool.js";
 import { createSendFileToUserTool } from "./send-file-to-user-tool.js";
+import { createSendHtmlCardTool } from "./send-html-card-tool.js";
 import { viewPushResultTool } from "./view-push-result-tool.js";
 import { createImageReadingTool } from "./image-reading-tool.js";
 import { timestampToUtc8Tool } from "./timestamp-to-utc8-tool.js";
@@ -60,6 +61,7 @@ export function createAllTools(ctx: SessionContext | null): ChannelAgentTool[] {
     createGetAlarmToolSchemaTool(ctx),
     createGetCollectionToolSchemaTool(ctx),
     createSendFileToUserTool(ctx),
+    createSendHtmlCardTool(ctx),
     // createGetEmailToolSchemaTool(ctx),
     viewPushResultTool,
     createImageReadingTool(ctx),
