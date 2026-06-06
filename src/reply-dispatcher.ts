@@ -490,12 +490,11 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
           if (text.length > 0) {
             // 🔑 检测是否是新一轮思考：当前text比上一次短，或不以上次内容开头
             const isNewRound = lastReasoningText.length > 0 &&
-              (text.length < lastReasoningText.length || !text.startsWith(lastReasoningText));
+              text.length < lastReasoningText.length;
 
             if (isNewRound) {
               // 将上一轮思考追加到历史
               accumulatedReasoningHistory += (accumulatedReasoningHistory ? "\n\n" : "") + lastReasoningText;
-              scopedLog().log(`[onReasoningStream] new round detected, lastReasoningText: ${lastReasoningText.substring(0, 100)}, text: ${text.substring(0, 100)}`);
             }
 
             // 更新当前轮最后一次text
@@ -540,6 +539,7 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
             if (isNewRound) {
               // 将上一轮回复追加到历史
               accumulatedReplyHistory += (accumulatedReplyHistory ? "\n\n" : "") + lastReplyText;
+              scopedLog().log(`[onPartialReply] new round detected, lastReplyText: ${lastReplyText.substring(0, 100)}, text: ${text.substring(0, 100)}`);
             }
 
             // 更新当前轮最后一次text
