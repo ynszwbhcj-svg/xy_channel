@@ -495,7 +495,7 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
             if (isNewRound) {
               // 将上一轮思考追加到历史
               accumulatedReasoningHistory += (accumulatedReasoningHistory ? "\n\n" : "") + lastReasoningText;
-              console.log(`[onReasoningStream] new round detected, lastReasoningText: ${lastReasoningText.substring(0, 100)}, text: ${text.substring(0, 100)}`);
+              scopedLog().log(`[onReasoningStream] new round detected, lastReasoningText: ${lastReasoningText.substring(0, 100)}, text: ${text.substring(0, 100)}`);
             }
 
             // 更新当前轮最后一次text
