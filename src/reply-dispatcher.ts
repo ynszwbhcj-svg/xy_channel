@@ -539,7 +539,6 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
             if (isNewRound) {
               // 将上一轮回复追加到历史
               accumulatedReplyHistory += (accumulatedReplyHistory ? "\n\n" : "") + lastReplyText;
-              scopedLog().log(`[onPartialReply] new round detected, lastReplyText: ${lastReplyText.substring(0, 100)}, text: ${text.substring(0, 100)}`);
             }
 
             // 更新当前轮最后一次text
