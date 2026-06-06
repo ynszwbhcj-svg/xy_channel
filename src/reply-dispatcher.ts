@@ -157,6 +157,8 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
   let hasSentResponse = false;
   let finalSent = false;
   let accumulatedText = "";
+  let accumulatedReasoningHistory = "";
+  let lastReasoningText = "";
   const initialRunCrossTaskContext = getCurrentSessionContext()?.runCrossTaskContext;
 
   const getRunCrossTaskContext = (): RunCrossTaskContext | undefined => {
@@ -484,13 +486,30 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
 
         try {
           if (text.length > 0) {
+            // 🔑 检测是否是新一轮思考：当前text比上一次短，或不以上次内容开头
+            const isNewRound = lastReasoningText.length > 0 &&
+              (text.length < lastReasoningText.length || !text.startsWith(lastReasoningText));
+
+            if (isNewRound) {
+              // 将上一轮思考追加到历史
+              accumulatedReasoningHistory += (accumulatedReasoningHistory ? "\n\n" : "") + lastReasoningText;
+            }
+
+            // 更新当前轮最后一次text
+            lastReasoningText = text;
+
+            // 🔑 拼接历史 + 当前轮内容
+            const fullText = accumulatedReasoningHistory
+              ? accumulatedReasoningHistory + "\n\n" + text
+              : text;
+
             // 🔑 将模型真实的thinking/reasoning内容通过reasoningText转发
             await sendReasoningTextUpdate({
               config,
               sessionId,
               taskId: currentTaskId,
               messageId: currentMessageId,
-              text,
+              text: fullText,
               append: false,
             });
           }
