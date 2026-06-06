@@ -26,7 +26,7 @@ c. htmlLocal 是本地HTML文件路径，会先上传获取预览链接再以卡
 注意事项：
 a. 操作超时时间为2分钟（120秒），请勿重复调用此工具，如果超时或失败，最多重试一次
 b. 最后要把最终的html的公网地址作为工具执行结果返回回去，要以markdown超链接的形式返回给用户，必须严格保留完整的url，包含url的鉴权鉴权信息，返回给用户的url必须是完整的
-c. html类型的文件回传给用户优先用这个工具
+c. html类型的文件回传给用户优先用这个工具,当用户说“生成xxxxhtml然后发我”或者“生成网页游戏烦我”这种表述时使用send_html_card工具
 d. 如果使用这个工具把html文件回传，则生成的html要尽可能适配用户的设备，如果用户使用的是手机，则尽可能生成竖屏的html的预览效果`,
     parameters: {
       type: "object",
@@ -109,8 +109,7 @@ d. 如果使用这个工具把html文件回传，则生成的html要尽可能适
               type: "text",
               text: JSON.stringify({
                 success: true,
-                url,
-                message: "HTML卡片发送成功",
+                message: `HTML卡片发送成功，html的在线链接如下，生成markdown超链接时与此url需保持完整一致 ${url}`,
               }),
             },
           ],
