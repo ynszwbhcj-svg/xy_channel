@@ -15,7 +15,7 @@ export interface SessionContext {
   messageId: string;
   agentId: string;
   deviceType?: string;
-  /** Model name extracted from A2A user variables (variables.memoryVariables.modelName).
+  /** Model name extracted from A2A user variables (variables.clientVariables.modelName).
    *  When set, provider.ts replaces model.id in the OpenAI request body. */
   modelName?: string;
   runCrossTaskContext?: RunCrossTaskContext;
