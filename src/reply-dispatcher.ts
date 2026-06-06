@@ -159,6 +159,8 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
   let accumulatedText = "";
   let accumulatedReasoningHistory = "";
   let lastReasoningText = "";
+  let accumulatedReplyHistory = "";
+  let lastReplyText = "";
   const initialRunCrossTaskContext = getCurrentSessionContext()?.runCrossTaskContext;
 
   const getRunCrossTaskContext = (): RunCrossTaskContext | undefined => {
@@ -330,7 +332,7 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
               taskId: currentTaskId,
               messageId: currentMessageId,
               text: "",
-              append: false,
+              append: true,
               final: true,
             });
             finalSent = true;
@@ -371,7 +373,7 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
               taskId: currentTaskId,
               messageId: currentMessageId,
               text: "任务执行异常，请重试~",
-              append: false,
+              append: true,
               final: true,
               errorCode: 99921111,
               errorMessage: "任务执行异常，请重试",
@@ -526,10 +528,27 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
 
         const currentTaskId = getActiveTaskId();
         const currentMessageId = getActiveMessageId();
-        const text = payload.text ?? "";
+        let text = payload.text ?? "";
 
         try {
           if (text.length > 0) {
+            // 🔑 检测是否是新一轮回复：当前text比上一次短，或不以上次内容开头
+            const isNewRound = lastReplyText.length > 0 &&
+              (text.length < lastReplyText.length || !text.startsWith(lastReplyText));
+
+            if (isNewRound) {
+              // 将上一轮回复追加到历史
+              accumulatedReplyHistory += (accumulatedReplyHistory ? "\n\n" : "") + lastReplyText;
+            }
+
+            // 更新当前轮最后一次text
+            lastReplyText = text;
+
+            // 🔑 拼接历史 + 当前轮内容
+            const fullText = accumulatedReplyHistory
+              ? accumulatedReplyHistory + "\n\n" + text
+              : text;
+
             accumulatedText += text;
             hasSentResponse = true;
 
@@ -539,7 +558,7 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
               sessionId,
               taskId: currentTaskId,
               messageId: currentMessageId,
-              text,
+              text: fullText,
               append: false,
               final: false,
               log: false,

@@ -354,6 +354,7 @@ export class XYFileUploadService {
           objectId,
           draftId,
           needPreview: true,
+          expireTime: 259200,
         }),
       });
 
