@@ -1,6 +1,6 @@
 // Message dispatch engine - following feishu/bot.ts pattern (simplified)
 import type { ClawdbotConfig, RuntimeEnv, ReplyPayload } from "openclaw/plugin-sdk";
-import { patchSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { updateSessionStoreEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { getXYRuntime } from "./runtime.js";
 import { createXYReplyDispatcher } from "./reply-dispatcher.js";
 import { parseA2AMessage, extractTextFromParts, extractFileParts, extractPushId, extractDeviceType, extractModelName, extractTriggerData, extractRunCrossTaskContext, isClearContextMessage, isTasksCancelMessage } from "./parser.js";
@@ -237,10 +237,10 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
       // configured default model instead of the A2A-specified one.
       if (modelName && modelName.trim() !== "" && modelName.toLowerCase() !== "none") {
         try {
-          await patchSessionEntry({
+          await updateSessionStoreEntry({
+            storePath: resolveStorePath(),
             sessionKey: route.sessionKey,
-            update: (entry) => ({
-              ...entry,
+            update: async () => ({
               providerOverride: "xiaoyiprovider",
               modelOverride: modelName,
               modelOverrideSource: "user",
