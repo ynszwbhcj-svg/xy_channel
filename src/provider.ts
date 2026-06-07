@@ -452,6 +452,32 @@ export const xiaoyiProvider: ProviderPlugin = {
   isCacheTtlEligible: () => true,
 
   /**
+   * Dynamic model resolution for A2A-specified model names.
+   * A2A messages carry a dynamic modelName that isn't in any static catalog.
+   * This hook lets OpenClaw's resolveModelAsync accept any model ID under
+   * xiaoyiprovider as long as the provider has a configured baseUrl.
+   */
+  resolveDynamicModel: (ctx) => {
+    const baseUrl = ctx.providerConfig?.baseUrl;
+    if (!baseUrl || typeof baseUrl !== "string") return null;
+    return {
+      id: ctx.modelId,
+      name: ctx.modelId,
+      api: ctx.providerConfig?.api ?? "openai-completions",
+      provider: "xiaoyiprovider",
+      baseUrl,
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128_000,
+      maxTokens: 8192,
+      ...(ctx.providerConfig?.headers && typeof ctx.providerConfig.headers === "object"
+        ? { headers: ctx.providerConfig.headers as Record<string, string> }
+        : {}),
+    };
+  },
+
+  /**
    * Store uid-based fallback prefix for lazy timestamp generation in wrapStreamFn.
    * Session-level headers (traceId / sessionId / interactionId) are resolved
    * directly in wrapStreamFn via cron detection, Conversation info extraction,

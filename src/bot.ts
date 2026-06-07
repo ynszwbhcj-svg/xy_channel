@@ -1,6 +1,6 @@
 // Message dispatch engine - following feishu/bot.ts pattern (simplified)
 import type { ClawdbotConfig, RuntimeEnv, ReplyPayload } from "openclaw/plugin-sdk";
-import { updateSessionStoreEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import { updateSessionStoreEntry, updateSessionStore, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { getXYRuntime } from "./runtime.js";
 import { createXYReplyDispatcher } from "./reply-dispatcher.js";
 import { parseA2AMessage, extractTextFromParts, extractFileParts, extractPushId, extractDeviceType, extractModelName, extractTriggerData, extractRunCrossTaskContext, isClearContextMessage, isTasksCancelMessage } from "./parser.js";
@@ -237,16 +237,37 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
       // configured default model instead of the A2A-specified one.
       if (modelName && modelName.trim() !== "" && modelName.toLowerCase() !== "none") {
         try {
-          await updateSessionStoreEntry({
-            storePath: resolveStorePath(),
+          const storePath = resolveStorePath();
+          const result = await updateSessionStoreEntry({
+            storePath,
             sessionKey: route.sessionKey,
             update: async () => ({
               providerOverride: "xiaoyiprovider",
               modelOverride: modelName,
               modelOverrideSource: "user",
+              model: "",
+              modelProvider: "",
             }),
           });
-          log.log(`[BOT] Patched session store model override: xiaoyiprovider/${modelName}`);
+          if (!result) {
+            // Session entry doesn't exist yet (first message, xy_channel
+            // bypasses the standard turn kernel). Create a minimal entry
+            // with the override via updateSessionStore.
+            await updateSessionStore(storePath, (store) => {
+              if (!store[route.sessionKey]) {
+                store[route.sessionKey] = {
+                  sessionId: route.sessionKey,
+                  updatedAt: Date.now(),
+                  providerOverride: "xiaoyiprovider",
+                  modelOverride: modelName,
+                  modelOverrideSource: "user",
+                } as any;
+              }
+            });
+            log.log(`[BOT] Created session entry with model override: xiaoyiprovider/${modelName}`);
+          } else {
+            log.log(`[BOT] Patched session store model override: xiaoyiprovider/${modelName}`);
+          }
         } catch (patchErr) {
           log.error(`[BOT] Failed to patch session model override:`, patchErr);
         }
