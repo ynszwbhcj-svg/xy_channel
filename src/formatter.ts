@@ -315,12 +315,11 @@ export async function sendCommand(params: SendCommandParams): Promise<void> {
     throw new Error("sendCommand requires command or commands.");
   }
 
-  // ── Cron mode: route through push channel ──────────────────────
-  // Detected via: (a) sessionId "cron-" prefix from synthetic session, OR
-  //               (b) toolCallId marked by before_tool_call hook from openclaw's sessionKey.
+  // ── Cron mode: disabled ────────────────────────────────────────
+  // sendCommandViaPush is disabled in this version. Cron-triggered
+  // tool calls that try to send commands will be rejected.
   if (sessionId.startsWith("cron-") || isCronToolCall(toolCallId)) {
-    const { sendCommandViaPush } = await import("./cron-command.js");
-    return sendCommandViaPush({ config, command: commands[0] });
+    throw new Error("sendCommandViaPush is disabled in this version");
   }
 
   // ── Normal mode: WebSocket ─────────────────────────────────────

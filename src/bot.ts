@@ -1,5 +1,6 @@
 // Message dispatch engine - following feishu/bot.ts pattern (simplified)
 import type { ClawdbotConfig, RuntimeEnv, ReplyPayload } from "openclaw/plugin-sdk";
+import { patchSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { getXYRuntime } from "./runtime.js";
 import { createXYReplyDispatcher } from "./reply-dispatcher.js";
 import { parseA2AMessage, extractTextFromParts, extractFileParts, extractPushId, extractDeviceType, extractModelName, extractTriggerData, extractRunCrossTaskContext, isClearContextMessage, isTasksCancelMessage } from "./parser.js";
@@ -230,6 +231,26 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
         modelName,
         runCrossTaskContext: runCrossTaskContext ?? undefined,
       });
+
+      // 🔑 Sync A2A modelName to OpenClaw session store so that session_status
+      // reports the correct model. Without this, session_status returns the
+      // configured default model instead of the A2A-specified one.
+      if (modelName && modelName.trim() !== "" && modelName.toLowerCase() !== "none") {
+        try {
+          await patchSessionEntry({
+            sessionKey: route.sessionKey,
+            update: (entry) => ({
+              ...entry,
+              providerOverride: "xiaoyiprovider",
+              modelOverride: modelName,
+              modelOverrideSource: "user",
+            }),
+          });
+          log.log(`[BOT] Patched session store model override: xiaoyiprovider/${modelName}`);
+        } catch (patchErr) {
+          log.error(`[BOT] Failed to patch session model override:`, patchErr);
+        }
+      }
 
       // 🔑 发送初始状态更新
       log.log(`[BOT] Sending initial status update`);
