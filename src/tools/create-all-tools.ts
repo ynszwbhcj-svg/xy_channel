@@ -48,9 +48,9 @@ export function createAllTools(ctx: SessionContext | null): ChannelAgentTool[] {
 
   return [
     createLocationTool(ctx),
-    createDiscoverCrossDevicesTool(ctx),
-    createSendCrossDeviceTaskTool(ctx),
-    createDisplayA2UICardTool(ctx),
+    // createDiscoverCrossDevicesTool(ctx),
+    // createSendCrossDeviceTaskTool(ctx),
+    // createDisplayA2UICardTool(ctx),
     createCallDeviceTool(ctx),
     createGetNoteToolSchemaTool(ctx),
     createGetCalendarToolSchemaTool(ctx),
@@ -69,6 +69,6 @@ export function createAllTools(ctx: SessionContext | null): ChannelAgentTool[] {
     createSaveSelfEvolutionSkillTool(ctx),
     createLoginTokenTool(ctx),
     createAgentAsSkillTool(ctx),
-    createCheckPluginPrivilegeTool(ctx),
+    // createCheckPluginPrivilegeTool(ctx),
   ];
 }
