@@ -67,8 +67,6 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
   try {
     // Check for special messages BEFORE parsing (these have different param structures)
     const messageMethod = message.method;
-    logger.log(`[BOT] Received A2A message: ${JSON.stringify(message)}`);
-
 
     // Handle clearContext messages (sessionId at top level, no params)
     if (messageMethod === "clearContext" || messageMethod === "clear_context") {
