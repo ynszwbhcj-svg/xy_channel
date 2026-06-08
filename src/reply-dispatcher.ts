@@ -482,6 +482,8 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
           text = lines.slice(1).join("\n").trim();
         }
 
+        scopedLog().log(`[REASONING-STREAM] ${text.substring(0, 100)}`);
+
         try {
           if (text.length > 0) {
             await sendReasoningTextUpdate({
