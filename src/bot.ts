@@ -245,6 +245,7 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
               modelOverrideSource: "user",
               model: "",
               modelProvider: "",
+              contextTokens: 256_000,
             }),
           });
           if (!result) {
@@ -262,6 +263,7 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
                   providerOverride: "xiaoyiprovider",
                   modelOverride: modelName,
                   modelOverrideSource: "user",
+                  contextTokens: 256_000,
                 } as any;
               }
             });
