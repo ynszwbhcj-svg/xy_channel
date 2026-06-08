@@ -20,7 +20,8 @@ const GATEWAY_TIMEOUT_MS = 60_000;
  */
 export async function handleCronQueryEvent(context, cfg) {
     const { action, jobId, params, sessionId, taskId, messageId } = context;
-    logger.log(`[CRON-QUERY] Received event: action=${action}, jobId=${jobId ?? "(none)"}`);
+    const log = logger.withContext(sessionId ?? "", taskId ?? "");
+    log.log(`[CRON-QUERY] Received event: action=${action}, jobId=${jobId ?? "(none)"}`);
     let result;
     let error;
     try {
@@ -63,17 +64,17 @@ export async function handleCronQueryEvent(context, cfg) {
                 break;
             default:
                 error = `Unknown action: ${context.action}`;
-                logger.error(`[CRON-QUERY] ${error}`);
+                log.error(`[CRON-QUERY] ${error}`);
                 result = { error };
         }
     }
     catch (err) {
         error = err instanceof Error ? err.message : String(err);
-        logger.error(`[CRON-QUERY] RPC call failed for action=${action}:`, err);
+        log.error(`[CRON-QUERY] RPC call failed for action=${action}:`, err);
         result = { error };
     }
     // Log the result
-    logger.log(`[CRON-QUERY] RPC result for action=${action}: ${JSON.stringify(result, null, 2)}`);
+    log.log(`[CRON-QUERY] RPC result for action=${action}: ${JSON.stringify(result, null, 2)}`);
     // Send result back via sendCommand as System.CronQuery with payload.ans
     if (cfg && sessionId && taskId && messageId) {
         try {
@@ -94,16 +95,16 @@ export async function handleCronQueryEvent(context, cfg) {
                 taskId,
                 messageId,
                 command,
-                final: true,
+                final: sessionId.toLowerCase().endsWith("cronquery"),
             });
-            logger.log(`[CRON-QUERY] Sent response via sendCommand, action=${action}`);
+            log.log(`[CRON-QUERY] Sent response via sendCommand, action=${action}`);
         }
         catch (sendErr) {
-            logger.error(`[CRON-QUERY] Failed to send response via sendCommand:`, sendErr);
+            log.error(`[CRON-QUERY] Failed to send response via sendCommand:`, sendErr);
         }
     }
     else {
-        logger.warn(`[CRON-QUERY] Missing cfg/sessionId/taskId/messageId, skipping sendCommand`);
+        log.warn(`[CRON-QUERY] Missing cfg/sessionId/taskId/messageId, skipping sendCommand`);
     }
 }
 
