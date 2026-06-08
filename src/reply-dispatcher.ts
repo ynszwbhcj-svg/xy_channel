@@ -513,7 +513,6 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
             accumulatedText += text;
             hasSentResponse = true;
 
-            scopedLog().log(`[PARTIAL-REPLY] Sending A2A text: "${text}"`);
             await sendA2AResponse({
               config,
               sessionId,
