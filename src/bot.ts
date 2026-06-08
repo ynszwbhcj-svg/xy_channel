@@ -7,6 +7,7 @@ import { parseA2AMessage, extractTextFromParts, extractFileParts, extractPushId,
 import { downloadFilesFromParts } from "./file-download.js";
 import { resolveXYConfig } from "./config.js";
 import { sendStatusUpdate, sendClearContextResponse, sendTasksCancelResponse, sendA2AResponse } from "./formatter.js";
+import { deliverSubagentFinalResult } from "./outbound.js";
 import {
   appendSelfEvolutionKeywordNudge,
   shouldNudgeForSelfEvolutionKeyword,
@@ -52,6 +53,18 @@ export interface HandleXYMessageParams {
   skipRegistration?: boolean;
 }
 
+function getRequestSessionId(message: A2AJsonRpcRequest, fallbackSessionId?: string): string {
+  const paramsSessionId = (message.params as any)?.sessionId;
+  if (typeof paramsSessionId === "string" && paramsSessionId.length > 0) {
+    return paramsSessionId;
+  }
+  const topLevelSessionId = message.sessionId;
+  if (typeof topLevelSessionId === "string" && topLevelSessionId.length > 0) {
+    return topLevelSessionId;
+  }
+  return fallbackSessionId ?? "";
+}
+
 function getRequestTaskId(message: A2AJsonRpcRequest): string {
   const paramsTaskId = (message.params as any)?.id;
   if (typeof paramsTaskId === "string" && paramsTaskId.length > 0) {
@@ -90,7 +103,7 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
 
     // Handle clearContext messages (sessionId at top level, no params)
     if (messageMethod === "clearContext" || messageMethod === "clear_context") {
-      const sessionId = message.sessionId ?? message.params?.sessionId;
+      const sessionId = getRequestSessionId(message, webSocketSessionId);
       if (!sessionId) {
         throw new Error("clearContext request missing sessionId in params");
       }
@@ -107,7 +120,7 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
 
     // Handle tasks/cancel messages (sessionId at top level, no params)
     if (messageMethod === "tasks/cancel" || messageMethod === "tasks_cancel") {
-      const sessionId = message.sessionId ?? message.params?.sessionId;
+      const sessionId = getRequestSessionId(message, webSocketSessionId);
       const taskId = getRequestTaskId(message);
       if (!sessionId) {
         throw new Error("tasks/cancel request missing sessionId in params");
@@ -477,7 +490,7 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
 
     await core.channel.reply.withReplyDispatcher({
       dispatcher,
-      onSettled: () => {
+      onSettled: async () => {
         log.log(`[BOT] onSettled, steered=${steerState.steered}`);
 
         // 🔑 When steered, skip heavy cleanup — the first message's dispatcher is still running
@@ -489,7 +502,16 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
         streamingSignals.delete(parsed.sessionId);
 
         if (hasSubagentWaitState(parsed.sessionId, parsed.taskId)) {
-          markSubagentWaitParentSettled(parsed.sessionId, parsed.taskId);
+          const transition = markSubagentWaitParentSettled(parsed.sessionId, parsed.taskId);
+          if (transition?.shouldFinalize) {
+            await deliverSubagentFinalResult({
+              config,
+              state: transition.state,
+              reason: "all-subagent-results-delivered-before-parent-settled",
+            });
+            log.log(`[BOT] Subagent wait complete on parent settled; final response delivered`);
+            return;
+          }
           log.log(`[BOT] Subagent wait active, preserving task/session context for completion announce`);
           return;
         }

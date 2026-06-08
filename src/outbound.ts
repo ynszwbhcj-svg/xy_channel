@@ -14,6 +14,7 @@ import {
   clearSubagentWaitState,
   getSubagentWaitState,
   markSubagentCompletionDelivered,
+  type SubagentWaitState,
 } from "./subagent-wait-state.js";
 import { clearSteeredCompletionState, getSteeredCompletionState } from "./steered-completion-state.js";
 import { savePushData } from "./utils/pushdata-manager.js";
@@ -64,6 +65,46 @@ function getMimeTypeFromFilename(filename: string): string {
     return FILE_TYPE_TO_MIME_TYPE[extension];
   }
   return "text/plain"; // Default fallback
+}
+
+function buildSubagentFinalText(state: SubagentWaitState, fallbackText?: string): string {
+  if (state.completionTexts.length > 0) {
+    return state.completionTexts.join("\n\n");
+  }
+  return fallbackText ?? "";
+}
+
+export async function deliverSubagentFinalResult(params: {
+  config: ReturnType<typeof resolveXYConfig>;
+  state: SubagentWaitState;
+  reason: string;
+  text?: string;
+}): Promise<void> {
+  const { config, state, reason, text } = params;
+  const log = logger.withContext(state.sessionId, state.taskId);
+  await sendStatusUpdate({
+    config,
+    sessionId: state.sessionId,
+    taskId: state.taskId,
+    messageId: state.messageId,
+    text: "任务处理已完成~",
+    state: "completed",
+    useLatestTask: false,
+  });
+  await sendA2AResponse({
+    config,
+    sessionId: state.sessionId,
+    taskId: state.taskId,
+    messageId: state.messageId,
+    text: buildSubagentFinalText(state, text),
+    append: false,
+    final: true,
+    artifactId: state.artifactId,
+  });
+  clearSubagentWaitState(state.sessionId, reason, state.taskId);
+  decrementTaskIdRef(state.sessionId, state.taskId);
+  unregisterSession(state.sessionKey);
+  log.log(`[xyOutbound] Subagent final delivered to original A2A task, reason=${reason}`);
 }
 
 /**
@@ -145,7 +186,11 @@ export const xyOutbound: ChannelOutboundAdapter = {
       waitState || !waitSessionId ? null : getSteeredCompletionState(waitSessionId, waitTaskId);
     if (waitState && (!waitTaskId || waitTaskId === waitState.taskId)) {
       const expectedCompletions = Math.max(1, waitState.expectedCompletions);
-      if (waitState.deliveredCompletions >= expectedCompletions) {
+      if (waitState.finalizationClaimed) {
+        logger.withContext(waitState.sessionId, waitState.taskId).log(
+          `[xyOutbound.sendText] Subagent finalization already claimed; skipping A2A wait delivery and continuing with push`,
+        );
+      } else if (waitState.deliveredCompletions >= expectedCompletions) {
         logger.withContext(waitState.sessionId, waitState.taskId).log(
           `[xyOutbound.sendText] Subagent results already complete; delivering text as main final response`,
         );
@@ -185,39 +230,28 @@ export const xyOutbound: ChannelOutboundAdapter = {
         const delivery = markSubagentCompletionDelivered(waitState.sessionId, waitState.taskId, text);
         const deliveredState = delivery?.state ?? waitState;
         const allExpectedCompletionsArrived = delivery?.isComplete ?? false;
-        const shouldCloseOriginalTask = allExpectedCompletionsArrived && deliveredState.parentSettled;
-        const finalText = deliveredState.completionTexts.length > 0
-          ? deliveredState.completionTexts.join("\n\n")
-          : text;
+        const shouldCloseOriginalTask = delivery?.shouldFinalize ?? false;
         logger.withContext(waitState.sessionId, waitState.taskId).log(
           `[xyOutbound.sendText] Delivering subagent completion update to original A2A task before push, allExpectedCompletionsArrived=${allExpectedCompletionsArrived}, parentSettled=${deliveredState.parentSettled}`,
         );
         try {
-          await sendStatusUpdate({
-            config,
-            sessionId: deliveredState.sessionId,
-            taskId: deliveredState.taskId,
-            messageId: deliveredState.messageId,
-            text: shouldCloseOriginalTask
-              ? "任务处理已完成~"
-              : allExpectedCompletionsArrived
-              ? "子任务结果已收齐，主任务正在整理最终回复~"
-              : `已收到子任务结果 ${deliveredState.deliveredCompletions}/${deliveredState.expectedCompletions}，继续等待其他子任务~`,
-            state: shouldCloseOriginalTask ? "completed" : "working",
-            useLatestTask: false,
-          });
           if (shouldCloseOriginalTask) {
-            await sendA2AResponse({
+            await deliverSubagentFinalResult({
+              config,
+              state: deliveredState,
+              reason: "all-subagent-results-delivered-after-parent-settled",
+              text,
+            });
+          } else if (!allExpectedCompletionsArrived) {
+            await sendStatusUpdate({
               config,
               sessionId: deliveredState.sessionId,
               taskId: deliveredState.taskId,
               messageId: deliveredState.messageId,
-              text: finalText,
-              append: false,
-              final: true,
-              artifactId: deliveredState.artifactId,
+              text: `已收到子任务结果 ${deliveredState.deliveredCompletions}/${deliveredState.expectedCompletions}，继续等待其他子任务~`,
+              state: "working",
+              useLatestTask: false,
             });
-          } else {
             await sendReasoningTextUpdate({
               config,
               sessionId: deliveredState.sessionId,
@@ -226,11 +260,10 @@ export const xyOutbound: ChannelOutboundAdapter = {
               text: `子任务结果 ${deliveredState.deliveredCompletions}/${deliveredState.expectedCompletions}：\n${text}`,
               append: true,
             });
-          }
-          if (shouldCloseOriginalTask) {
-            clearSubagentWaitState(deliveredState.sessionId, "all-subagent-results-delivered-after-parent-settled", deliveredState.taskId);
-            decrementTaskIdRef(deliveredState.sessionId, deliveredState.taskId);
-            unregisterSession(deliveredState.sessionKey);
+          } else {
+            logger.withContext(deliveredState.sessionId, deliveredState.taskId).log(
+              `[xyOutbound.sendText] All subagent results arrived before parent settled; deferring final A2A completion to parent settlement`,
+            );
           }
           logger.withContext(waitState.sessionId, waitState.taskId).log(
             `[xyOutbound.sendText] Subagent completion update delivered to A2A task; continuing with push delivery, allExpectedCompletionsArrived=${allExpectedCompletionsArrived}, final=${shouldCloseOriginalTask}`,

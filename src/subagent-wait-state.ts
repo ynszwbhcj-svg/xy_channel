@@ -12,7 +12,14 @@ export interface SubagentWaitState {
   deliveredCompletions: number;
   completionTexts: string[];
   parentSettled: boolean;
+  finalizationClaimed?: boolean;
   stopHeartbeat?: () => void;
+}
+
+export interface SubagentWaitTransition {
+  state: SubagentWaitState;
+  isComplete: boolean;
+  shouldFinalize: boolean;
 }
 
 const WAIT_TTL_MS = 30 * 60 * 1000;
@@ -36,8 +43,23 @@ function isExpired(state: SubagentWaitState): boolean {
   return Date.now() - state.startedAt > WAIT_TTL_MS;
 }
 
+function isComplete(state: SubagentWaitState): boolean {
+  return state.deliveredCompletions >= Math.max(1, state.expectedCompletions);
+}
+
+function claimFinalizationIfReady(state: SubagentWaitState): boolean {
+  if (state.finalizationClaimed) {
+    return false;
+  }
+  if (!state.parentSettled || !isComplete(state)) {
+    return false;
+  }
+  state.finalizationClaimed = true;
+  return true;
+}
+
 export function markSubagentWaitStarted(
-  state: Omit<SubagentWaitState, "artifactId" | "startedAt" | "expectedCompletions" | "deliveredCompletions" | "completionTexts" | "parentSettled"> &
+  state: Omit<SubagentWaitState, "artifactId" | "startedAt" | "expectedCompletions" | "deliveredCompletions" | "completionTexts" | "parentSettled" | "finalizationClaimed"> &
     Partial<Pick<SubagentWaitState, "expectedCompletions" | "deliveredCompletions">>,
 ): SubagentWaitState | null {
   const expectedCompletions =
@@ -55,6 +77,7 @@ export function markSubagentWaitStarted(
     deliveredCompletions: state.deliveredCompletions ?? 0,
     completionTexts: [],
     parentSettled: false,
+    finalizationClaimed: false,
     startedAt: Date.now(),
   };
   const existing = getSubagentWaitStates(state.sessionId);
@@ -88,7 +111,7 @@ export function markSubagentCompletionDelivered(
   sessionId: string,
   taskId: string,
   text?: string,
-): { state: SubagentWaitState; isComplete: boolean } | null {
+): SubagentWaitTransition | null {
   const states = getSubagentWaitStates(sessionId);
   const state = states.find((entry) => entry.taskId === taskId);
   if (!state) {
@@ -99,15 +122,16 @@ export function markSubagentCompletionDelivered(
   if (text?.trim()) {
     state.completionTexts.push(text);
   }
-  const isComplete = state.deliveredCompletions >= Math.max(1, state.expectedCompletions);
+  const complete = isComplete(state);
+  const shouldFinalize = claimFinalizationIfReady(state);
   waitStates.set(sessionId, states);
   logger.withContext(sessionId, taskId).log(
-    `[SUBAGENT-WAIT] Completion delivered count=${state.deliveredCompletions}/${state.expectedCompletions}, complete=${isComplete}`,
+    `[SUBAGENT-WAIT] Completion delivered count=${state.deliveredCompletions}/${state.expectedCompletions}, complete=${complete}, shouldFinalize=${shouldFinalize}`,
   );
-  return { state, isComplete };
+  return { state, isComplete: complete, shouldFinalize };
 }
 
-export function markSubagentWaitParentSettled(sessionId: string, taskId: string): SubagentWaitState | null {
+export function markSubagentWaitParentSettled(sessionId: string, taskId: string): SubagentWaitTransition | null {
   const states = getSubagentWaitStates(sessionId);
   const state = states.find((entry) => entry.taskId === taskId);
   if (!state) {
@@ -115,9 +139,13 @@ export function markSubagentWaitParentSettled(sessionId: string, taskId: string)
     return null;
   }
   state.parentSettled = true;
+  const complete = isComplete(state);
+  const shouldFinalize = claimFinalizationIfReady(state);
   waitStates.set(sessionId, states);
-  logger.withContext(sessionId, taskId).log(`[SUBAGENT-WAIT] Parent dispatcher settled while waiting`);
-  return state;
+  logger.withContext(sessionId, taskId).log(
+    `[SUBAGENT-WAIT] Parent dispatcher settled while waiting, complete=${complete}, shouldFinalize=${shouldFinalize}`,
+  );
+  return { state, isComplete: complete, shouldFinalize };
 }
 
 export function attachSubagentWaitHeartbeat(
