@@ -94,7 +94,7 @@ export async function handleCronQueryEvent(context, cfg) {
                 taskId,
                 messageId,
                 command,
-                final: false,
+                final: true,
             });
             logger.log(`[CRON-QUERY] Sent response via sendCommand, action=${action}`);
         }
