@@ -98,9 +98,17 @@ export function registerSession(sessionKey: string, context: SessionContext): vo
 
   const existing = activeSessions.get(sessionKey);
   if (existing) {
-    // 更新上下文，增加引用计数，刷新存活时间
+    // 更新上下文（全量同步所有字段，避免 global Map 残留旧值，
+    // 当 ALS 丢失回退到 Map 时拿到过期的 modelName / deviceType）
+    existing.config = context.config;
+    existing.sessionId = context.sessionId;
+    existing.distributionSessionId = context.distributionSessionId;
     existing.taskId = context.taskId;
     existing.messageId = context.messageId;
+    existing.agentId = context.agentId;
+    existing.deviceType = context.deviceType;
+    existing.modelName = context.modelName;
+    existing.runCrossTaskContext = context.runCrossTaskContext;
     existing.refCount++;
     existing.createdAt = Date.now();  // 刷新存活时间，长对话不受 TTL 影响
   } else {
