@@ -256,7 +256,10 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
             await updateSessionStore(storePath, (store) => {
               if (!store[route.sessionKey]) {
                 store[route.sessionKey] = {
-                  sessionId: route.sessionKey,
+                  // sessionId must pass validateSessionId regex /^[a-z0-9][a-z0-9._-]{0,127}$/i
+                  // route.sessionKey like "agent:main:direct:xxx" contains colons which are invalid.
+                  // Use parsed.sessionId (raw UUID from A2A) which is always safe.
+                  sessionId: parsed.sessionId,
                   updatedAt: Date.now(),
                   providerOverride: "xiaoyiprovider",
                   modelOverride: modelName,
