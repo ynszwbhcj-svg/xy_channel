@@ -469,8 +469,8 @@ export const xiaoyiProvider: ProviderPlugin = {
       reasoning: false,
       input: ["text"],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 128_000,
-      maxTokens: 8192,
+      contextWindow: 256_000,
+      maxTokens: 6000,
       ...(ctx.providerConfig?.headers && typeof ctx.providerConfig.headers === "object"
         ? { headers: ctx.providerConfig.headers as Record<string, string> }
         : {}),
