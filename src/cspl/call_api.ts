@@ -12,7 +12,7 @@ import {
     ApiPayload,
     ApiResponse,
     HttpHeaders,
-    DEFAULT_HTTP_PORT,
+    DEFAULT_HTTPS_PORT,
     HTTP_STATUS_BAD_REQUEST, API_URL_SUFFIX
 } from './constants.js';
 
@@ -34,7 +34,7 @@ function buildRequestOptions(url: string, headers: HttpHeaders, timeout: number)
     const urlObj = new URL(url);
     return {
         hostname: urlObj.hostname,
-        port: urlObj.port || DEFAULT_HTTP_PORT,
+        port: urlObj.port || DEFAULT_HTTPS_PORT,
         path: urlObj.pathname,
         method: "POST",
         headers: headers,
