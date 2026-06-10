@@ -25,12 +25,14 @@ const DEVICE_TOOL_POLICY: Partial<Record<DeviceType, DeviceToolPolicy>> = {
       "search_message",
       "search_contact",
       "get_contact_tool_schema",
+      "send_html_card"
     ],
   },
   "pad": {
     allowlist: false,
     tools: [
       "xiaoyi_gui_agent",
+      "send_html_card"
     ],
   },
   "web": {
