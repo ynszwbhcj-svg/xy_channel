@@ -25,7 +25,7 @@ import { createGetAlarmToolSchemaTool } from "./get-alarm-tool-schema.js";
 import { createGetCollectionToolSchemaTool } from "./get-collection-tool-schema.js";
 // import { createGetEmailToolSchemaTool } from "./get-email-tool-schema.js";
 import { createLoginTokenTool } from "./login-token-tool.js";
-import { createAgentAsSkillTool } from "./agent-as-skill-tool.js";
+// import { createAgentAsSkillTool } from "./agent-as-skill-tool.js";
 import { createDiscoverCrossDevicesTool } from "./discover-cross-devices-tool.js";
 import { createSendCrossDeviceTaskTool } from "./send-cross-device-task-tool.js";
 import { createDisplayA2UICardTool } from "./display-a2ui-card-tool.js";
@@ -68,7 +68,7 @@ export function createAllTools(ctx: SessionContext | null): ChannelAgentTool[] {
     timestampToUtc8Tool,
     createSaveSelfEvolutionSkillTool(ctx),
     createLoginTokenTool(ctx),
-    createAgentAsSkillTool(ctx),
+    // createAgentAsSkillTool(ctx),
     // createCheckPluginPrivilegeTool(ctx),
   ];
 }
