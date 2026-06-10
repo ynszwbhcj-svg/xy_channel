@@ -5,7 +5,7 @@
 // Tools NOT listed in any device entry → available to all devices (no restriction).
 
 /** Known device type enum. */
-export const DEVICE_TYPES = ["car", "2in1", "phone", "web"] as const;
+export const DEVICE_TYPES = ["car", "2in1", "phone", "web", "pad"] as const;
 export type DeviceType = (typeof DEVICE_TYPES)[number];
 
 interface DeviceToolPolicy {
@@ -25,6 +25,12 @@ const DEVICE_TOOL_POLICY: Partial<Record<DeviceType, DeviceToolPolicy>> = {
       "search_message",
       "search_contact",
       "get_contact_tool_schema",
+    ],
+  },
+  "pad": {
+    allowlist: false,
+    tools: [
+      "xiaoyi_gui_agent",
     ],
   },
   "web": {
