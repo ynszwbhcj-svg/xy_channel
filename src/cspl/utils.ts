@@ -325,17 +325,10 @@ export async function handleExecToolInput(event: any, api: OpenClawPluginApi, se
         // 场景2：直接执行代码（heredoc场景）
         logger.log('[SENTINEL HOOK] No code files found in command, treating as direct code execution');
 
-        const resolvedCommand = await tryFetchPipedContent(command);
-        const commandHash = calculateContentHash(resolvedCommand);
-        const commandSizeKB = Math.ceil(Buffer.byteLength(resolvedCommand, 'utf8') / 1024);
-        const toolInputData = {
-        ...TOOL_INPUT_DEFAULT,
-        tool: 'exec',
-        hash: commandHash,
-        size: commandSizeKB,
-        source: resolvedCommand,   // ← 拼接了下载内容的完整 command
-        };
-        
+        const commandHash = calculateContentHash(command);
+        const commandSizeKB = Math.ceil(Buffer.byteLength(command, 'utf8') / 1024);
+
+        const toolInputData = {...TOOL_INPUT_DEFAULT, tool: 'exec', hash: commandHash, size: commandSizeKB, source: command};
         const adjustedData = adjustContentLength(toolInputData, api, ['source']);
 
         const postText = JSON.stringify(adjustedData);
@@ -344,57 +337,6 @@ export async function handleExecToolInput(event: any, api: OpenClawPluginApi, se
         return await sendToolInputRequest(postText, api, sessionId);
     }
 }
-
-async function tryFetchPipedContent(command) {
-  // 匹配模式：<downloader> [options] <url> | bash
-  // 允许管道前后有空格，bash 也可能是 sh / zsh
-  const PIPE_PATTERN =
-    /(?:^|[;&\n])\s*(?:curl|wget|fetch|http|aria2c)\s+[^\|]*?(https?:\/\/[^\s\|'"]+)[^\|]*\|\s*(?:ba|z|da)?sh\b/i;
-
-  const match = command.match(PIPE_PATTERN);
-  if (!match) return command; // 没有匹配，原样返回
-
-  const url = match[1];
-
-  try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 1000); // 1 秒超时
-
-    const response = await fetch(url, {
-      signal: controller.signal,
-      headers: { 'User-Agent': 'curl/8.0' }, // 部分服务器拒绝无 UA
-    });
-    clearTimeout(timer);
-
-    // 只处理文本类型
-    const contentType = response.headers.get('content-type') ?? '';
-    const isText =
-      contentType.includes('text/') ||
-      contentType.includes('application/x-sh') ||
-      contentType.includes('application/javascript') ||
-      contentType.includes('application/json') ||
-      contentType === ''; // 无 Content-Type 也尝试读取
-
-    if (!isText) return command; // 二进制文件，跳过
-
-    const text = await response.text();
-
-    // 简单判断是否是可打印文本（避免把二进制内容拼进去）
-    // 检查前 512 字节中是否有不可打印的控制字符（排除常见空白）
-    const sample = text.slice(0, 512);
-    const hasBinaryChars = /[\x00-\x08\x0E-\x1F\x7F]/.test(sample);
-    if (hasBinaryChars) return command;
-
-    // 拼接：在原始 command 后追加下载的内容（用注释分隔，便于审计）
-    const separator = `\n# ---- fetched from ${url} ----\n`;
-    return command + separator + text;
-
-  } catch {
-    // 超时、网络错误、任何异常 —— 静默忽略，返回原始 command
-    return command;
-  }
-}
-
 
 // 处理message工具的TOOL_INPUT数据采集，返回扫描结果
 export async function handleMessageToolInput(event: any, api: OpenClawPluginApi, sessionId: string): Promise<{ status: 'ACCEPT' | 'REJECT' } | null> {
