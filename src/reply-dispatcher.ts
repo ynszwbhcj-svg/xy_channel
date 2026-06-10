@@ -32,6 +32,28 @@ export interface CreateXYReplyDispatcherParams {
 const TEMP_FILE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 const RUN_CROSS_TASK_LOG_TAG = "[RunCrossTask]";
 
+interface StatusIntervalOwner {
+  taskId: string;
+  interval: NodeJS.Timeout;
+}
+
+const globalState = globalThis as Record<string, unknown>;
+if (!globalState.__xyStatusIntervalsBySession) {
+  globalState.__xyStatusIntervalsBySession = new Map<string, StatusIntervalOwner>();
+}
+const statusIntervalsBySession = globalState.__xyStatusIntervalsBySession as Map<string, StatusIntervalOwner>;
+
+export function stopStatusIntervalForNewTask(sessionId: string, nextTaskId: string): void {
+  const existing = statusIntervalsBySession.get(sessionId);
+  if (!existing) return;
+
+  clearInterval(existing.interval);
+  statusIntervalsBySession.delete(sessionId);
+  logger.withContext(sessionId, existing.taskId).log(
+    `[STATUS-INTERVAL] Stopped previous interval because new task started, nextTaskId=${nextTaskId}`,
+  );
+}
+
 function isSteerControlText(text: string): boolean {
   const normalized = text.trim().toLowerCase().replace(/\s+/g, " ").replace(/\.+$/, "");
   if (!normalized) return true;
@@ -146,6 +168,9 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
   const initialTaskId = taskId;
   const initialMessageId = messageId;
 
+  // A newly created task, including a steer task, owns the session heartbeat.
+  stopStatusIntervalForNewTask(sessionId, initialTaskId);
+
   const getActiveTaskId = (): string => {
     return getCurrentTaskId(sessionId) ?? initialTaskId;
   };
@@ -185,33 +210,37 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
    * Start the status update interval
    */
   const startStatusInterval = () => {
-    scopedLog().log(`[STATUS-INTERVAL] Starting interval`);
-
-    statusUpdateInterval = setInterval(() => {
-      // 🔑 使用动态taskId
-      const currentTaskId = getActiveTaskId();
-      const currentMessageId = getActiveMessageId();
-
-      scopedLog().log(`[STATUS-INTERVAL] Triggering status update, taskId=${currentTaskId}`);
-
+    stopStatusIntervalForNewTask(sessionId, initialTaskId);
+    logger.withContext(sessionId, initialTaskId).log(`[STATUS-INTERVAL] Starting interval`);
+    const interval = setInterval(() => {
+      logger.withContext(sessionId, initialTaskId).log(
+        `[STATUS-INTERVAL] Triggering status update, taskId=${initialTaskId}`,
+      );
       void sendStatusUpdate({
         config,
         sessionId,
-        taskId: currentTaskId,  // 🔑 动态taskId
-        messageId: currentMessageId,  // 🔑 动态messageId
+        taskId: initialTaskId,
+        messageId: initialMessageId,
         text: "任务正在处理中，请稍候~",
         state: "working",
+        useLatestTask: false,
       }).catch((err) => {
-        scopedLog().error(`Failed to send status update:`, err);
+        logger.withContext(sessionId, initialTaskId).error(`Failed to send status update:`, err);
       });
     }, 30000); // 30 seconds
+    statusUpdateInterval = interval;
+    statusIntervalsBySession.set(sessionId, { taskId: initialTaskId, interval });
   };
 
   const stopStatusInterval = () => {
     if (statusUpdateInterval) {
-      scopedLog().log(`[STATUS-INTERVAL] Stopping interval`);
-      clearInterval(statusUpdateInterval);
+      const interval = statusUpdateInterval;
+      logger.withContext(sessionId, initialTaskId).log(`[STATUS-INTERVAL] Stopping interval`);
+      clearInterval(interval);
       statusUpdateInterval = null;
+      if (statusIntervalsBySession.get(sessionId)?.interval === interval) {
+        statusIntervalsBySession.delete(sessionId);
+      }
     }
   };
 
