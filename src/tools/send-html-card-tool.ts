@@ -16,7 +16,7 @@ export function createSendHtmlCardTool(ctx: SessionContext): any {
   return {
     name: "send_html_card",
     label: "Send HTML Card",
-    description: `工具能力描述：当需要把生成的html文件发送给用户时，优先使用这个工具。以H5卡片的形式展示HTML页面内容，用户可以直接在卡片中查看。如果用户要求原始文件，才使用send_file_to_user发送html文件，否则html的文件回传均使用此工具。
+    description: `工具能力描述：支持以H5卡片的形式展示HTML页面内容，用户可以直接在卡片中查看。
 
 工具参数说明：
 a. htmlUrl 和 htmlLocal 至少填写一个
@@ -26,8 +26,7 @@ c. htmlLocal 是本地HTML文件路径，会先上传获取预览链接再以卡
 注意事项：
 a. 操作超时时间为2分钟（120秒），请勿重复调用此工具，如果超时或失败，最多重试一次
 b. 最后要把最终的html的公网地址作为工具执行结果返回回去，要以markdown超链接的形式返回给用户，必须严格保留完整的url，包含url的鉴权鉴权信息，返回给用户的url必须是完整的
-c. html类型的文件回传给用户优先用这个工具,当用户说“生成xxxxhtml然后发我”或者“生成网页游戏烦我”这种表述时使用send_html_card工具
-d. 如果使用这个工具把html文件回传，则生成的html要尽可能适配用户的设备，如果用户使用的是手机，则尽可能生成竖屏的html的预览效果`,
+c. 仅当用户或者skill中显示说明使用send_html_card工具时才调用此工具`,
     parameters: {
       type: "object",
       properties: {
