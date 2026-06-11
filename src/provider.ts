@@ -641,6 +641,13 @@ export const xiaoyiProvider: ProviderPlugin = {
         context.systemPrompt = (context.systemPrompt ?? "") + deviceSection;
       }
 
+      // Append current LLM model to systemPrompt
+      const currentModelName = getCurrentSessionContext()?.modelName;
+      if (currentModelName && currentModelName.trim() !== "" && currentModelName.toLowerCase() !== "none") {
+        const modelSection = `\n\n## Current LLM MODEL\n${currentModelName}`;
+        context.systemPrompt = (context.systemPrompt ?? "") + modelSection;
+      }
+
       // ── Trim user message metadata ──────────────────────
       if (context.messages) {
         for (const msg of context.messages) {
