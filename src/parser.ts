@@ -1,5 +1,5 @@
 // A2A message parsing utilities
-import type { A2AJsonRpcRequest, A2AMessagePart, A2ADataEvent, RunCrossTaskContext } from "./types.js";
+import type { A2AJsonRpcRequest, A2AMessagePart, A2ADataEvent, RunCrossTaskContext, SentFileCard } from "./types.js";
 import { logger } from "./utils/logger.js";
 
 /**
@@ -78,33 +78,26 @@ export function extractRunCrossTaskContext(parts: A2AMessagePart[]): RunCrossTas
     }
 
     return value
-      .map((item) => {
+      .map((item): SentFileCard | null => {
         if (!item || typeof item !== "object") {
           return null;
         }
 
         const candidate = item as Record<string, unknown>;
-        const fileLocalUrls = Array.isArray(candidate.fileLocalUrls)
-          ? candidate.fileLocalUrls.filter((url): url is string => typeof url === "string" && url.length > 0)
-          : [];
-        const fileRemoteUrls = Array.isArray(candidate.fileRemoteUrls)
-          ? candidate.fileRemoteUrls.filter((url): url is string => typeof url === "string" && url.length > 0)
-          : [];
-        const fileNames = Array.isArray(candidate.fileNames)
-          ? candidate.fileNames.filter((name): name is string => typeof name === "string" && name.length > 0)
-          : [];
-
-        if (fileLocalUrls.length === 0 && fileRemoteUrls.length === 0) {
+        const fileName = typeof candidate.fileName === "string" ? candidate.fileName.trim() : "";
+        const fileId = typeof candidate.fileId === "string" ? candidate.fileId.trim() : "";
+        const mimeType = typeof candidate.mimeType === "string" ? candidate.mimeType.trim() : "";
+        if (!fileName || !fileId) {
           return null;
         }
 
         return {
-          ...(fileLocalUrls.length > 0 ? { fileLocalUrls } : {}),
-          ...(fileRemoteUrls.length > 0 ? { fileRemoteUrls } : {}),
-          ...(fileNames.length > 0 && fileNames.length === fileRemoteUrls.length ? { fileNames } : {}),
+          fileName,
+          fileId,
+          ...(mimeType ? { mimeType } : {}),
         };
       })
-      .filter((item): item is { fileLocalUrls?: string[]; fileRemoteUrls?: string[]; fileNames?: string[] } => item !== null);
+      .filter((item): item is SentFileCard => item !== null);
   };
 
   for (const part of parts) {

@@ -93,7 +93,7 @@ export interface CrossDeviceTaskResultEvent {
   sessionId: string;
   code: string;
   message: string;
-  sentFiles: SentFileParams[];
+  sentFiles: SentFileCard[];
   status: "success" | "failed";
   rawEvent: any;
 }
@@ -104,14 +104,14 @@ export interface RunCrossTaskContext {
   isDistributed: boolean;
   networkId: string;
   isSupportAgent: boolean;
-  sentFiles: SentFileParams[];
+  sentFiles: SentFileCard[];
   rawContext: any;
 }
 
-export interface SentFileParams {
-  fileLocalUrls?: string[];
-  fileRemoteUrls?: string[];
-  fileNames?: string[];
+export interface SentFileCard {
+  fileName: string;
+  fileId: string;
+  mimeType?: string;
 }
 
 // ============================================================================
