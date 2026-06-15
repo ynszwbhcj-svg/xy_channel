@@ -1,2 +1,0 @@
-﻿author,ai_lines,total_lines,is_ai_commit,commit_id,date,message
-Joey,0,118,false,93d11f0ada98a2223bf3ed9f88d173e01d895add,2026-06-08 19:35:15,fix: finalize subagent wait after parent settles
