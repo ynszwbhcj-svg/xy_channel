@@ -10,24 +10,14 @@ dist/
 
 # IDE
 .claude/
-.ai-tracking/
-.opencode/
-.codex/
+
 # OS
 .DS_Store
 Thumbs.db
 
 # Binary packages
 *.tgz
-.ai-tracking/pending-lines.json
-.ai-tracking/pending-commit.json
-.ai-tracking/tracking-message.txt
-.ai-tracking/errors.log
-.ai-tracking/plugin.log
-.ai-tracking/plugin.log.*
-.ai-tracking/*.lock
-.ai-tracking/archive/
-.ai-tracking/snapshots/
-.ai-tracking/config.json
-.ai-tracking/available-update.json
-.ai-tracking/backup-pre-update/
+.ai-tracking/
+.codex/
+.opencode/
+test/

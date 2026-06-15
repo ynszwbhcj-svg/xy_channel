@@ -2,7 +2,7 @@
 import type { ClawdbotConfig, RuntimeEnv, ReplyPayload } from "openclaw/plugin-sdk";
 import { updateSessionStoreEntry, updateSessionStore, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { getXYRuntime } from "./runtime.js";
-import { createXYReplyDispatcher, stopStatusIntervalForNewTask } from "./reply-dispatcher.js";
+import { createXYReplyDispatcher } from "./reply-dispatcher.js";
 import { parseA2AMessage, extractTextFromParts, extractFileParts, extractPushId, extractDeviceType, extractModelName, extractTriggerData, extractRunCrossTaskContext, isClearContextMessage, isTasksCancelMessage } from "./parser.js";
 import { downloadFilesFromParts } from "./file-download.js";
 import { resolveXYConfig } from "./config.js";
@@ -202,7 +202,6 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
 
     // Steer injections skip taskId registration to avoid overwriting the active taskId
     if (!skipReg) {
-      stopStatusIntervalForNewTask(parsed.sessionId, parsed.taskId);
       registerTaskId(parsed.sessionId, parsed.taskId, parsed.messageId);
 
       // Extract and update push_id if present
