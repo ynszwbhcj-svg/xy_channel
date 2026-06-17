@@ -16,7 +16,7 @@ import { logger } from "./logger.js";
 const CRON_PUSH_MAP_FILE = "/home/sandbox/.openclaw/cron-push-map.json";
 
 /** 映射来源，区分两种创建路径。 */
-export type CronPushMapSource = "conversation" | "cron-query";
+export type CronPushMapSource = "conversation" | "cron-query" | "exec-cli";
 
 export interface CronPushMapEntry {
   pushId: string;
