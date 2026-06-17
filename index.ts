@@ -8,6 +8,7 @@ import { setXYRuntime } from "./src/runtime.js";
 import { markCronToolCall, clearCronToolCall, getSessionContext } from "./src/tools/session-manager.js";
 import { configManager } from "./src/utils/config-manager.js";
 import { setJobPushId } from "./src/utils/cron-push-map.js";
+import { getAllPushIds } from "./src/utils/pushid-manager.js";
 import { registerSelfEvolutionToolResultNudge } from "./src/self-evolution-tool-result-nudge.js";
 import { createBeforePromptBuildHandler } from "./src/skill-retriever/hooks.js";
 import { normalizeToolRetrieverConfig } from "./src/skill-retriever/config.js";
@@ -75,9 +76,9 @@ async function captureCronAddMapping(
     return;
   }
 
-  const pushId = configManager.getPushId(sessionId);
+  const pushId = await resolvePushId(sessionId);
   if (!pushId) {
-    console.log(`[CRONMAP] skip: configManager has no pushId for sessionId=${sessionId}`);
+    console.log(`[CRONMAP] skip: no pushId available for sessionId=${sessionId} (no session match, no global, no file)`);
     return;
   }
 
@@ -89,6 +90,24 @@ async function captureCronAddMapping(
     source: event.toolName === "exec" ? "exec-cli" : "conversation",
   });
   console.log(`[CRONMAP] map written OK`);
+}
+
+/** 回退链取 pushId：当前会话 → 全局兜底 → 本地文件首个（保底）。 */
+async function resolvePushId(sessionId: string): Promise<string | null> {
+  // 1. 同会话
+  const session = configManager.getPushId(sessionId);
+  if (session) return session;
+  // 2. 全局（任何会话注册过的）
+  const global = configManager.getPushId();
+  if (global) return global;
+  // 3. 文件兜底
+  try {
+    const all = await getAllPushIds();
+    if (all.length > 0) return all[0];
+  } catch {
+    // ignore
+  }
+  return null;
 }
 
 /** 判断 exec 命令是否为 cron add（匹配 "openclaw cron add" 或裸 "cron add"，排除 list/remove 等）。 */
