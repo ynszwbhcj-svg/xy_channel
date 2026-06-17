@@ -23,22 +23,6 @@ export interface CreateXYReplyDispatcherParams {
 const TEMP_FILE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 const RUN_CROSS_TASK_LOG_TAG = "[RunCrossTask]";
 
-function buildDistributionStatusCommand(context: RunCrossTaskContext): A2ACommand {
-  return {
-    header: {
-      namespace: "DistributionInteraction",
-      name: "DistributionStatus",
-    },
-    payload: {
-      agentId: context.agentId,
-      isDistributed: true,
-      networkId: context.networkId,
-      distributionType: "softbus",
-      distributionExecutePolicy: "backgroundExecution",
-    },
-  };
-}
-
 function buildCrossTaskExecuteResultCommand(
   code: string,
   message: string,
@@ -69,7 +53,6 @@ async function sendRunCrossTaskResult(params: {
   const { config, sessionId, taskId, messageId, context, resultCode, resultMessage } = params;
   const sentFiles = Array.isArray(context.sentFiles) ? context.sentFiles : [];
   const fileCardCount = sentFiles.length;
-  const statusCommand = buildDistributionStatusCommand(context);
   const resultCommand = buildCrossTaskExecuteResultCommand(resultCode, resultMessage, sentFiles);
 
   try {
@@ -78,7 +61,7 @@ async function sendRunCrossTaskResult(params: {
       sessionId,
       taskId,
       messageId,
-      commands: [statusCommand, resultCommand],
+      command: resultCommand,
     });
     logger.log(`${RUN_CROSS_TASK_LOG_TAG} sent cross-task result, sessionId=${sessionId}, taskId=${taskId}, code=${resultCode}, fileCardCount=${fileCardCount}, messageLength=${resultMessage.length}`);
   } finally {
