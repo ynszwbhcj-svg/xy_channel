@@ -5,7 +5,10 @@ import { logger } from "./utils/logger.js";
 import { getCurrentTaskId, getCurrentMessageId } from "./task-manager.js";
 import { redactSensitiveText, containsSensitiveInfo } from "./sensitive-redactor.js";
 import { rewriteOutboundApprovalText } from "./approval-bridge.js";
-import { isCronToolCall } from "./tools/session-manager.js";
+import { isCronToolCall, getCurrentCronJobId } from "./tools/session-manager.js";
+import { configManager } from "./utils/config-manager.js";
+import { getPushIdByJobId } from "./utils/cron-push-map.js";
+import { getAllPushIds } from "./utils/pushid-manager.js";
 import type {
   XYChannelConfig,
   A2AJsonRpcResponse,
@@ -298,6 +301,48 @@ export interface SendCommandParams {
 }
 
 /**
+ * 解析 cron fire 时应使用的 pushId（多设备路由）。
+ *
+ * 查询链（逐级回退）：
+ *   1. 合成 sessionId → jobId → cron-push-map.json → 创建时记录的设备 pushId
+ *   2. configManager 同进程的 sessionId→pushId（进程未重启时兜底）
+ *   3. getAllPushIds()[0]（单设备兼容旧行为）
+ * 返回 undefined 表示走兜底（由 sendCommandViaPush 内部处理）。
+ */
+async function resolveCronPushId(
+  sessionId: string,
+  config: XYChannelConfig,
+): Promise<string | undefined> {
+  // 1. jobId → 持久化映射
+  const jobId = getCurrentCronJobId(sessionId);
+  if (jobId) {
+    const hit = await getPushIdByJobId(jobId);
+    if (hit?.pushId) {
+      logger.log(`[CRON-PUSH] Resolved pushId via map, jobId=${jobId}`);
+      return hit.pushId;
+    }
+  }
+  // 2. 同进程 configManager 兜底
+  const sessionPushId = configManager.getPushId(sessionId);
+  if (sessionPushId) {
+    logger.log(`[CRON-PUSH] Resolved pushId via configManager (fallback)`);
+    return sessionPushId;
+  }
+  // 3. config.pushId / getAllPushIds()[0] 交给 sendCommandViaPush 内部处理
+  void config;
+  try {
+    const all = await getAllPushIds();
+    if (all.length > 0) {
+      logger.log(`[CRON-PUSH] Resolved pushId via getAllPushIds[0] (legacy fallback)`);
+      return all[0];
+    }
+  } catch (error) {
+    logger.error(`[CRON-PUSH] getAllPushIds failed:`, error);
+  }
+  return undefined;
+}
+
+/**
  * Send a command as an artifact update (final=false).
  *
  * Cron-aware: if the sessionId starts with the cron prefix ("cron-"),
@@ -320,7 +365,10 @@ export async function sendCommand(params: SendCommandParams): Promise<void> {
   //               (b) toolCallId marked by before_tool_call hook from openclaw's sessionKey.
   if (sessionId.startsWith("cron-") || isCronToolCall(toolCallId)) {
     const { sendCommandViaPush } = await import("./cron-command.js");
-    return sendCommandViaPush({ config, command: commands[0] });
+    // 解析正确设备的 pushId：合成 sessionId → jobId → cron-push-map。
+    // provider.ts 在 isCron 分支已把 jobId 绑定到该 sessionId。
+    const pushId = await resolveCronPushId(sessionId, config);
+    return sendCommandViaPush({ config, command: commands[0], pushId });
   }
 
   // ── Normal mode: WebSocket ─────────────────────────────────────

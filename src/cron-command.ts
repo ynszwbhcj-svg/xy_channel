@@ -15,6 +15,8 @@ import { logger } from "./utils/logger.js";
 export interface SendCommandViaPushParams {
   config: XYChannelConfig;
   command: A2ACommand;
+  /** 指定设备的 pushId（多设备路由）。未传时回退到 getAllPushIds()[0]。 */
+  pushId?: string;
 }
 
 /**
@@ -36,15 +38,20 @@ export async function sendCommandViaPush(params: SendCommandViaPushParams): Prom
 
   logger.log(`[CRON-CMD] Sending command via push, intent=${intentName}`);
 
-  // 1. Load push IDs, use first one
+  // 1. 选 pushId：优先用调用方解析出的设备 pushId（多设备路由正确）；
+  //    未提供时回退到 getAllPushIds()[0]（单设备兼容旧行为）。
   let pushId: string = config.pushId;
-  try {
-    const pushIdList = await getAllPushIds();
-    if (pushIdList.length > 0) {
-      pushId = pushIdList[0];
+  if (params.pushId) {
+    pushId = params.pushId;
+  } else {
+    try {
+      const pushIdList = await getAllPushIds();
+      if (pushIdList.length > 0) {
+        pushId = pushIdList[0];
+      }
+    } catch (error) {
+      logger.error("[CRON-CMD] Failed to load pushIds:", error);
     }
-  } catch (error) {
-    logger.error("[CRON-CMD] Failed to load pushIds:", error);
   }
 
   // 2. Build and send push notification with command in directives

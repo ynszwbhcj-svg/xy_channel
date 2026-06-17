@@ -7,6 +7,8 @@ import { callGatewayTool } from "openclaw/plugin-sdk/agent-harness-runtime";
 import * as os from "os";
 import { sendCommand } from "./formatter.js";
 import { resolveXYConfig } from "./config.js";
+import { configManager } from "./utils/config-manager.js";
+import { setJobPushId } from "./utils/cron-push-map.js";
 import { logger } from "./utils/logger.js";
 import { readFileSync, readdirSync } from "fs";
 import { join, dirname } from "path";
@@ -40,6 +42,11 @@ export async function handleCronQueryEvent(context, cfg) {
                 break;
             case "add":
                 result = await callGatewayTool("cron.add", { timeoutMs: GATEWAY_TIMEOUT_MS }, params ?? {});
+                // 捕获 jobId↔pushId：cron-query 路径由 channel 自己建 job，
+                // 此处 context 握着 sessionId，configManager 有对应设备 pushId。
+                await persistCronPushMap(context.sessionId, result).catch((err) => {
+                    logger.error(`[CRON-QUERY] Failed to persist cron-push-map:`, err);
+                });
                 break;
             case "update":
                 result = await callGatewayTool("cron.update", { timeoutMs: GATEWAY_TIMEOUT_MS }, {
@@ -106,6 +113,22 @@ export async function handleCronQueryEvent(context, cfg) {
     else {
         log.warn(`[CRON-QUERY] Missing cfg/sessionId/taskId/messageId, skipping sendCommand`);
     }
+}
+
+/**
+ * 从 cron.add 结果中提取 jobId，配合 sessionId 对应的 pushId 写入映射。
+ */
+async function persistCronPushMap(sessionId: string | undefined, result: unknown): Promise<void> {
+    if (!sessionId) return;
+    let jobId: string | undefined;
+    if (result && typeof result === "object") {
+        const id = (result as { id?: unknown }).id;
+        if (typeof id === "string" && id.trim()) jobId = id.trim();
+    }
+    if (!jobId) return;
+    const pushId = configManager.getPushId(sessionId);
+    if (!pushId) return;
+    await setJobPushId(jobId, { pushId, sessionId, source: "cron-query" });
 }
 
 /**

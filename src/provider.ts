@@ -10,7 +10,7 @@
 import { createHash } from "crypto";
 import { logger } from "./utils/logger.js";
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
-import { getCurrentSessionContext } from "./tools/session-manager.js";
+import { getCurrentSessionContext, setCurrentCronJobId } from "./tools/session-manager.js";
 import { selfEvolutionManager } from "./utils/self-evolution-manager.js";
 import { notifyModelStreaming } from "./bot.js";
 
@@ -541,6 +541,14 @@ export const xiaoyiProvider: ProviderPlugin = {
       const isCron = isCronTriggered(context.messages);
 
       if (isCron) {
+        // fire 期 jobId 桥：把首条消息 `[cron:<jobId> ...]` 解析出的真实 jobId
+        // 绑定到本次 cron run 的合成 sessionId。sendCommand 凭同一 sessionId
+        // 反查 jobId → cron-push-map → 正确设备的 pushId（多设备路由）。
+        const cronJobId = extractCronUuid(context.messages);
+        const cronCtx = getCurrentSessionContext();
+        if (cronJobId && cronCtx?.sessionId) {
+          setCurrentCronJobId(cronCtx.sessionId, cronJobId);
+        }
         const fallbackPrefix = ctx.extraParams?.[FALLBACK_PREFIX_KEY];
         if (typeof fallbackPrefix === "string") {
           const fallbackValue = `${fallbackPrefix}_${Date.now()}`;
