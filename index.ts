@@ -105,11 +105,28 @@ function preview(value: unknown): string {
 }
 
 /** 防御性地从 cron add 结果中取 job id。
- *  覆盖：裸 job 对象、JSON 字符串、exec 输出文本、{stdout}/data/result/job 嵌套。 */
+ *  覆盖：裸 job 对象、JSON 字符串、exec 输出文本、
+ *  {content:[{text}]} / {stdout} / data/result/job 嵌套。 */
 function readJobIdFromResult(result: unknown): string | undefined {
   if (!result) return undefined;
 
-  // exec 工具结果常把命令输出包在 {stdout, stderr, exitCode} 里
+  // {content: [{type:"text", text: "..."}]} — exec 工具的输出信封
+  if (result && typeof result === "object") {
+    const contentArr = (result as { content?: unknown }).content;
+    if (Array.isArray(contentArr)) {
+      for (const item of contentArr) {
+        if (item && typeof item === "object") {
+          const text = (item as { text?: unknown }).text;
+          if (typeof text === "string" && text.trim()) {
+            const fromContent = readJobIdFromResult(text);
+            if (fromContent) return fromContent;
+          }
+        }
+      }
+    }
+  }
+
+  // {stdout} — 备选 exec 输出信封
   if (result && typeof result === "object") {
     const stdout = (result as { stdout?: unknown }).stdout;
     if (typeof stdout === "string" && stdout.trim()) {
@@ -123,7 +140,7 @@ function readJobIdFromResult(result: unknown): string | undefined {
     try {
       obj = JSON.parse(result);
     } catch {
-      // 纯文本：从文本里抓 "id":"..." 或 id=...
+      // 纯文本：可能含 stderr 前缀行 + JSON。用正则抓 "id":"..."。
       const m = result.match(/"id"\s*:\s*"([^"]+)"/);
       if (m) return m[1];
       return undefined;
