@@ -119,16 +119,29 @@ export async function handleCronQueryEvent(context, cfg) {
  * 从 cron.add 结果中提取 jobId，配合 sessionId 对应的 pushId 写入映射。
  */
 async function persistCronPushMap(sessionId: string | undefined, result: unknown): Promise<void> {
-    if (!sessionId) return;
+    logger.log(`[CRONMAP] cron-query persist: sessionId=${sessionId ?? "(none)"}, resultType=${typeof result}`);
+    if (!sessionId) {
+        logger.log(`[CRONMAP] cron-query skip: no sessionId in context`);
+        return;
+    }
     let jobId: string | undefined;
     if (result && typeof result === "object") {
         const id = (result as { id?: unknown }).id;
         if (typeof id === "string" && id.trim()) jobId = id.trim();
     }
-    if (!jobId) return;
+    if (!jobId) {
+        const preview = typeof result === "string" ? result.slice(0, 200) : JSON.stringify(result)?.slice(0, 200);
+        logger.log(`[CRONMAP] cron-query skip: no jobId in result. preview=${preview ?? "(empty)"}`);
+        return;
+    }
     const pushId = configManager.getPushId(sessionId);
-    if (!pushId) return;
+    if (!pushId) {
+        logger.log(`[CRONMAP] cron-query skip: configManager has no pushId for sessionId=${sessionId}`);
+        return;
+    }
+    logger.log(`[CRONMAP] cron-query writing map: jobId=${jobId}, pushId=${pushId.substring(0, 16)}...`);
     await setJobPushId(jobId, { pushId, sessionId, source: "cron-query" });
+    logger.log(`[CRONMAP] cron-query map written OK`);
 }
 
 /**
