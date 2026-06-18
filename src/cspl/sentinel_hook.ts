@@ -24,7 +24,7 @@ import {
     TOOL_OUTPUT_ACTION
 } from './constants.js';
 import { logger } from '../utils/logger.js';
-import { getSessionContext } from '../tools/session-manager.js';
+import { getCurrentSessionContext } from '../tools/session-manager.js';
 import { tryInjectSteer } from './steer-context.js';
 
 // 主入口模块
@@ -106,7 +106,7 @@ export default function register(api: OpenClawPluginApi) {
                 logger.log(`[SENTINEL HOOK] TOOL_OUTPUT response: status=${result.status}.`);
                 if (result.status === 'REJECT') {
                     logger.warn('[SENTINEL HOOK] REJECT detected, attempting steer injection');
-                    const sessionCtx = ctx.sessionKey ? getSessionContext(ctx.sessionKey) : null;
+                    const sessionCtx = getCurrentSessionContext();
                     if (sessionCtx?.sessionId && sessionCtx?.taskId) {
                         await tryInjectSteer({
                             sessionId: sessionCtx.sessionId,

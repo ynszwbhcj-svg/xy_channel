@@ -73,25 +73,16 @@ function checkRotation(): void {
 }
 
 // ── Session context from globalThis (avoids circular dep with session-manager) ──
+// Pure ALS: the global Map fallback was removed when session-manager switched
+// to AsyncLocalStorage-only. Outside a runWithSessionContext scope (cron,
+// startup), getSessionInfo returns empty strings.
 function getSessionInfo(): { sessionId: string; taskId: string } {
   try {
     const g = globalThis as Record<string, unknown>;
-    // Try AsyncLocalStorage first (correct for concurrent sessions)
     const als = g.__xyAsyncLocalStorage as AsyncLocalStorage<{ sessionId: string; taskId: string }> | undefined;
     if (als) {
       const store = als.getStore();
       if (store?.sessionId) return { sessionId: store.sessionId, taskId: store.taskId ?? "" };
-    }
-    // Fallback to activeSessions map
-    const sessions = g.__xyActiveSessions as Map<string, { sessionId: string; taskId: string }> | undefined;
-    if (sessions && sessions.size > 0) {
-      const lastKey = g.__xyLastRegisteredSessionKey as string;
-      if (lastKey) {
-        const entry = sessions.get(lastKey);
-        if (entry?.sessionId) return { sessionId: entry.sessionId, taskId: entry.taskId ?? "" };
-      }
-      const entry = sessions.values().next().value;
-      if (entry?.sessionId) return { sessionId: entry.sessionId, taskId: entry.taskId ?? "" };
     }
   } catch {}
   return { sessionId: "", taskId: "" };

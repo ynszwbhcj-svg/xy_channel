@@ -1,6 +1,5 @@
 import { sendCommand, sendStatusUpdate } from "../formatter.js";
 import { getXYWebSocketManager } from "../client.js";
-import { getCurrentMessageId, getCurrentTaskId } from "../task-manager.js";
 import type { A2ACommand, A2ADataEvent } from "../types.js";
 import type { SessionContext } from "./session-manager.js";
 import { logger } from "../utils/logger.js";
@@ -167,8 +166,6 @@ export function createDiscoverCrossDevicesTool(ctx: SessionContext): any {
         });
       }
 
-      const currentTaskId = getCurrentTaskId(sessionId) ?? taskId;
-      const currentMessageId = getCurrentMessageId(sessionId) ?? messageId;
       const wsManager = getXYWebSocketManager(config);
       const command: A2ACommand = {
         header: {
@@ -251,16 +248,16 @@ export function createDiscoverCrossDevicesTool(ctx: SessionContext): any {
         sendStatusUpdate({
           config,
           sessionId,
-          taskId: currentTaskId,
-          messageId: currentMessageId,
+          taskId,
+          messageId,
           text: DISCOVER_DEVICES_STATUS_TEXT,
           state: "working",
         })
           .then(() => sendCommand({
             config,
             sessionId,
-            taskId: currentTaskId,
-            messageId: currentMessageId,
+            taskId,
+            messageId,
             command,
           }))
           .catch((error) => {

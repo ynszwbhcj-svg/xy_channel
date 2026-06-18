@@ -428,22 +428,6 @@ function trimUserMetadata(text: string): string {
   return text.replace(/\n{3,}/g, "\n\n");
 }
 
-/**
- * Extract A2A taskId and deviceType from Conversation info JSON.
- * bot.ts stores them as MessageSid = "xiaoyi_taskId_deviceType".
- * The "xiaoyi_" prefix ensures extraction only happens for messages
- * routed through xiaoyi-channel, not other channels sharing the provider.
- */
-function extractA2AFromConversationInfo(text: string): { taskId: string; deviceType: string } | null {
-  const match = text.match(/Conversation info \(untrusted metadata\):\n```json\n([\s\S]*?)\n```/);
-  if (!match) return null;
-  const msgIdMatch = match[1].match(/"message_id"\s*:\s*"([^"]+)"/);
-  if (!msgIdMatch) return null;
-  const parts = msgIdMatch[1].split("_");
-  if (parts.length < 3 || parts[0] !== "xiaoyi") return null;
-  return { taskId: parts[1], deviceType: parts[2] };
-}
-
 export const xiaoyiProvider: ProviderPlugin = {
   id: "xiaoyiprovider",
   label: "Xiaoyi Provider",
@@ -458,7 +442,12 @@ export const xiaoyiProvider: ProviderPlugin = {
    * xiaoyiprovider as long as the provider has a configured baseUrl.
    */
   resolveDynamicModel: (ctx) => {
-    const baseUrl = ctx.providerConfig?.baseUrl;
+    // providerConfig from models.providers.xiaoyiprovider is preferred;
+    // fall back to zai baseUrl when config-driven provider setup is unavailable.
+    let baseUrl = ctx.providerConfig?.baseUrl;
+    if (!baseUrl || typeof baseUrl !== "string") {
+      baseUrl = (ctx.config as any)?.models?.providers?.zai?.baseUrl;
+    }
     if (!baseUrl || typeof baseUrl !== "string") return null;
     return {
       id: ctx.modelId,
@@ -509,34 +498,10 @@ export const xiaoyiProvider: ProviderPlugin = {
     return async (model, context, options) => {
       const dynamicHeaders: Record<string, string> = {};
 
-      // ── Extract A2A taskId/deviceType from Conversation info ──
-      // bot.ts stores taskId_deviceType as MessageSid, which the framework
-      // renders as message_id in the Conversation info JSON block.
-      let extractedTaskId: string | null = null;
-      let extractedDeviceType: string | null = null;
-      if (context.messages) {
-        for (let i = context.messages.length - 1; i >= 0; i--) {
-          const msg = context.messages[i];
-          if (msg.role !== "user") continue;
-          const text = typeof msg.content === "string"
-            ? msg.content
-            : Array.isArray(msg.content)
-              ? (msg.content.find((b: any) => b.type === "text") as any)?.text ?? ""
-              : "";
-          if (!text) continue;
-          const extracted = extractA2AFromConversationInfo(text);
-          if (extracted) {
-            extractedTaskId = extracted.taskId;
-            extractedDeviceType = extracted.deviceType;
-            break;
-          }
-        }
-      }
-
       // ── Build dynamic headers ────────────────────────────
       // Priority:
       //   1. Cron-triggered: uid → cronUuid, with cron-specific headers
-      //   2. Xiaoyi A2A: taskId extracted from Conversation info (xiaoyi_ prefix)
+      //   2. Xiaoyi A2A: rawTaskId from AsyncLocalStorage, split on "&"
       //   3. UID-based fallback: sha256(uid).hex[:32]_timestamp
       const isCron = isCronTriggered(context.messages);
 
@@ -565,19 +530,30 @@ export const xiaoyiProvider: ProviderPlugin = {
         const cronTitle = extractCronTitle(context.messages);
         if (cronTitle) dynamicHeaders["x-cron-title"] = encodeURIComponent(cronTitle);
         if (context.messages?.length === 1) dynamicHeaders["x-cron-flag"] = "begin";
-      } else if (extractedTaskId) {
-        const sessionId = extractedTaskId.split("&")[0];
-        const interactionId = extractedTaskId.split("&")[1] ?? "";
-        dynamicHeaders[HEADER_TRACE_ID] = extractedTaskId;
-        dynamicHeaders[HEADER_SESSION_ID] = sessionId;
-        dynamicHeaders[HEADER_INTERACTION_ID] = interactionId;
+        logger.log(`[ALS-PROOF] provider headers source=cron`);
       } else {
-        const fallbackPrefix = ctx.extraParams?.[FALLBACK_PREFIX_KEY];
-        if (typeof fallbackPrefix === "string") {
-          const fallbackValue = `${fallbackPrefix}_${Date.now()}`;
-          dynamicHeaders[HEADER_TRACE_ID] = fallbackValue;
-          dynamicHeaders[HEADER_SESSION_ID] = fallbackValue;
-          dynamicHeaders[HEADER_INTERACTION_ID] = fallbackValue;
+        // ALS path: rawTaskId comes from the per-turn AsyncLocalStorage scope
+        // set by bot.ts runWithSessionContext. Real upstream params.id is
+        // `realSession&realInteraction`; tester UUIDs degenerate to the whole
+        // id as sessionId with empty interactionId.
+        const als = getCurrentSessionContext();
+        const rawTaskId = als?.taskId;
+        if (rawTaskId) {
+          const sessionId = rawTaskId.split("&")[0];
+          const interactionId = rawTaskId.split("&")[1] ?? "";
+          dynamicHeaders[HEADER_TRACE_ID] = rawTaskId;
+          dynamicHeaders[HEADER_SESSION_ID] = sessionId;
+          dynamicHeaders[HEADER_INTERACTION_ID] = interactionId;
+          logger.log(`[ALS-PROOF] provider headers source=ALS traceId=${rawTaskId} sessionId=${sessionId} interactionId=${interactionId}`);
+        } else {
+          const fallbackPrefix = ctx.extraParams?.[FALLBACK_PREFIX_KEY];
+          if (typeof fallbackPrefix === "string") {
+            const fallbackValue = `${fallbackPrefix}_${Date.now()}`;
+            dynamicHeaders[HEADER_TRACE_ID] = fallbackValue;
+            dynamicHeaders[HEADER_SESSION_ID] = fallbackValue;
+            dynamicHeaders[HEADER_INTERACTION_ID] = fallbackValue;
+          }
+          logger.log(`[ALS-PROOF] provider headers source=uid-fallback (ALS miss)`);
         }
       }
 
@@ -592,10 +568,8 @@ export const xiaoyiProvider: ProviderPlugin = {
       if (context.systemPrompt) {
         logger.log(`[xiaoyiprovider] system prompt length: ${context.systemPrompt.length}`);
       }
-      // deviceType: prefer value extracted from Conversation info,
-      // then ALS fallback.
-      const deviceType = extractedDeviceType
-        ?? getCurrentSessionContext()?.deviceType;
+      // deviceType: read from ALS (no more text-extraction).
+      const deviceType = getCurrentSessionContext()?.deviceType;
 
       // 在发送给模型前，优化 systemPrompt 结构
       if (context.systemPrompt) {

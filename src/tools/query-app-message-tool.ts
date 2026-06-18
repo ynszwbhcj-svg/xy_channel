@@ -2,7 +2,7 @@
 import { getXYWebSocketManager } from "../client.js";
 import { sendCommand } from "../formatter.js";
 import type { SessionContext } from "./session-manager.js";
-import { getCurrentTaskId } from "../task-manager.js";
+
 import { logger } from "../utils/logger.js";
 import type { A2ADataEvent } from "../types.js";
 
@@ -127,11 +127,10 @@ c. 调用工具前需认真检查调用参数是否满足工具要求
 
       wsManager.on("data-event", handler);
 
-      const currentTaskId = getCurrentTaskId(sessionId) ?? taskId;
       sendCommand({
         config,
         sessionId,
-        taskId: currentTaskId,
+        taskId,
         messageId,
         command,
         toolCallId,

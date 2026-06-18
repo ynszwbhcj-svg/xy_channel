@@ -59,22 +59,6 @@ export function decrementTaskIdRef(sessionId: string): void {
 }
 
 /**
- * 获取session的当前活跃taskId
- */
-export function getCurrentTaskId(sessionId: string): string | null {
-  const binding = activeTaskIds.get(sessionId);
-  return binding?.currentTaskId ?? null;
-}
-
-/**
- * 获取session的当前活跃messageId
- */
-export function getCurrentMessageId(sessionId: string): string | null {
-  const binding = activeTaskIds.get(sessionId);
-  return binding?.currentMessageId ?? null;
-}
-
-/**
  * 检查session是否有活跃的taskId
  */
 export function hasActiveTask(sessionId: string): boolean {
@@ -86,12 +70,4 @@ export function hasActiveTask(sessionId: string): boolean {
  */
 export function getAllActiveTaskBindings(): TaskIdBinding[] {
   return Array.from(activeTaskIds.values());
-}
-
-/**
- * 强制清理（错误恢复用）
- */
-export function forceCleanTaskId(sessionId: string): void {
-  logger.log(`[TASK_MANAGER] Force clearing taskId`);
-  activeTaskIds.delete(sessionId);
 }

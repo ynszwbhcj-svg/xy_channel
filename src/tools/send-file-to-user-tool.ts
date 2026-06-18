@@ -5,7 +5,7 @@ import { XYFileUploadService } from "../file-upload.js";
 import { appendRunCrossTaskSentFiles, type SessionContext } from "./session-manager.js";
 import { logger } from "../utils/logger.js";
 import type { OutboundWebSocketMessage, SentFileCard } from "../types.js";
-import { getCurrentTaskId, getCurrentMessageId } from "../task-manager.js";
+
 import fetch from "node-fetch";
 import fs from "fs/promises";
 import path from "path";
@@ -147,8 +147,6 @@ b. 操作超时时间为2分钟（120秒），请勿重复调用此工具，如�
 
   async execute(toolCallId: string, params: any) {
     // Dynamic lookup: use latest taskId/messageId from task-manager (handles steer/interrupt)
-    const currentTaskId = getCurrentTaskId(sessionId) ?? taskId;
-    const currentMessageId = getCurrentMessageId(sessionId) ?? messageId;
 
     // Set timeout for the entire operation (2 minutes)
     const TOOL_TIMEOUT = 120000; // 2 minutes in milliseconds
@@ -278,17 +276,17 @@ b. 操作超时时间为2分钟（120秒），请勿重复调用此工具，如�
         msgType: "agent_response",
         agentId: config.agentId,
         sessionId: sessionId,
-        taskId: currentTaskId,
+        taskId,
         msgDetail: JSON.stringify({
           jsonrpc: "2.0",
-          id: currentMessageId,
+          id: messageId,
           result: {
             kind: "artifact-update",
             append: true,
             lastChunk: false,
             final: false,
             artifact: {
-              artifactId: currentTaskId,
+              artifactId: taskId,
               parts: [
                 {
                   kind: "file",

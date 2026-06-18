@@ -3,7 +3,7 @@ import type { ChannelAgentTool } from "openclaw/plugin-sdk";
 import { XYFileUploadService } from "../file-upload.js";
 import { sendCard } from "../formatter.js";
 import type { SessionContext } from "./session-manager.js";
-import { getCurrentTaskId } from "../task-manager.js";
+
 import { logger } from "../utils/logger.js";
 
 /**
@@ -48,7 +48,6 @@ c. 仅当用户或者skill中显示说明使用send_html_card工具时才调用�
         throw new Error("htmlUrl 和 htmlLocal 至少需要填写一个");
       }
 
-      const currentTaskId = getCurrentTaskId(sessionId) ?? taskId;
 
       // Set timeout for the entire operation (2 minutes)
       const TOOL_TIMEOUT = 120000;
@@ -96,7 +95,7 @@ c. 仅当用户或者skill中显示说明使用send_html_card工具时才调用�
         await sendCard({
           config,
           sessionId,
-          taskId: currentTaskId,
+          taskId,
           messageId,
           toolCallId,
           cardsInfo,

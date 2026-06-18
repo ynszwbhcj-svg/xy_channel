@@ -3,7 +3,7 @@ import type { ChannelAgentTool } from "openclaw/plugin-sdk";
 import { getXYWebSocketManager } from "../client.js";
 import { sendCommand } from "../formatter.js";
 import type { SessionContext } from "./session-manager.js";
-import { getCurrentTaskId } from "../task-manager.js";
+
 import { logger } from "../utils/logger.js";
 import type { A2ADataEvent } from "../types.js";
 
@@ -110,8 +110,7 @@ export function createUploadFileTool(ctx: SessionContext): any {
     const wsManager = getXYWebSocketManager(config);
 
     // Get public URLs for the files
-    const currentTaskId = getCurrentTaskId(sessionId) ?? taskId;
-    const fileUrls = await getFileUrls(wsManager, config, sessionId, currentTaskId, messageId, toolCallId, fileInfos, params.udid);
+    const fileUrls = await getFileUrls(wsManager, config, sessionId, taskId, messageId, toolCallId, fileInfos, params.udid);
 
     return {
       content: [

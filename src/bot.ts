@@ -11,7 +11,7 @@ import {
   appendSelfEvolutionKeywordNudge,
   shouldNudgeForSelfEvolutionKeyword,
 } from "./self-evolution-keyword.js";
-import { registerSession, unregisterSession, runWithSessionContext } from "./tools/session-manager.js";
+import { runWithSessionContext } from "./tools/session-manager.js";
 import { configManager } from "./utils/config-manager.js";
 import { addPushId } from "./utils/pushid-manager.js";
 import { getPushDataById } from "./utils/pushdata-manager.js";
@@ -216,20 +216,10 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
 
     log.log(`[BOT] Resolved route, sessionKey=${route.sessionKey}`);
 
-    // Steer injections skip session registration to avoid refCount leaks
+    // ALS only: no registerSession. The sessionContext built below is handed
+    // to runWithSessionContext() inside withReplyDispatcher.run, which is the
+    // single wrap point for the whole agent turn.
     if (!skipReg) {
-      registerSession(route.sessionKey, {
-        config,
-        sessionId: parsed.sessionId,
-        distributionSessionId,
-        taskId: parsed.taskId,
-        messageId: parsed.messageId,
-        agentId: route.accountId,
-        deviceType,
-        modelName,
-        runCrossTaskContext: runCrossTaskContext ?? undefined,
-      });
-
       // 🔑 Sync A2A modelName to OpenClaw session store so that session_status
       // reports the correct model. Without this, session_status returns the
       // configured default model instead of the A2A-specified one.
@@ -459,7 +449,6 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
 
         streamingSignals.delete(parsed.sessionId);
         decrementTaskIdRef(parsed.sessionId);
-        unregisterSession(route.sessionKey);
         log.log(`[BOT] Cleanup completed`);
       },
       run: () => {
@@ -469,6 +458,7 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
         // signal init complete to release the global dispatch gate
         // for the next session.
         const dispatchPromise = runWithSessionContext(sessionContext, async () => {
+          log.log(`[ALS-PROOF] bot entered dispatch scope sessionId=${(sessionContext as any).sessionId} taskId=${(sessionContext as any).taskId} isSteer=false`);
           log.log(`[BOT-DISPATCH] dispatchReplyFromConfig starting, body.length=${(ctxPayload.Body as string)?.length ?? 0}`);
           try {
             const result = await core.channel.reply.dispatchReplyFromConfig({
@@ -507,7 +497,7 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
 
     errLog.log(`[BOT] Error occurred, attempting cleanup`);
 
-    // 🔑 错误时也要清理taskId和session
+    // 🔑 错误时也要清理taskId（session 走 ALS，作用域退出自动清理）
     try {
       const params = message.params as any;
       const sessionId = params?.sessionId;
@@ -517,19 +507,6 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
         // 清理 taskId
         decrementTaskIdRef(sessionId);
 
-        // 清理 session
-        const core = getXYRuntime() as any;
-        const route = core.channel.routing.resolveAgentRoute({
-          cfg,
-          channel: "xiaoyi-channel",
-          accountId,
-          peer: {
-            kind: "direct" as const,
-            id: sessionId,
-          },
-        });
-
-        unregisterSession(route.sessionKey);
         errLog.log(`[BOT] Cleanup completed after error`);
       }
     } catch (cleanupErr) {
@@ -761,6 +738,7 @@ async function dispatchSteerWhenReady(params: EnqueueSteerParams): Promise<void>
     },
     run: () => {
       return runWithSessionContext(sessionContext, async () => {
+        log.log(`[ALS-PROOF] bot entered steer dispatch scope sessionId=${(sessionContext as any).sessionId} taskId=${(sessionContext as any).taskId} isSteer=true`);
         const result = await core.channel.reply.dispatchReplyFromConfig({
           ctx: ctxPayload,
           cfg: params.cfg,

@@ -2,7 +2,6 @@
 import { v4 as uuidv4 } from "uuid";
 import { getXYWebSocketManager } from "./client.js";
 import { logger } from "./utils/logger.js";
-import { getCurrentTaskId, getCurrentMessageId } from "./task-manager.js";
 import { redactSensitiveText, containsSensitiveInfo } from "./sensitive-redactor.js";
 import { rewriteOutboundApprovalText } from "./approval-bridge.js";
 import { isCronToolCall, getCurrentCronJobId } from "./tools/session-manager.js";
@@ -230,11 +229,7 @@ export interface SendStatusUpdateParams {
 export async function sendStatusUpdate(params: SendStatusUpdateParams): Promise<void> {
   const { config, sessionId, taskId, messageId, text, state } = params;
 
-  // Dynamic lookup: use latest taskId/messageId from task-manager (handles steer/interrupt),
-  // fall back to closure-captured values
-  const currentTaskId = getCurrentTaskId(sessionId) ?? taskId;
-  const currentMessageId = getCurrentMessageId(sessionId) ?? messageId;
-  const log = logger.withContext(sessionId, currentTaskId);
+  const log = logger.withContext(sessionId, taskId);
 
   // 审批桥接和脱敏
   const bridgedText = rewriteOutboundApprovalText(sessionId, text);
@@ -252,7 +247,7 @@ export async function sendStatusUpdate(params: SendStatusUpdateParams): Promise<
   });
 
   const statusUpdate: A2ATaskStatusUpdateEvent = {
-    taskId: currentTaskId,
+    taskId,
     kind: "status-update",
     final: false, // Status updates should not end the stream
     status: {
@@ -264,7 +259,7 @@ export async function sendStatusUpdate(params: SendStatusUpdateParams): Promise<
   // Build JSON-RPC response
   const jsonRpcResponse = {
     jsonrpc: "2.0",
-    id: currentMessageId,
+    id: messageId,
     result: statusUpdate,
   };
 
@@ -274,7 +269,7 @@ export async function sendStatusUpdate(params: SendStatusUpdateParams): Promise<
     msgType: "agent_response",
     agentId: config.agentId,
     sessionId,
-    taskId: currentTaskId,
+    taskId,
     msgDetail: JSON.stringify(jsonRpcResponse),
   };
 
@@ -372,16 +367,12 @@ export async function sendCommand(params: SendCommandParams): Promise<void> {
   }
 
   // ── Normal mode: WebSocket ─────────────────────────────────────
-  // Dynamic lookup: use latest taskId/messageId from task-manager (handles steer/interrupt),
-  // fall back to closure-captured values
-  const currentTaskId = getCurrentTaskId(sessionId) ?? taskId;
-  const currentMessageId = getCurrentMessageId(sessionId) ?? messageId;
-  const log = logger.withContext(sessionId, currentTaskId);
+  const log = logger.withContext(sessionId, taskId);
 
   // Build artifact update with command as data
   // Wrap command in commands array as per protocol requirement
   const artifact: A2ATaskArtifactUpdateEvent = {
-    taskId: currentTaskId,
+    taskId,
     kind: "artifact-update",
     append: false,
     lastChunk: true,
@@ -405,7 +396,7 @@ export async function sendCommand(params: SendCommandParams): Promise<void> {
   // Build JSON-RPC response
   const jsonRpcResponse = {
     jsonrpc: "2.0",
-    id: currentMessageId,
+    id: messageId,
     result: artifact,
   };
 
@@ -415,7 +406,7 @@ export async function sendCommand(params: SendCommandParams): Promise<void> {
     msgType: "agent_response",
     agentId: config.agentId,
     sessionId,
-    taskId: currentTaskId,
+    taskId,
     msgDetail: JSON.stringify(jsonRpcResponse),
   };
 
@@ -464,13 +455,11 @@ export async function sendCard(params: SendCardParams): Promise<void> {
   }
 
   // ── Normal mode: WebSocket ─────────────────────────────────────
-  const currentTaskId = getCurrentTaskId(sessionId) ?? taskId;
-  const currentMessageId = getCurrentMessageId(sessionId) ?? messageId;
-  const log = logger.withContext(sessionId, currentTaskId);
+  const log = logger.withContext(sessionId, taskId);
 
   // Build artifact update with cardsInfo as data
   const artifact: A2ATaskArtifactUpdateEvent = {
-    taskId: currentTaskId,
+    taskId,
     kind: "artifact-update",
     append: false,
     lastChunk: true,
@@ -491,7 +480,7 @@ export async function sendCard(params: SendCardParams): Promise<void> {
   // Build JSON-RPC response
   const jsonRpcResponse = {
     jsonrpc: "2.0",
-    id: currentMessageId,
+    id: messageId,
     result: artifact,
   };
 
@@ -501,7 +490,7 @@ export async function sendCard(params: SendCardParams): Promise<void> {
     msgType: "agent_response",
     agentId: config.agentId,
     sessionId,
-    taskId: currentTaskId,
+    taskId,
     msgDetail: JSON.stringify(jsonRpcResponse),
   };
 

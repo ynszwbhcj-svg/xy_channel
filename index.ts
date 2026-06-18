@@ -5,7 +5,7 @@ import { xiaoyiProvider } from "./src/provider.js";
 import { xyPlugin } from "./src/channel.js";
 import registerSentinelHook from "./src/cspl/sentinel_hook.js";
 import { setXYRuntime } from "./src/runtime.js";
-import { markCronToolCall, clearCronToolCall, getSessionContext } from "./src/tools/session-manager.js";
+import { markCronToolCall, clearCronToolCall, getCurrentSessionContext } from "./src/tools/session-manager.js";
 import { configManager } from "./src/utils/config-manager.js";
 import { setJobPushId } from "./src/utils/cron-push-map.js";
 import { getAllPushIds } from "./src/utils/pushid-manager.js";
@@ -69,10 +69,10 @@ async function captureCronAddMapping(
   }
   console.log(`[CRONMAP] extracted jobId=${jobId}`);
 
-  const sessionCtx = ctx.sessionKey ? getSessionContext(ctx.sessionKey) : null;
+  const sessionCtx = getCurrentSessionContext();
   const sessionId = sessionCtx?.sessionId;
   if (!sessionId) {
-    console.log(`[CRONMAP] skip: no sessionId (sessionKey=${ctx.sessionKey}, ctxFound=${!!sessionCtx})`);
+    console.log(`[CRONMAP] skip: no sessionId in ALS scope (ctxFound=${!!sessionCtx})`);
     return;
   }
 

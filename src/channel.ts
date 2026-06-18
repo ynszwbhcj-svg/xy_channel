@@ -6,7 +6,7 @@ import { xyConfigSchema } from "./config-schema.js";
 import { xyOutbound } from "./outbound.js";
 import { xyOnboardingAdapter } from "./onboarding.js";
 import { filterToolsByDevice } from "./tools/device-tool-map.js";
-import { getCurrentSessionContext, registerSession } from "./tools/session-manager.js";
+import { getCurrentSessionContext } from "./tools/session-manager.js";
 import { createAllTools } from "./tools/create-all-tools.js";
 import { getXYWebSocketManager } from "./client.js";
 import { handleXYMessage } from "./bot.js";
@@ -85,12 +85,10 @@ export const xyPlugin: ChannelPlugin = {
     let ctx = getCurrentSessionContext();
 
     // ── Cron / non-session fallback ──────────────────────────────
-    // When no active xy WebSocket session exists but the openclaw cfg
-    // is provided (framework calls agentTools({ cfg })), create a
-    // synthetic "cron session".  This enables cron-triggered agent
-    // turns and cross-channel tool calls to use xiaoyi tools via the
-    // push channel.  sendCommand() detects the "cron-" sessionId
-    // prefix and routes commands through push instead of WebSocket.
+    // cron 路径不进 ALS: openclaw 的 cron runner 同步调 agentTools({cfg})
+    // 返回工具后才在别处跑 turn, xy_channel 没有 wrap 整个 turn 的点。
+    // 这里同步构造合成 ctx 给工具闭包捕获, 工具调用走 sendCommand/push,
+    // 不依赖 getCurrentSessionContext。所以不注册任何全局状态。
     if (!ctx && params?.cfg) {
       try {
         const config = resolveXYConfig(params.cfg);
@@ -104,12 +102,13 @@ export const xyPlugin: ChannelPlugin = {
           isCron: true,
         };
 
-        // Register so getCurrentSessionContext() fallback can find it
-        registerSession(`__cron__${cronId}`, ctx);
+        logger.log(`[ALS-PROOF] agentTools ctx from ALS miss, using synthetic cron ctx sessionId=${cronId} isCron=true`);
         logger.log(`[CRON-TOOLS] Created cron session context: ${cronId}`);
       } catch (err) {
         logger.error("[CRON-TOOLS] Failed to create cron context:", err);
       }
+    } else {
+      logger.log(`[ALS-PROOF] agentTools ctx from ALS sessionId=${ctx?.sessionId} taskId=${ctx?.taskId} isCron=${ctx?.isCron === true}`);
     }
 
     if (!ctx) {

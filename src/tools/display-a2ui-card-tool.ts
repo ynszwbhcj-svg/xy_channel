@@ -1,5 +1,4 @@
 import { sendCommand } from "../formatter.js";
-import { getCurrentMessageId, getCurrentTaskId } from "../task-manager.js";
 import { logger } from "../utils/logger.js";
 import type { SessionContext } from "./session-manager.js";
 
@@ -52,8 +51,6 @@ export function createDisplayA2UICardTool(ctx: SessionContext): any {
         throw new ToolInputError("缺少必填参数: cardData，且必须是 JSON 对象或 JSON 数组");
       }
 
-      const currentTaskId = getCurrentTaskId(sessionId) ?? taskId;
-      const currentMessageId = getCurrentMessageId(sessionId) ?? messageId;
       const command = {
         header: {
           namespace: "Common",
@@ -72,8 +69,8 @@ export function createDisplayA2UICardTool(ctx: SessionContext): any {
       await sendCommand({
         config,
         sessionId,
-        taskId: currentTaskId,
-        messageId: currentMessageId,
+        taskId,
+        messageId,
         command,
         toolCallId,
       });

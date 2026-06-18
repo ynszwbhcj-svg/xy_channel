@@ -24,7 +24,7 @@ import { createSendEmailTool } from "./send-email-tool.js";
 import { createSearchEmailTool } from "./search-email-tool.js";
 import { sendStatusUpdate } from "../formatter.js";
 import type { SessionContext } from "./session-manager.js";
-import { getCurrentTaskId, getCurrentMessageId } from "../task-manager.js";
+
 
 /**
  * call_device_tool - 通用端工具调度器。
@@ -110,14 +110,12 @@ export function createCallDeviceTool(ctx: SessionContext): any {
     const { toolName, arguments: toolArgs } = params;
 
     // 向用户端发送具体工具名的状态更新
-    const currentTaskId = getCurrentTaskId(sessionId) ?? taskId;
-    const currentMessageId = getCurrentMessageId(sessionId) ?? messageId;
     try {
       await sendStatusUpdate({
         config,
         sessionId,
-        taskId: currentTaskId,
-        messageId: currentMessageId,
+        taskId,
+        messageId,
         text: `正在使用工具: ${toolName}...`,
         state: "working",
       });

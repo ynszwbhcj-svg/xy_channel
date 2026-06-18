@@ -12,7 +12,6 @@ import { handleSelfEvolutionEvent, handleSelfEvolutionStateGetEvent } from "./se
 import { handleLoginTokenEvent } from "./login-token-handler.js";
 import { handleCronQueryEvent } from "./cron-query-handler.js";
 import { cleanupStaleTempFiles } from "./reply-dispatcher.js";
-import { cleanupStaleSessions, getActiveSessionCount, cleanupAllSessions } from "./tools/session-manager.js";
 import { logger } from "./utils/logger.js";
 
 export type MonitorXYOpts = {
@@ -275,8 +274,7 @@ export async function monitorXYProvider(opts: MonitorXYOpts = {}): Promise<void>
       // ✅ Remove manager from cache to prevent reusing dirty state
       removeXYWebSocketManager(account);
 
-      // Clean up all active sessions
-      cleanupAllSessions();
+      // Session context is ALS-scoped now — nothing global to clean up.
 
       loggedServers.clear();
       activeMessages.clear();
@@ -357,12 +355,7 @@ export async function monitorXYProvider(opts: MonitorXYOpts = {}): Promise<void>
         logger.log(`[HEALTH CHECK] Auto-cleaned ${cleaned} manager(s) with orphan connections`);
       }
 
-      // Cleanup stale sessions (older than 10min TTL)
-      const cleanedSessions = cleanupStaleSessions();
-      const remainingSessions = getActiveSessionCount();
-      if (cleanedSessions > 0 || remainingSessions > 0) {
-        logger.log(`[HEALTH CHECK] Sessions: cleaned=${cleanedSessions}, active=${remainingSessions}`);
-      }
+      // Session context is ALS-scoped — no global session cleanup needed.
 
       // Cleanup stale temp files (older than 24 hours)
       void cleanupStaleTempFiles();

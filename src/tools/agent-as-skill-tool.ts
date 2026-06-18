@@ -2,7 +2,7 @@
 import { getXYWebSocketManager } from "../client.js";
 import { sendCommand } from "../formatter.js";
 import type { SessionContext } from "./session-manager.js";
-import { getCurrentTaskId } from "../task-manager.js";
+
 import { logger } from "../utils/logger.js";
 import { XYFileUploadService } from "../file-upload.js";
 
@@ -71,7 +71,6 @@ export function createAgentAsSkillTool(ctx: SessionContext): any {
 
     async execute(toolCallId: string, params: any) {
       // Dynamic lookup: use latest taskId from task-manager (handles steer/interrupt)
-      const currentTaskId = getCurrentTaskId(sessionId) ?? taskId;
 
       // Validate parameters
       if (!params.agentId || typeof params.agentId !== "string") {
@@ -187,7 +186,7 @@ export function createAgentAsSkillTool(ctx: SessionContext): any {
         sendCommand({
           config,
           sessionId,
-          taskId: currentTaskId,
+          taskId,
           messageId,
           command,
           toolCallId,

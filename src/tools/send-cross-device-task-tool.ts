@@ -1,6 +1,5 @@
 import { sendCommand, sendStatusUpdate } from "../formatter.js";
 import { getXYWebSocketManager } from "../client.js";
-import { getCurrentMessageId, getCurrentTaskId } from "../task-manager.js";
 import type { A2ACommand, CrossDeviceTaskResultEvent, OutboundWebSocketMessage, SentFileCard } from "../types.js";
 import type { SessionContext } from "./session-manager.js";
 import { logger } from "../utils/logger.js";
@@ -113,8 +112,6 @@ function countSentFileCards(sentFiles: SentFileCard[]): number {
 
 async function sendFileCardsToUser(ctx: SessionContext, fileCards: SentFileCard[]): Promise<Array<{ fileName: string; fileId: string }>> {
   const { config, sessionId, taskId, messageId } = ctx;
-  const currentTaskId = getCurrentTaskId(sessionId) ?? taskId;
-  const currentMessageId = getCurrentMessageId(sessionId) ?? messageId;
   const wsManager = getXYWebSocketManager(config);
   const sentFileCards: Array<{ fileName: string; fileId: string }> = [];
 
@@ -123,17 +120,17 @@ async function sendFileCardsToUser(ctx: SessionContext, fileCards: SentFileCard[
       msgType: "agent_response",
       agentId: config.agentId,
       sessionId,
-      taskId: currentTaskId,
+      taskId,
       msgDetail: JSON.stringify({
         jsonrpc: "2.0",
-        id: currentMessageId,
+        id: messageId,
         result: {
           kind: "artifact-update",
           append: true,
           lastChunk: false,
           final: false,
           artifact: {
-            artifactId: currentTaskId,
+            artifactId: taskId,
             parts: [
               {
                 kind: "file",
@@ -325,8 +322,6 @@ export function createSendCrossDeviceTaskTool(ctx: SessionContext): any {
         });
       }
 
-      const currentTaskId = getCurrentTaskId(sessionId) ?? taskId;
-      const currentMessageId = getCurrentMessageId(sessionId) ?? messageId;
       const wsManager = getXYWebSocketManager(config);
       const distributionSessionId = ctx.distributionSessionId || sessionId;
       const command = buildUnifiedDistributeCommand(query, targetDeviceInfo, distributionSessionId);
@@ -372,8 +367,8 @@ export function createSendCrossDeviceTaskTool(ctx: SessionContext): any {
               await sendStatusUpdate({
                 config,
                 sessionId,
-                taskId: currentTaskId,
-                messageId: currentMessageId,
+                taskId,
+                messageId,
                 text: PEER_TASK_COMPLETED_STATUS_TEXT,
                 state: "working",
               });
@@ -408,16 +403,16 @@ export function createSendCrossDeviceTaskTool(ctx: SessionContext): any {
         sendStatusUpdate({
           config,
           sessionId,
-          taskId: currentTaskId,
-          messageId: currentMessageId,
+          taskId,
+          messageId,
           text: statusText,
           state: "working",
         })
           .then(() => sendCommand({
             config,
             sessionId,
-            taskId: currentTaskId,
-            messageId: currentMessageId,
+            taskId,
+            messageId,
             command,
           }))
           .catch((error) => {
