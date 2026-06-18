@@ -8,6 +8,7 @@ import { clearRunCrossTaskSentFiles, getCurrentSessionContext } from "./tools/se
 import fs from "fs/promises";
 import path from "path";
 import { logger } from "./utils/logger.js";
+import { getCurrentTaskId, getCurrentMessageId } from "./task-manager.js";
 
 export interface CreateXYReplyDispatcherParams {
   cfg: ClawdbotConfig;
@@ -133,9 +134,14 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
   const initialTaskId = taskId;
   const initialMessageId = messageId;
 
-  const getActiveTaskId = (): string => initialTaskId;
+  // 跨链读取：steer 消息通过 registerTaskId 更新 Map，这里读取最新 taskId
+  const getActiveTaskId = (): string => {
+    return getCurrentTaskId(sessionId) ?? initialTaskId;
+  };
 
-  const getActiveMessageId = (): string => initialMessageId;
+  const getActiveMessageId = (): string => {
+    return getCurrentMessageId(sessionId) ?? initialMessageId;
+  };
 
   // Create a scoped logger that always uses this session's sessionId
   // and dynamically resolves the latest taskId
@@ -172,13 +178,14 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
     statusUpdateInterval = setInterval(() => {
       // 🔑 使用动态taskId
 
-      scopedLog().log(`[STATUS-INTERVAL] Triggering status update, taskId=${taskId}`);
+      const currentTaskId = getActiveTaskId();
+      scopedLog().log(`[STATUS-INTERVAL] Triggering status update, taskId=${currentTaskId}`);
 
       void sendStatusUpdate({
         config,
         sessionId,
-        taskId,  // 🔑 动态taskId
-        messageId,  // 🔑 动态messageId
+        taskId: currentTaskId,
+        messageId: getActiveMessageId(),
         text: "任务正在处理中，请稍候~",
         state: "working",
       }).catch((err) => {
@@ -240,8 +247,8 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
           await sendA2AResponse({
             config,
             sessionId,
-            taskId,
-            messageId,
+            taskId: getActiveTaskId(),
+            messageId: getActiveMessageId(),
             text,
             append: true,
             final: false,
@@ -267,8 +274,8 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
             await sendStatusUpdate({
               config,
               sessionId,
-              taskId,
-              messageId,
+              taskId: getActiveTaskId(),
+              messageId: getActiveMessageId(),
               text: "处理失败，请稍后重试",
               state: "failed",
             });
@@ -302,8 +309,8 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
               await sendRunCrossTaskResult({
                 config,
                 sessionId,
-                taskId,
-                messageId,
+                taskId: getActiveTaskId(),
+                messageId: getActiveMessageId(),
                 context: runCrossTaskContext,
                 resultCode: "0",
                 resultMessage: crossTaskResultMessage,
@@ -314,8 +321,8 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
             await sendStatusUpdate({
               config,
               sessionId,
-              taskId,
-              messageId,
+              taskId: getActiveTaskId(),
+              messageId: getActiveMessageId(),
               text: "任务处理已完成~",
               state: "completed",
             });
@@ -325,8 +332,8 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
             await sendA2AResponse({
               config,
               sessionId,
-              taskId,
-              messageId,
+              taskId: getActiveTaskId(),
+              messageId: getActiveMessageId(),
               text: "",
               append: true,
               final: true,
@@ -345,8 +352,8 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
               await sendRunCrossTaskResult({
                 config,
                 sessionId,
-                taskId,
-                messageId,
+                taskId: getActiveTaskId(),
+                messageId: getActiveMessageId(),
                 context: runCrossTaskContext,
                 resultCode: "1",
                 resultMessage: "任务执行异常，请重试",
@@ -356,8 +363,8 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
             await sendStatusUpdate({
               config,
               sessionId,
-              taskId,
-              messageId,
+              taskId: getActiveTaskId(),
+              messageId: getActiveMessageId(),
               text: "任务处理中断了~",
               state: "failed",
             });
@@ -366,8 +373,8 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
             await sendA2AResponse({
               config,
               sessionId,
-              taskId,
-              messageId,
+              taskId: getActiveTaskId(),
+              messageId: getActiveMessageId(),
               text: "任务执行异常，请重试~",
               append: true,
               final: true,
@@ -419,8 +426,8 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
             await sendStatusUpdate({
               config,
               sessionId,
-              taskId,
-              messageId,
+              taskId: getActiveTaskId(),
+              messageId: getActiveMessageId(),
               text: `正在使用工具: ${toolName}...`,
               state: "working",
             });
@@ -449,8 +456,8 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
             await sendStatusUpdate({
               config,
               sessionId,
-              taskId,
-              messageId,
+              taskId: getActiveTaskId(),
+              messageId: getActiveMessageId(),
               text: resultText,
               state: "working",
             });
@@ -480,8 +487,8 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
             await sendReasoningTextUpdate({
               config,
               sessionId,
-              taskId,
-              messageId,
+              taskId: getActiveTaskId(),
+              messageId: getActiveMessageId(),
               text,
               append: false,
             });
@@ -507,8 +514,8 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
             await sendA2AResponse({
               config,
               sessionId,
-              taskId,
-              messageId,
+              taskId: getActiveTaskId(),
+              messageId: getActiveMessageId(),
               text,
               append: false,
               final: false,

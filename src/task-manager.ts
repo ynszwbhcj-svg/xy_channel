@@ -59,6 +59,25 @@ export function decrementTaskIdRef(sessionId: string): void {
 }
 
 /**
+ * 获取session的当前活跃taskId。
+ * 仅供 reply-dispatcher 跨链读取 steer 更新后的 taskId。
+ * 工具和 sendCommand 应使用 ALS SessionContext.taskId。
+ */
+export function getCurrentTaskId(sessionId: string): string | null {
+  const binding = activeTaskIds.get(sessionId);
+  return binding?.currentTaskId ?? null;
+}
+
+/**
+ * 获取session的当前活跃messageId。
+ * 仅供 reply-dispatcher 跨链读取 steer 更新后的 messageId。
+ */
+export function getCurrentMessageId(sessionId: string): string | null {
+  const binding = activeTaskIds.get(sessionId);
+  return binding?.currentMessageId ?? null;
+}
+
+/**
  * 检查session是否有活跃的taskId
  */
 export function hasActiveTask(sessionId: string): boolean {
