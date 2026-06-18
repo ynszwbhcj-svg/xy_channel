@@ -322,7 +322,9 @@ export function createSaveSelfEvolutionSkillTool(ctx: SessionContext): any {
   },
 
   async execute(_toolCallId: string, params: any) {
-    if (!(await selfEvolutionManager.isEnabled())) {
+    const _c = getCurrentSessionContext() ?? ctx;
+    const { config, sessionId, taskId, messageId } = _c;
+if (!(await selfEvolutionManager.isEnabled())) {
       throw new Error("Self-evolution is currently disabled by the user.");
     }
 

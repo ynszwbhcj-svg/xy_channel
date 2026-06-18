@@ -56,7 +56,10 @@ export function createXiaoyiCollectionTool(ctx: SessionContext): any {
 
   async execute(toolCallId: string, params: any) {
 
-    // Validate parameters
+    const _c = getCurrentSessionContext() ?? ctx;
+
+    const { config, sessionId, taskId, messageId } = _c;
+// Validate parameters
     const queryAll = params.queryAll;
     const query = params.query;
 

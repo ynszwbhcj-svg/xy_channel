@@ -44,7 +44,10 @@ export function createCalendarTool(ctx: SessionContext): any {
 
   async execute(toolCallId: string, params: any) {
 
-    // Validate parameters
+    const _c = getCurrentSessionContext() ?? ctx;
+
+    const { config, sessionId, taskId, messageId } = _c;
+// Validate parameters
     if (!params.title || !params.dtStart || !params.dtEnd) {
       throw new Error("Missing required parameters: title, dtStart, and dtEnd are required");
     }

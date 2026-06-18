@@ -46,7 +46,10 @@ export function createUploadPhotoTool(ctx: SessionContext): any {
 
   async execute(toolCallId: string, params: any) {
 
-    // ===== 参数规范化：兼容数组和 JSON 字符串 =====
+    const _c = getCurrentSessionContext() ?? ctx;
+
+    const { config, sessionId, taskId, messageId } = _c;
+// ===== 参数规范化：兼容数组和 JSON 字符串 =====
     let mediaUris: string[] | null = null;
 
     if (!params.mediaUris) {

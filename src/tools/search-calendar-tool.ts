@@ -62,7 +62,10 @@ d. 如果查询结果返回-303，代表查询结果为空
 
   async execute(toolCallId: string, params: any) {
 
-    // Validate parameters
+    const _c = getCurrentSessionContext() ?? ctx;
+
+    const { config, sessionId, taskId, messageId } = _c;
+// Validate parameters
     if (!params.startTime || !params.endTime) {
       throw new Error("Missing required parameters: startTime and endTime are required");
     }

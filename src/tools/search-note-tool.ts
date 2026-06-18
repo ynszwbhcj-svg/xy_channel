@@ -31,7 +31,10 @@ export function createSearchNoteTool(ctx: SessionContext): any {
 
   async execute(toolCallId: string, params: any) {
 
-    // Validate parameters
+    const _c = getCurrentSessionContext() ?? ctx;
+
+    const { config, sessionId, taskId, messageId } = _c;
+// Validate parameters
     if (!params.query) {
       throw new Error("Missing required parameter: query is required");
     }

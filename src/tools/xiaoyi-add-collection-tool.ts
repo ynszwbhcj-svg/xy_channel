@@ -80,7 +80,10 @@ export function createXiaoyiAddCollectionTool(ctx: SessionContext): any {
 
   async execute(toolCallId: string, params: any) {
 
-    // Validate parameters
+    const _c = getCurrentSessionContext() ?? ctx;
+
+    const { config, sessionId, taskId, messageId } = _c;
+// Validate parameters
     const { content, uri, sourceAppBundleName, dataType, title } = params;
 
     const validTypes = ["HYPER_LINK", "TEXT", "IMAGE", "FILE"];

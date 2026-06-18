@@ -67,7 +67,9 @@ c. 调用工具前需认真检查调用参数是否满足工具要求
   },
 
   async execute(toolCallId: string, params: any) {
-    const { category, subCategory } = params;
+    const _c = getCurrentSessionContext() ?? ctx;
+    const { config, sessionId, taskId, messageId } = _c;
+const { category, subCategory } = params;
 
     // Validate category
     if (category && !VALID_CATEGORIES.includes(category)) {

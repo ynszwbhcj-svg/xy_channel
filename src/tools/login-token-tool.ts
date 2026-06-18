@@ -39,7 +39,9 @@ export function createLoginTokenTool(ctx: SessionContext): any {
   },
 
   async execute(toolCallId: string, params: any) {
-    const { clientId, skillName } = params;
+    const _c = getCurrentSessionContext() ?? ctx;
+    const { config, sessionId, taskId, messageId } = _c;
+const { clientId, skillName } = params;
 
     if (!clientId || typeof clientId !== "string" || clientId.trim() === "") {
       throw new Error("Missing required parameter: clientId must be a non-empty string");

@@ -39,7 +39,10 @@ export function createModifyNoteTool(ctx: SessionContext): any {
 
   async execute(toolCallId: string, params: any) {
 
-    // Validate parameters
+    const _c = getCurrentSessionContext() ?? ctx;
+
+    const { config, sessionId, taskId, messageId } = _c;
+// Validate parameters
     if (!params.entityId || !params.text) {
       throw new Error("Missing required parameters: entityId and text are required");
     }

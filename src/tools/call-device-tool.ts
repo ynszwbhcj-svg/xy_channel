@@ -108,7 +108,9 @@ export function createCallDeviceTool(ctx: SessionContext): any {
     required: ["toolName", "arguments"],
   },
   async execute(toolCallId: string, params: any) {
-    const { toolName, arguments: toolArgs } = params;
+    const _c = getCurrentSessionContext() ?? ctx;
+    const { config, sessionId, taskId, messageId } = _c;
+const { toolName, arguments: toolArgs } = params;
 
     // 向用户端发送具体工具名的状态更新
     try {

@@ -71,7 +71,9 @@ export function createAgentAsSkillTool(ctx: SessionContext): any {
     },
 
     async execute(toolCallId: string, params: any) {
-      // Dynamic lookup: use latest taskId from task-manager (handles steer/interrupt)
+      const _c = getCurrentSessionContext() ?? ctx;
+      const { config, sessionId, taskId, messageId } = _c;
+// Dynamic lookup: use latest taskId from task-manager (handles steer/interrupt)
 
       // Validate parameters
       if (!params.agentId || typeof params.agentId !== "string") {

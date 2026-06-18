@@ -40,7 +40,10 @@ export function createSearchFileTool(ctx: SessionContext): any {
 
   async execute(toolCallId: string, params: any) {
 
-    // Validate query parameter
+    const _c = getCurrentSessionContext() ?? ctx;
+
+    const { config, sessionId, taskId, messageId } = _c;
+// Validate query parameter
     if (!params.query || typeof params.query !== "string" || params.query.trim() === "") {
       throw new Error("Missing required parameter: query must be a non-empty string");
     }

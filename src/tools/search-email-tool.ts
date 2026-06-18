@@ -46,7 +46,9 @@ b. 使用该工具之前需获取当前真实时间
   },
 
   async execute(toolCallId: string, params: any) {
-    // ===== Validate queryText =====
+    const _c = getCurrentSessionContext() ?? ctx;
+    const { config, sessionId, taskId, messageId } = _c;
+// ===== Validate queryText =====
     if (!params.queryText || typeof params.queryText !== "string" || !params.queryText.trim()) {
       throw new Error("queryText 为必填参数，且不能为空字符串");
     }

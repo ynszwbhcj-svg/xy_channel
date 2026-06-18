@@ -41,7 +41,9 @@ export function createDisplayA2UICardTool(ctx: SessionContext): any {
     },
 
     async execute(toolCallId: string, params: any) {
-      const cardId = typeof params?.cardId === "string" ? params.cardId.trim() : "";
+      const _c = getCurrentSessionContext() ?? ctx;
+      const { config, sessionId, taskId, messageId } = _c;
+const cardId = typeof params?.cardId === "string" ? params.cardId.trim() : "";
       const cardData = params?.cardData;
 
       if (!cardId) {

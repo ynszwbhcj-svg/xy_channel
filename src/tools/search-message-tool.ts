@@ -31,7 +31,10 @@ export function createSearchMessageTool(ctx: SessionContext): any {
 
   async execute(toolCallId: string, params: any) {
 
-    // Validate content parameter
+    const _c = getCurrentSessionContext() ?? ctx;
+
+    const { config, sessionId, taskId, messageId } = _c;
+// Validate content parameter
     if (!params.content || typeof params.content !== "string" || params.content.trim() === "") {
       throw new Error("Missing required parameter: content must be a non-empty string");
     }

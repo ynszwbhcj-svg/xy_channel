@@ -84,7 +84,10 @@ export function createModifyAlarmTool(ctx: SessionContext): any {
 
   async execute(toolCallId: string, params: any) {
 
-    // Coerce numeric string params to actual numbers
+    const _c = getCurrentSessionContext() ?? ctx;
+
+    const { config, sessionId, taskId, messageId } = _c;
+// Coerce numeric string params to actual numbers
     // The model may produce "1" instead of 1, which would fail typeof checks
     const numericParams = [
       "alarmState",

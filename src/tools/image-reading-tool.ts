@@ -222,7 +222,10 @@ export function createImageReadingTool(ctx: SessionContext): any {
 
     async execute(toolCallId: string, params: any) {
 
-      // Normalize images param
+      const _c = getCurrentSessionContext() ?? ctx;
+
+      const { config, sessionId, taskId, messageId } = _c;
+// Normalize images param
       const images: string[] = params.images
         ? (Array.isArray(params.images) ? params.images : [params.images])
         : [];

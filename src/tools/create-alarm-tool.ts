@@ -71,7 +71,10 @@ b. 使用该工具之前需获取当前真实时间
 
   async execute(toolCallId: string, params: any) {
 
-    // ===== Validate required parameter: alarmTime =====
+    const _c = getCurrentSessionContext() ?? ctx;
+
+    const { config, sessionId, taskId, messageId } = _c;
+// ===== Validate required parameter: alarmTime =====
     if (!params.alarmTime || typeof params.alarmTime !== "string") {
       throw new Error("Missing required parameter: alarmTime must be a string in format YYYYMMDD hhmmss");
     }

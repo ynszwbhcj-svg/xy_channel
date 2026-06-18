@@ -44,7 +44,9 @@ c. 仅当用户或者skill中显示说明使用send_html_card工具时才调用�
     },
 
     async execute(toolCallId: string, params: any) {
-      // Validate at least one parameter is provided
+      const _c = getCurrentSessionContext() ?? ctx;
+      const { config, sessionId, taskId, messageId } = _c;
+// Validate at least one parameter is provided
       if (!params.htmlUrl && !params.htmlLocal) {
         throw new Error("htmlUrl 和 htmlLocal 至少需要填写一个");
       }

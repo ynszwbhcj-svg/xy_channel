@@ -35,7 +35,10 @@ export function createSendMessageTool(ctx: SessionContext): any {
 
   async execute(toolCallId: string, params: any) {
 
-    // Validate phoneNumber parameter
+    const _c = getCurrentSessionContext() ?? ctx;
+
+    const { config, sessionId, taskId, messageId } = _c;
+// Validate phoneNumber parameter
     if (!params.phoneNumber || typeof params.phoneNumber !== "string" || params.phoneNumber.trim() === "") {
       throw new Error("Missing required parameter: phoneNumber must be a non-empty string");
     }

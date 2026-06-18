@@ -69,7 +69,10 @@ b. 使用该工具之前需获取当前真实时间
 
   async execute(toolCallId: string, params: any) {
 
-    // ===== Validate at least one search criterion is provided =====
+    const _c = getCurrentSessionContext() ?? ctx;
+
+    const { config, sessionId, taskId, messageId } = _c;
+// ===== Validate at least one search criterion is provided =====
     const hasRangeType = params.rangeType !== undefined && params.rangeType !== null;
     const hasAlarmState = params.alarmState !== undefined && params.alarmState !== null;
     const hasDaysOfWakeType = params.daysOfWakeType !== undefined && params.daysOfWakeType !== null;

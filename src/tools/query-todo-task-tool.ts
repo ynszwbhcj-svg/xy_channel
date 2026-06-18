@@ -51,7 +51,9 @@ d. 当只传入 startTime 时，返回该时间点之后的所有任务；当只
   },
 
   async execute(toolCallId: string, params: any) {
-    const { status } = params;
+    const _c = getCurrentSessionContext() ?? ctx;
+    const { config, sessionId, taskId, messageId } = _c;
+const { status } = params;
 
     if (status && !["all", "completed", "pending"].includes(status)) {
       throw new ToolInputError('status 参数只能为 "all"、"completed" 或 "pending"');

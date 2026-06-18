@@ -55,7 +55,10 @@ export function createNoteTool(ctx: SessionContext): any {
 
   async execute(toolCallId: string, params: any) {
 
-    // Validate parameters — 抛 ToolInputError 而非普通 Error，
+    const _c = getCurrentSessionContext() ?? ctx;
+
+    const { config, sessionId, taskId, messageId } = _c;
+// Validate parameters — 抛 ToolInputError 而非普通 Error，
     // 让 openclaw 返回 400 而非 500，明确告知 LLM 这是参数错误，不应重试。
     if (typeof params.title !== "string" || !params.title) {
       throw new ToolInputError("缺少必填参数 title（备忘录标题）");

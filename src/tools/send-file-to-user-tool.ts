@@ -146,7 +146,9 @@ b. 操作超时时间为2分钟（120秒），请勿重复调用此工具，如�
   },
 
   async execute(toolCallId: string, params: any) {
-    // Dynamic lookup: use latest taskId/messageId from task-manager (handles steer/interrupt)
+    const _c = getCurrentSessionContext() ?? ctx;
+    const { config, sessionId, taskId, messageId } = _c;
+// Dynamic lookup: use latest taskId/messageId from task-manager (handles steer/interrupt)
 
     // Set timeout for the entire operation (2 minutes)
     const TOOL_TIMEOUT = 120000; // 2 minutes in milliseconds

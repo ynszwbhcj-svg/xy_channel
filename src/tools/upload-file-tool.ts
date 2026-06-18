@@ -51,7 +51,10 @@ export function createUploadFileTool(ctx: SessionContext): any {
 
   async execute(toolCallId: string, params: any) {
 
-    // ===== 参数规范化：兼容数组和 JSON 字符串 =====
+    const _c = getCurrentSessionContext() ?? ctx;
+
+    const { config, sessionId, taskId, messageId } = _c;
+// ===== 参数规范化：兼容数组和 JSON 字符串 =====
     let fileInfos: Array<{ mediaUri: string; timeout?: string }> | null = null;
 
     if (!params.fileInfos) {

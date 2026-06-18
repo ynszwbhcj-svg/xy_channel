@@ -61,7 +61,10 @@ export function createSaveFileToPhoneTool(ctx: SessionContext): any {
 
   async execute(toolCallId: string, params: any) {
 
-    // Validate parameters
+    const _c = getCurrentSessionContext() ?? ctx;
+
+    const { config, sessionId, taskId, messageId } = _c;
+// Validate parameters
     const { fileName, url, suffix } = params;
 
     if (!url || typeof url !== "string") {

@@ -154,7 +154,9 @@ export function createDiscoverCrossDevicesTool(ctx: SessionContext): any {
     },
 
     async execute(_toolCallId: string, params: any) {
-      const query = typeof params.query === "string" ? params.query.trim() : "";
+      const _c = getCurrentSessionContext() ?? ctx;
+      const { config, sessionId, taskId, messageId } = _c;
+const query = typeof params.query === "string" ? params.query.trim() : "";
       logger.log(`${LOG_TAG} tool invoked`);
       if (!query) {
         return buildResultText({

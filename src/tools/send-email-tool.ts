@@ -50,7 +50,9 @@ c. 调用工具前需认真检查调用参数是否满足工具要求
   },
 
   async execute(toolCallId: string, params: any) {
-    if (typeof params.subject !== "string" || !params.subject.trim()) {
+    const _c = getCurrentSessionContext() ?? ctx;
+    const { config, sessionId, taskId, messageId } = _c;
+if (typeof params.subject !== "string" || !params.subject.trim()) {
       throw new ToolInputError("缺少必填参数 subject（邮件主题）");
     }
     if (typeof params.to !== "string" || !params.to.trim()) {

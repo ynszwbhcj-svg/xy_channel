@@ -84,7 +84,9 @@ export function createCheckPluginPrivilegeTool(ctx: SessionContext): any {
     },
 
     async execute(toolCallId: string, params: any) {
-      const { checkIntentName } = params;
+      const _c = getCurrentSessionContext() ?? ctx;
+      const { config, sessionId, taskId, messageId } = _c;
+const { checkIntentName } = params;
 
       // Look up permission IDs for the given intent name
       const permissionId = INTENT_PERMISSION_MAP[checkIntentName];
