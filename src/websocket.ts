@@ -86,7 +86,7 @@ export class XYWebSocketManager extends EventEmitter {
   private onHealthEvent?: () => void;
 
   constructor(
-    private config: XYChannelConfig,
+    public readonly config: XYChannelConfig,
     private runtime?: RuntimeEnv
   ) {
     super();

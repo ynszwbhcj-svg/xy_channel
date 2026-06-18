@@ -1,6 +1,6 @@
 // Save Media to Gallery tool implementation
 import type { ChannelAgentTool } from "openclaw/plugin-sdk";
-import { getXYWebSocketManager } from "../client.js";
+import { getCachedXYWebSocketManager } from "../client.js";
 import { sendCommand } from "../formatter.js";
 import type { SessionContext } from "./session-manager.js";
 import { getCurrentSessionContext } from './session-manager.js';
@@ -27,6 +27,7 @@ class ToolInputError extends Error {
  * Supports local file paths (auto-uploaded to get public URL) and public URLs.
  */
 export function createSaveMediaToGalleryTool(ctx: SessionContext): any {
+  const { config, sessionId, taskId, messageId } = ctx;
   return {
   name: "save_media_to_gallery",
   label: "Save Media to Gallery",
@@ -60,10 +61,7 @@ export function createSaveMediaToGalleryTool(ctx: SessionContext): any {
 
   async execute(toolCallId: string, params: any) {
 
-    const _c = getCurrentSessionContext() ?? ctx;
-
-    const { config, sessionId, taskId, messageId } = _c;
-// Validate parameters
+    // Validate parameters
     const { mediaType, fileName, url } = params;
 
     if (!url || typeof url !== "string") {
@@ -84,7 +82,7 @@ export function createSaveMediaToGalleryTool(ctx: SessionContext): any {
     }
 
     // Get WebSocket manager
-    const wsManager = getXYWebSocketManager(config);
+    const wsManager = getCachedXYWebSocketManager();
 
     // Determine the URL: if it's a local path, upload first to get public URL
     let publicUrl = url;

@@ -1,9 +1,9 @@
 import { sendCommand, sendStatusUpdate } from "../formatter.js";
-import { getXYWebSocketManager } from "../client.js";
+import { getCachedXYWebSocketManager } from "../client.js";
 import type { A2ACommand, CrossDeviceTaskResultEvent, OutboundWebSocketMessage, SentFileCard } from "../types.js";
 import type { SessionContext } from "./session-manager.js";
-import { getCurrentSessionContext } from './session-manager.js';
 import { logger } from "../utils/logger.js";
+import { getCurrentSessionContext } from './session-manager.js';
 
 const LOG_TAG = "[SendPcDeviceTask]";
 const SEND_CROSS_RESULT_LOG_TAG = "[SendCrossResult]";
@@ -113,7 +113,7 @@ function countSentFileCards(sentFiles: SentFileCard[]): number {
 
 async function sendFileCardsToUser(ctx: SessionContext, fileCards: SentFileCard[]): Promise<Array<{ fileName: string; fileId: string }>> {
   const { config, sessionId, taskId, messageId } = ctx;
-  const wsManager = getXYWebSocketManager(config);
+  const wsManager = getCachedXYWebSocketManager();
   const sentFileCards: Array<{ fileName: string; fileId: string }> = [];
 
   for (const card of fileCards) {
@@ -270,6 +270,8 @@ function buildUnifiedDistributeCommand(
 }
 
 export function createSendCrossDeviceTaskTool(ctx: SessionContext): any {
+  const { config, sessionId, taskId, messageId } = ctx;
+
   return {
     name: "send_cross_device_task",
     label: "下发跨设备协作任务",
@@ -312,9 +314,7 @@ export function createSendCrossDeviceTaskTool(ctx: SessionContext): any {
     },
 
     async execute(_toolCallId: string, params: any) {
-      const _c = getCurrentSessionContext() ?? ctx;
-      const { config, sessionId, taskId, messageId } = _c;
-const query = typeof params.query === "string" ? params.query.trim() : "";
+      const query = typeof params.query === "string" ? params.query.trim() : "";
       const targetDeviceInfo = normalizeTargetDeviceInfo(params.targetDeviceInfo);
       if (!query || !targetDeviceInfo) {
         return buildResultText({
@@ -323,7 +323,7 @@ const query = typeof params.query === "string" ? params.query.trim() : "";
         });
       }
 
-      const wsManager = getXYWebSocketManager(config);
+      const wsManager = getCachedXYWebSocketManager();
       const distributionSessionId = ctx.distributionSessionId || sessionId;
       const command = buildUnifiedDistributeCommand(query, targetDeviceInfo, distributionSessionId);
       const statusText = `正在调用${targetDeviceInfo.deviceName}执行“${query}”跨设备任务...`;

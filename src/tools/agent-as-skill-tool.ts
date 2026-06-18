@@ -1,5 +1,5 @@
 // Agent-as-skill tool implementation - invokes another agent as a skill
-import { getXYWebSocketManager } from "../client.js";
+import { getCachedXYWebSocketManager } from "../client.js";
 import { sendCommand } from "../formatter.js";
 import type { SessionContext } from "./session-manager.js";
 import { getCurrentSessionContext } from './session-manager.js';
@@ -13,6 +13,7 @@ import { XYFileUploadService } from "../file-upload.js";
  * forwards the request to the target agent via WebSocket, and returns the result.
  */
 export function createAgentAsSkillTool(ctx: SessionContext): any {
+  const { config, sessionId, taskId, messageId } = ctx;
   return {
     name: "agent_as_a_tool",
     label: "Agent as Skill Tool",
@@ -70,9 +71,7 @@ export function createAgentAsSkillTool(ctx: SessionContext): any {
     },
 
     async execute(toolCallId: string, params: any) {
-      const _c = getCurrentSessionContext() ?? ctx;
-      const { config, sessionId, taskId, messageId } = _c;
-// Dynamic lookup: use latest taskId from task-manager (handles steer/interrupt)
+      // Dynamic lookup: use latest taskId from task-manager (handles steer/interrupt)
 
       // Validate parameters
       if (!params.agentId || typeof params.agentId !== "string") {
@@ -131,7 +130,7 @@ export function createAgentAsSkillTool(ctx: SessionContext): any {
       }
 
       // Get WebSocket manager
-      const wsManager = getXYWebSocketManager(config);
+      const wsManager = getCachedXYWebSocketManager();
 
       // Build ExecuteAgentAsSkill command
       const command = {

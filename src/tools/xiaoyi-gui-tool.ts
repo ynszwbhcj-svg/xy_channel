@@ -1,5 +1,5 @@
 // XiaoYi GUI tool implementation - simulates phone screen interactions
-import { getXYWebSocketManager } from "../client.js";
+import { getCachedXYWebSocketManager } from "../client.js";
 import { sendCommand } from "../formatter.js";
 import type { SessionContext } from "./session-manager.js";
 
@@ -12,6 +12,7 @@ import { logger } from "../utils/logger.js";
  * to complete tasks that cannot be done through internet APIs.
  */
 export function createXiaoyiGuiTool(ctx: SessionContext): any {
+  const { config, sessionId, taskId, messageId } = ctx;
   return {
   name: "xiaoyi_gui_agent",
   label: "XiaoYi GUI Agent",
@@ -44,9 +45,7 @@ export function createXiaoyiGuiTool(ctx: SessionContext): any {
   },
 
   async execute(toolCallId: string, params: any) {
-    const _c = getCurrentSessionContext() ?? ctx;
-    const { config, sessionId, taskId, messageId } = _c;
-// Dynamic lookup: use latest taskId from task-manager (handles steer/interrupt)
+    // Dynamic lookup: use latest taskId from task-manager (handles steer/interrupt)
 
     // Validate parameters
     if (!params.query || typeof params.query !== "string") {
@@ -59,7 +58,7 @@ export function createXiaoyiGuiTool(ctx: SessionContext): any {
     }
 
     // Get WebSocket manager
-    const wsManager = getXYWebSocketManager(config);
+    const wsManager = getCachedXYWebSocketManager();
 
     // Build InvokeJarvisGUIAgentRequest command
     const command = {

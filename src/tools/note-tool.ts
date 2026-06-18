@@ -1,6 +1,6 @@
 // Note tool implementation
 import type { ChannelAgentTool } from "openclaw/plugin-sdk";
-import { getXYWebSocketManager } from "../client.js";
+import { getCachedXYWebSocketManager } from "../client.js";
 import { sendCommand } from "../formatter.js";
 import type { SessionContext } from "./session-manager.js";
 import { getCurrentSessionContext } from './session-manager.js';
@@ -26,6 +26,7 @@ class ToolInputError extends Error {
  * Requires title and content parameters.
  */
 export function createNoteTool(ctx: SessionContext): any {
+  const { config, sessionId, taskId, messageId } = ctx;
   return {
   name: "create_note",
   label: "Create Note",
@@ -54,10 +55,7 @@ export function createNoteTool(ctx: SessionContext): any {
 
   async execute(toolCallId: string, params: any) {
 
-    const _c = getCurrentSessionContext() ?? ctx;
-
-    const { config, sessionId, taskId, messageId } = _c;
-// Validate parameters — 抛 ToolInputError 而非普通 Error，
+    // Validate parameters — 抛 ToolInputError 而非普通 Error，
     // 让 openclaw 返回 400 而非 500，明确告知 LLM 这是参数错误，不应重试。
     if (typeof params.title !== "string" || !params.title) {
       throw new ToolInputError("缺少必填参数 title（备忘录标题）");
@@ -67,7 +65,7 @@ export function createNoteTool(ctx: SessionContext): any {
     }
 
     // Get WebSocket manager
-    const wsManager = getXYWebSocketManager(config);
+    const wsManager = getCachedXYWebSocketManager();
 
     // Build CreateNote command
     const command = {

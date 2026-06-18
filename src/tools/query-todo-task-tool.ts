@@ -1,5 +1,5 @@
 // QueryTodoTask tool implementation
-import { getXYWebSocketManager } from "../client.js";
+import { getCachedXYWebSocketManager } from "../client.js";
 import { sendCommand } from "../formatter.js";
 import type { SessionContext } from "./session-manager.js";
 import { getCurrentSessionContext } from './session-manager.js';
@@ -19,6 +19,7 @@ class ToolInputError extends Error {
  * 获取指定时间范围内的全局待办任务列表。
  */
 export function createQueryTodoTaskTool(ctx: SessionContext): any {
+  const { config, sessionId, taskId, messageId } = ctx;
   return {
   name: "query_todo_task",
   label: "Query Todo Task",
@@ -50,15 +51,13 @@ d. 当只传入 startTime 时，返回该时间点之后的所有任务；当只
   },
 
   async execute(toolCallId: string, params: any) {
-    const _c = getCurrentSessionContext() ?? ctx;
-    const { config, sessionId, taskId, messageId } = _c;
-const { status } = params;
+    const { status } = params;
 
     if (status && !["all", "completed", "pending"].includes(status)) {
       throw new ToolInputError('status 参数只能为 "all"、"completed" 或 "pending"');
     }
 
-    const wsManager = getXYWebSocketManager(config);
+    const wsManager = getCachedXYWebSocketManager();
 
     const intentParam: Record<string, any> = {};
     if (params.startTime !== undefined) intentParam.startTime = params.startTime;

@@ -1,5 +1,5 @@
 // Check plugin privilege tool implementation
-import { getXYWebSocketManager } from "../client.js";
+import { getCachedXYWebSocketManager } from "../client.js";
 import { sendCommand } from "../formatter.js";
 import type { SessionContext } from "./session-manager.js";
 import { getCurrentSessionContext } from './session-manager.js';
@@ -38,6 +38,7 @@ const INTENT_PERMISSION_MAP: Record<string, string[]> = {
  * used in scheduled tasks.
  */
 export function createCheckPluginPrivilegeTool(ctx: SessionContext): any {
+  const { config, sessionId, taskId, messageId } = ctx;
   return {
     name: "check_plugin_privilege",
     label: "Check Plugin Privilege",
@@ -83,9 +84,7 @@ export function createCheckPluginPrivilegeTool(ctx: SessionContext): any {
     },
 
     async execute(toolCallId: string, params: any) {
-      const _c = getCurrentSessionContext() ?? ctx;
-      const { config, sessionId, taskId, messageId } = _c;
-const { checkIntentName } = params;
+      const { checkIntentName } = params;
 
       // Look up permission IDs for the given intent name
       const permissionId = INTENT_PERMISSION_MAP[checkIntentName];
@@ -101,7 +100,7 @@ const { checkIntentName } = params;
       }
 
       // Get WebSocket manager
-      const wsManager = getXYWebSocketManager(config);
+      const wsManager = getCachedXYWebSocketManager();
 
       // Build CheckPlugInPrivilege command
       const command = {

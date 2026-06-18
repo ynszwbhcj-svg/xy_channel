@@ -2,10 +2,10 @@
 import { createHash } from "crypto";
 import { XYFileUploadService } from "../file-upload.js";
 import type { SessionContext } from "./session-manager.js";
-import { getCurrentSessionContext } from './session-manager.js';
 import fetch from "node-fetch";
 import fs from "fs/promises";
 import { v4 as uuidv4 } from "uuid";
+import { getCurrentSessionContext } from './session-manager.js';
 
 /**
  * Check if value is a remote URL
@@ -198,6 +198,7 @@ async function callImageUnderstandingAPI(
  * Supports both local file paths and remote URLs, up to 10 images at once.
  */
 export function createImageReadingTool(ctx: SessionContext): any {
+  const { config, sessionId } = ctx;
   return {
     name: "image_reading",
     label: "Image Reading",
@@ -221,10 +222,7 @@ export function createImageReadingTool(ctx: SessionContext): any {
 
     async execute(toolCallId: string, params: any) {
 
-      const _c = getCurrentSessionContext() ?? ctx;
-
-      const { config, sessionId } = _c;
-// Normalize images param
+      // Normalize images param
       const images: string[] = params.images
         ? (Array.isArray(params.images) ? params.images : [params.images])
         : [];

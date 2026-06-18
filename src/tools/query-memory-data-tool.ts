@@ -1,5 +1,5 @@
 // QueryMemoryData tool implementation
-import { getXYWebSocketManager } from "../client.js";
+import { getCachedXYWebSocketManager } from "../client.js";
 import { sendCommand } from "../formatter.js";
 import type { SessionContext } from "./session-manager.js";
 import { getCurrentSessionContext } from './session-manager.js';
@@ -35,6 +35,7 @@ const VALID_SUB_CATEGORIES: Record<string, string[]> = {
  * 查询存储在设备本地的结构化记忆数据。
  */
 export function createQueryMemoryDataTool(ctx: SessionContext): any {
+  const { config, sessionId, taskId, messageId } = ctx;
   return {
   name: "query_memory_data",
   label: "Query Memory Data",
@@ -66,9 +67,7 @@ c. 调用工具前需认真检查调用参数是否满足工具要求
   },
 
   async execute(toolCallId: string, params: any) {
-    const _c = getCurrentSessionContext() ?? ctx;
-    const { config, sessionId, taskId, messageId } = _c;
-const { category, subCategory } = params;
+    const { category, subCategory } = params;
 
     // Validate category
     if (category && !VALID_CATEGORIES.includes(category)) {
@@ -90,7 +89,7 @@ const { category, subCategory } = params;
       }
     }
 
-    const wsManager = getXYWebSocketManager(config);
+    const wsManager = getCachedXYWebSocketManager();
 
     const intentParam: Record<string, any> = {};
     if (category) intentParam.category = category;

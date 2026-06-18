@@ -1,5 +1,5 @@
 // QueryAppMessage tool implementation
-import { getXYWebSocketManager } from "../client.js";
+import { getCachedXYWebSocketManager } from "../client.js";
 import { sendCommand } from "../formatter.js";
 import type { SessionContext } from "./session-manager.js";
 import { getCurrentSessionContext } from './session-manager.js';
@@ -19,6 +19,7 @@ class ToolInputError extends Error {
  * 查询指定时间范围内的设备通知消息。
  */
 export function createQueryAppMessageTool(ctx: SessionContext): any {
+  const { config, sessionId, taskId, messageId } = ctx;
   return {
   name: "query_app_message",
   label: "Query App Message",
@@ -55,7 +56,7 @@ c. 调用工具前需认真检查调用参数是否满足工具要求
   async execute(toolCallId: string, params: any) {
     const _c = getCurrentSessionContext() ?? ctx;
     const { config, sessionId, taskId, messageId } = _c;
-const wsManager = getXYWebSocketManager(config);
+    const wsManager = getCachedXYWebSocketManager();
 
     const intentParam: Record<string, any> = {};
     if (params.startTime !== undefined) intentParam.startTime = params.startTime;

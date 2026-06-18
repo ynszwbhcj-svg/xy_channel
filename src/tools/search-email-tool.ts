@@ -1,5 +1,5 @@
 // Search Email tool implementation
-import { getXYWebSocketManager } from "../client.js";
+import { getCachedXYWebSocketManager } from "../client.js";
 import { sendCommand } from "../formatter.js";
 import type { SessionContext } from "./session-manager.js";
 import { getCurrentSessionContext } from './session-manager.js';
@@ -12,6 +12,7 @@ import type { A2ADataEvent } from "../types.js";
  * Returns matching emails based on query text and search type.
  */
 export function createSearchEmailTool(ctx: SessionContext): any {
+  const { config, sessionId, taskId, messageId } = ctx;
   return {
   name: "search_email",
   label: "Search Email",
@@ -45,9 +46,7 @@ b. 使用该工具之前需获取当前真实时间
   },
 
   async execute(toolCallId: string, params: any) {
-    const _c = getCurrentSessionContext() ?? ctx;
-    const { config, sessionId, taskId, messageId } = _c;
-// ===== Validate queryText =====
+    // ===== Validate queryText =====
     if (!params.queryText || typeof params.queryText !== "string" || !params.queryText.trim()) {
       throw new Error("queryText 为必填参数，且不能为空字符串");
     }
@@ -59,7 +58,7 @@ b. 使用该工具之前需获取当前真实时间
     }
 
     // Get WebSocket manager
-    const wsManager = getXYWebSocketManager(config);
+    const wsManager = getCachedXYWebSocketManager();
 
     // Build SearchEmails command
     const command = {

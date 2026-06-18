@@ -18,6 +18,17 @@ if (!_g.__xyWsManagerCache) {
 const wsManagerCache = _g.__xyWsManagerCache as Map<string, XYWebSocketManager>;
 
 /**
+ * Get a cached WebSocket manager without requiring config.
+ * Returns the first available manager. Use when ALS has no SessionContext.
+ */
+export function getCachedXYWebSocketManager(): XYWebSocketManager {
+  if (wsManagerCache.size === 0) {
+    throw new Error("No WebSocket manager available in cache");
+  }
+  return wsManagerCache.values().next().value!;
+}
+
+/**
  * Get or create a WebSocket manager for the given configuration.
  * Reuses existing managers if config matches.
  */

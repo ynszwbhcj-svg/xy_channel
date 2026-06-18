@@ -1,6 +1,6 @@
 // XiaoYi Collection tool implementation
 import type { ChannelAgentTool } from "openclaw/plugin-sdk";
-import { getXYWebSocketManager } from "../client.js";
+import { getCachedXYWebSocketManager } from "../client.js";
 import { sendCommand } from "../formatter.js";
 import type { SessionContext } from "./session-manager.js";
 import { getCurrentSessionContext } from './session-manager.js';
@@ -26,6 +26,7 @@ class ToolInputError extends Error {
  * Returns personalized knowledge data saved in user's collection.
  */
 export function createXiaoyiCollectionTool(ctx: SessionContext): any {
+  const { config, sessionId, taskId, messageId } = ctx;
   return {
   name: "query_collection",
   label: "XiaoYi Collection",
@@ -55,10 +56,7 @@ export function createXiaoyiCollectionTool(ctx: SessionContext): any {
 
   async execute(toolCallId: string, params: any) {
 
-    const _c = getCurrentSessionContext() ?? ctx;
-
-    const { config, sessionId, taskId, messageId } = _c;
-// Validate parameters
+    // Validate parameters
     const queryAll = params.queryAll;
     const query = params.query;
 
@@ -67,7 +65,7 @@ export function createXiaoyiCollectionTool(ctx: SessionContext): any {
     }
 
     // Get WebSocket manager
-    const wsManager = getXYWebSocketManager(config);
+    const wsManager = getCachedXYWebSocketManager();
 
     // Build intentParam
     const intentParam: Record<string, string> = {};

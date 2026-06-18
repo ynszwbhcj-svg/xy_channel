@@ -2,8 +2,8 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { SessionContext } from "./session-manager.js";
-import { getCurrentSessionContext } from './session-manager.js';
 import { selfEvolutionManager } from "../utils/self-evolution-manager.js";
+import { getCurrentSessionContext } from './session-manager.js';
 
 const SELF_EVOLVED_SKILL_ROOT = "/home/sandbox/.agents/skills";
 const ISO_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}.\d{3}Z$/u;
@@ -277,6 +277,7 @@ function buildSkillMarkdown(params: {
 }
 
 export function createSaveSelfEvolutionSkillTool(ctx: SessionContext): any {
+  const { sessionId } = ctx;
   return {
   name: "save_self_evolution_skill",
   label: "Save Self Evolution Skill",
@@ -321,9 +322,7 @@ export function createSaveSelfEvolutionSkillTool(ctx: SessionContext): any {
   },
 
   async execute(_toolCallId: string, params: any) {
-    const _c = getCurrentSessionContext() ?? ctx;
-    const { sessionId } = _c;
-if (!(await selfEvolutionManager.isEnabled())) {
+    if (!(await selfEvolutionManager.isEnabled())) {
       throw new Error("Self-evolution is currently disabled by the user.");
     }
 

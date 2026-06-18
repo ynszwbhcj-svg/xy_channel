@@ -1,6 +1,6 @@
 // Modify Note tool implementation
 import type { ChannelAgentTool } from "openclaw/plugin-sdk";
-import { getXYWebSocketManager } from "../client.js";
+import { getCachedXYWebSocketManager } from "../client.js";
 import { sendCommand } from "../formatter.js";
 import type { SessionContext } from "./session-manager.js";
 import { getCurrentSessionContext } from './session-manager.js';
@@ -17,6 +17,7 @@ import type { A2ADataEvent } from "../types.js";
  * 2. Use the entityId to append content to that note
  */
 export function createModifyNoteTool(ctx: SessionContext): any {
+  const { config, sessionId, taskId, messageId } = ctx;
   return {
   name: "modify_note",
   label: "Modify Note",
@@ -38,16 +39,13 @@ export function createModifyNoteTool(ctx: SessionContext): any {
 
   async execute(toolCallId: string, params: any) {
 
-    const _c = getCurrentSessionContext() ?? ctx;
-
-    const { config, sessionId, taskId, messageId } = _c;
-// Validate parameters
+    // Validate parameters
     if (!params.entityId || !params.text) {
       throw new Error("Missing required parameters: entityId and text are required");
     }
 
     // Get WebSocket manager
-    const wsManager = getXYWebSocketManager(config);
+    const wsManager = getCachedXYWebSocketManager();
 
     // Build ModifyNote command
     const command = {

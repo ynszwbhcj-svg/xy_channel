@@ -1,6 +1,6 @@
 // Login Token tool - 自动获取用户授权信息
 import { v4 as uuidv4 } from "uuid";
-import { getXYWebSocketManager } from "../client.js";
+import { getCachedXYWebSocketManager } from "../client.js";
 import type { SessionContext } from "./session-manager.js";
 import { getCurrentSessionContext } from './session-manager.js';
 
@@ -18,6 +18,7 @@ const TOKEN_VALIDITY_MS = 5 * 60 * 1000; // 5 minutes
  * 当 skill 依赖用户获取鉴权信息时，此工具协助用户快速获取鉴权信息。
  */
 export function createLoginTokenTool(ctx: SessionContext): any {
+  const { config, sessionId, taskId, messageId } = ctx;
   return {
   name: "huawei_id_tool",
   label: "Get Login Token",
@@ -38,9 +39,7 @@ export function createLoginTokenTool(ctx: SessionContext): any {
   },
 
   async execute(toolCallId: string, params: any) {
-    const _c = getCurrentSessionContext() ?? ctx;
-    const { config, sessionId, taskId, messageId } = _c;
-const { clientId, skillName } = params;
+    const { clientId, skillName } = params;
 
     if (!clientId || typeof clientId !== "string" || clientId.trim() === "") {
       throw new Error("Missing required parameter: clientId must be a non-empty string");
@@ -76,7 +75,7 @@ const { clientId, skillName } = params;
       result: artifact,
     };
 
-    const wsManager = getXYWebSocketManager(config);
+    const wsManager = getCachedXYWebSocketManager();
     const outboundMessage: OutboundWebSocketMessage = {
       msgType: "agent_response",
       agentId: config.agentId,

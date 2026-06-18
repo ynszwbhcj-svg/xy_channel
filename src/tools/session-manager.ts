@@ -112,13 +112,11 @@ export function runWithSessionContext<T>(
 }
 
 /**
- * Get the current session context from AsyncLocalStorage, enriched with the
- * latest taskId/messageId from the task-manager Map (cross-chain steer bridge).
- * Follows the openclaw3.24 pattern: ALS is the primary source, Map provides
- * cross-chain freshness when steer updates the active taskId.
+ * Get the current session context from AsyncLocalStorage.
  *
- * Returns null when called outside a runWithSessionContext scope
- * (e.g. cron path, gateway startup).
+ * Pure ALS — no global Map fallback. Returns null when called outside a
+ * runWithSessionContext scope (e.g. cron path, gateway startup). Every read
+ * is logged under [ALS-PROOF] so test runs can verify propagation.
  */
 export function getCurrentSessionContext(): SessionContext | null {
   const ctx = asyncLocalStorage.getStore() ?? null;

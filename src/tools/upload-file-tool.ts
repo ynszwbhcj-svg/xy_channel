@@ -1,6 +1,6 @@
 // Upload File tool implementation
 import type { ChannelAgentTool } from "openclaw/plugin-sdk";
-import { getXYWebSocketManager } from "../client.js";
+import { getCachedXYWebSocketManager } from "../client.js";
 import { sendCommand } from "../formatter.js";
 import type { SessionContext } from "./session-manager.js";
 import { getCurrentSessionContext } from './session-manager.js';
@@ -21,6 +21,7 @@ import type { A2ADataEvent } from "../types.js";
  * - URLs returned are publicly accessible
  */
 export function createUploadFileTool(ctx: SessionContext): any {
+  const { config, sessionId, taskId, messageId } = ctx;
   return {
   name: "upload_file",
   label: "Upload File",
@@ -50,10 +51,7 @@ export function createUploadFileTool(ctx: SessionContext): any {
 
   async execute(toolCallId: string, params: any) {
 
-    const _c = getCurrentSessionContext() ?? ctx;
-
-    const { config, sessionId, taskId, messageId } = _c;
-// ===== 参数规范化：兼容数组和 JSON 字符串 =====
+    // ===== 参数规范化：兼容数组和 JSON 字符串 =====
     let fileInfos: Array<{ mediaUri: string; timeout?: string }> | null = null;
 
     if (!params.fileInfos) {
@@ -110,7 +108,7 @@ export function createUploadFileTool(ctx: SessionContext): any {
 
 
     // Get WebSocket manager
-    const wsManager = getXYWebSocketManager(config);
+    const wsManager = getCachedXYWebSocketManager();
 
     // Get public URLs for the files
     const fileUrls = await getFileUrls(wsManager, config, sessionId, taskId, messageId, toolCallId, fileInfos, params.udid);
