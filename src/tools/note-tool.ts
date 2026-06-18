@@ -25,9 +25,7 @@ class ToolInputError extends Error {
  * XY note tool - creates a note on user's device.
  * Requires title and content parameters.
  */
-export function createNoteTool(ctx: SessionContext): any {
-  const { config, sessionId, taskId, messageId } = ctx;
-  return {
+export const noteTool = {
   name: "create_note",
   label: "Create Note",
   description: `在用户设备上创建备忘录。需要提供备忘录标题和内容。
@@ -55,7 +53,7 @@ export function createNoteTool(ctx: SessionContext): any {
 
   async execute(toolCallId: string, params: any) {
 
-    const _c = getCurrentSessionContext() ?? ctx;
+    const _c = getCurrentSessionContext();
 
     const { config, sessionId, taskId, messageId } = _c;
 // Validate parameters — 抛 ToolInputError 而非普通 Error，
@@ -156,4 +154,3 @@ export function createNoteTool(ctx: SessionContext): any {
     });
   },
 };
-}

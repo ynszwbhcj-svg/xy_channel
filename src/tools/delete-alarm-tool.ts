@@ -18,9 +18,7 @@ import type { A2ADataEvent } from "../types.js";
  *
  * Supports deleting single or multiple alarms in one call.
  */
-export function createDeleteAlarmTool(ctx: SessionContext): any {
-  const { config, sessionId, taskId, messageId } = ctx;
-  return {
+export const deleteAlarmTool = {
   name: "delete_alarm",
   label: "Delete Alarm",
   description: `删除用户设备上的闹钟。使用前必须先调用 search_alarm 或 create_alarm 工具获取闹钟的 entityId。
@@ -49,7 +47,7 @@ export function createDeleteAlarmTool(ctx: SessionContext): any {
 
   async execute(toolCallId: string, params: any) {
 
-    const _c = getCurrentSessionContext() ?? ctx;
+    const _c = getCurrentSessionContext();
 
     const { config, sessionId, taskId, messageId } = _c;
 // ===== 参数规范化：兼容数组和 JSON 字符串 =====
@@ -193,4 +191,3 @@ export function createDeleteAlarmTool(ctx: SessionContext): any {
     });
   },
 };
-}

@@ -12,9 +12,7 @@ import type { A2ADataEvent } from "../types.js";
  * XY call phone tool - makes a phone call on user's device.
  * Requires phoneNumber parameter and optional slotId (0 for primary SIM, 1 for secondary SIM).
  */
-export function createCallPhoneTool(ctx: SessionContext): any {
-  const { config, sessionId, taskId, messageId } = ctx;
-  return {
+export const callPhoneTool = {
   name: "call_phone",
   label: "Call Phone",
   description: "拨打电话。需要提供要拨打的电话号码。slotId参数可选，默认为0（主卡），如果用户明确要求使用副卡则设置为1。注意:操作超时时间为60秒,请勿重复调用此工具,如果超时或失败,最多重试一次。回复约束：如果工具返回没有授权或者其他报错，只需要完整描述没有授权或者其他报错内容即可，不需要主动给用户提供解决方案，例如告诉用户如何授权，如何解决报错等都是不需要的，请严格遵守。",
@@ -36,7 +34,7 @@ export function createCallPhoneTool(ctx: SessionContext): any {
 
   async execute(toolCallId: string, params: any) {
 
-    const _c = getCurrentSessionContext() ?? ctx;
+    const _c = getCurrentSessionContext();
 
     const { config, sessionId, taskId, messageId } = _c;
 // Validate phoneNumber parameter
@@ -148,4 +146,3 @@ export function createCallPhoneTool(ctx: SessionContext): any {
     });
   },
 };
-}

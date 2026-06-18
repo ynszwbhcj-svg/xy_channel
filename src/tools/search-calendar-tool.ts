@@ -19,9 +19,7 @@ import type { A2ADataEvent } from "../types.js";
  * - For evening: 18:00:00 to 24:00:00
  * - For a specific time: use ±1 hour range (e.g., for 3PM, use 14:00:00 to 16:00:00)
  */
-export function createSearchCalendarTool(ctx: SessionContext): any {
-  const { config, sessionId, taskId, messageId } = ctx;
-  return {
+export const searchCalendarTool = {
   name: "search_calendar_event",
   label: "Search Calendar Event",
   description: `检索用户日历中的日程安排。根据时间范围和可选的日程标题进行检索。时间格式必须为：YYYYMMDD hhmmss（例如：20240115 143000）。
@@ -62,7 +60,7 @@ d. 如果查询结果返回-303，代表查询结果为空
 
   async execute(toolCallId: string, params: any) {
 
-    const _c = getCurrentSessionContext() ?? ctx;
+    const _c = getCurrentSessionContext();
 
     const { config, sessionId, taskId, messageId } = _c;
 // Validate parameters
@@ -217,5 +215,4 @@ d. 如果查询结果返回-303，代表查询结果为空
         });
     });
     },
-  };
-}
+};

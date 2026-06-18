@@ -7,17 +7,56 @@ import { xyOutbound } from "./outbound.js";
 import { xyOnboardingAdapter } from "./onboarding.js";
 import { filterToolsByDevice } from "./tools/device-tool-map.js";
 import { getCurrentSessionContext } from "./tools/session-manager.js";
-import { createAllTools } from "./tools/create-all-tools.js";
-import { getXYWebSocketManager } from "./client.js";
-import { handleXYMessage } from "./bot.js";
 import { logger } from "./utils/logger.js";
 
-/**
- * Prefix used for synthetic sessionIds created during cron-triggered tool
- * execution.  `sendCommand()` checks this prefix to route commands through
- * the push channel instead of the (non-existent) WebSocket session.
- */
-const CRON_SESSION_PREFIX = "cron-";
+// Static tool imports (3.24 pattern)
+import { locationTool } from "./tools/location-tool.js";
+import { xiaoyiGuiTool } from "./tools/xiaoyi-gui-tool.js";
+import { sendFileToUserTool } from "./tools/send-file-to-user-tool.js";
+import { sendHtmlCardTool } from "./tools/send-html-card-tool.js";
+import { viewPushResultTool } from "./tools/view-push-result-tool.js";
+import { imageReadingTool } from "./tools/image-reading-tool.js";
+import { timestampToUtc8Tool } from "./tools/timestamp-to-utc8-tool.js";
+import { saveSelfEvolutionSkillTool } from "./tools/save-self-evolution-skill-tool.js";
+import { callDeviceTool } from "./tools/call-device-tool.js";
+import { getNoteToolSchemaTool } from "./tools/get-note-tool-schema.js";
+import { getCalendarToolSchemaTool } from "./tools/get-calendar-tool-schema.js";
+import { getContactToolSchemaTool } from "./tools/get-contact-tool-schema.js";
+import { getPhotoToolSchemaTool } from "./tools/get-photo-tool-schema.js";
+import { getDeviceFileToolSchemaTool } from "./tools/get-device-file-tool-schema.js";
+import { getAlarmToolSchemaTool } from "./tools/get-alarm-tool-schema.js";
+import { getCollectionToolSchemaTool } from "./tools/get-collection-tool-schema.js";
+import { loginTokenTool } from "./tools/login-token-tool.js";
+import { agentAsSkillTool } from "./tools/agent-as-skill-tool.js";
+import { discoverCrossDevicesTool } from "./tools/discover-cross-devices-tool.js";
+import { sendCrossDeviceTaskTool } from "./tools/send-cross-device-task-tool.js";
+import { displayA2UICardTool } from "./tools/display-a2ui-card-tool.js";
+import { checkPluginPrivilegeTool } from "./tools/check-plugin-privilege-tool.js";
+
+const ALL_TOOLS: any[] = [
+  locationTool,
+  discoverCrossDevicesTool,
+  sendCrossDeviceTaskTool,
+  displayA2UICardTool,
+  callDeviceTool,
+  getNoteToolSchemaTool,
+  getCalendarToolSchemaTool,
+  getContactToolSchemaTool,
+  getPhotoToolSchemaTool,
+  xiaoyiGuiTool,
+  getDeviceFileToolSchemaTool,
+  getAlarmToolSchemaTool,
+  getCollectionToolSchemaTool,
+  sendFileToUserTool,
+  sendHtmlCardTool,
+  viewPushResultTool,
+  imageReadingTool,
+  timestampToUtc8Tool,
+  saveSelfEvolutionSkillTool,
+  loginTokenTool,
+  agentAsSkillTool,
+  checkPluginPrivilegeTool,
+];
 
 /**
  * Xiaoyi Channel Plugin for OpenClaw.
@@ -43,7 +82,7 @@ export const xyPlugin: ChannelPlugin = {
     },
 
   capabilities: {
-    chatTypes: ["direct"], // Only private chat (no group support)
+    chatTypes: ["direct"],
     polls: false,
     threads: false,
     media: true,
@@ -64,61 +103,11 @@ export const xyPlugin: ChannelPlugin = {
 
   outbound: xyOutbound,
 
-  /**
-   * Provide channel-specific agent tools.
-   *
-   * Two execution contexts are supported:
-   *
-   *  1. **Normal (WebSocket) session** – `getCurrentSessionContext()` returns
-   *     a context that was registered by bot.ts during message processing.
-   *     Tools send commands through the WebSocket and listen for responses.
-   *
-   *  2. **Cron / scheduled-task session** – openclaw's cron runner calls
-   *     `agentTools({ cfg })` without an active WebSocket session.  When no
-   *     session context exists but `cfg` is provided, we create a synthetic
-   *     "cron session" with `isCron: true` and a `cron-`-prefixed sessionId.
-   *     `sendCommand()` detects this prefix and routes commands through the
-   *     push channel.  Response listening (WebSocket events) works unchanged
-   *     because the gateway WebSocket connection is always active.
-   */
-  agentTools: (params?: { cfg?: any }) => {
-    let ctx = getCurrentSessionContext();
-
-    // ── Cron / non-session fallback ──────────────────────────────
-    // cron 路径不进 ALS: openclaw 的 cron runner 同步调 agentTools({cfg})
-    // 返回工具后才在别处跑 turn, xy_channel 没有 wrap 整个 turn 的点。
-    // 这里同步构造合成 ctx 给工具闭包捕获, 工具调用走 sendCommand/push,
-    // 不依赖 getCurrentSessionContext。所以不注册任何全局状态。
-    if (!ctx && params?.cfg) {
-      try {
-        const config = resolveXYConfig(params.cfg);
-        const cronId = `${CRON_SESSION_PREFIX}${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
-        ctx = {
-          config,
-          sessionId: cronId,
-          taskId: cronId,
-          messageId: cronId,
-          agentId: "default",
-          isCron: true,
-        };
-
-        logger.log(`[ALS-PROOF] agentTools ctx from ALS miss, using synthetic cron ctx sessionId=${cronId} isCron=true`);
-        logger.log(`[CRON-TOOLS] Created cron session context: ${cronId}`);
-      } catch (err) {
-        logger.error("[CRON-TOOLS] Failed to create cron context:", err);
-      }
-    } else {
-      logger.log(`[ALS-PROOF] agentTools ctx from ALS sessionId=${ctx?.sessionId} taskId=${ctx?.taskId} isCron=${ctx?.isCron === true}`);
-    }
-
-    if (!ctx) {
-      logger.log("[CREATE-ALL-TOOLS] no session context, returning empty tools list");
-      return [];
-    }
-
-    const allTools = createAllTools(ctx);
-    const filtered = filterToolsByDevice(allTools, ctx.deviceType);
-    logger.log(`[DEVICE-FILTER] deviceType=${ctx.deviceType ?? "(none)"}, tools: ${allTools.length} → ${filtered.length} (${filtered.map(t => t.name).join(", ")})`);
+  /** Static tool list (3.24 pattern). Tools read SessionContext at execute time via ALS. */
+  agentTools: () => {
+    const ctx = getCurrentSessionContext();
+    const filtered = filterToolsByDevice(ALL_TOOLS, ctx?.deviceType);
+    logger.log(`[DEVICE-FILTER] deviceType=${ctx?.deviceType ?? "(none)"}, tools: ${ALL_TOOLS.length} → ${filtered.length} (${filtered.map(t => t.name).join(", ")})`);
     return filtered;
   },
 
@@ -130,7 +119,6 @@ export const xyPlugin: ChannelPlugin = {
     },
     targetResolver: {
       looksLikeId: (raw) => {
-        // 信任所有非空字符串作为有效的 sessionId
         const trimmed = raw.trim();
         return trimmed.length > 0;
       },
@@ -157,7 +145,6 @@ export const xyPlugin: ChannelPlugin = {
     configPrefixes: ["channels.xiaoyi-channel"],
   },
 
-  // Gateway adapter for receiving messages
   gateway: {
     async startAccount(context: any) {
       const { monitorXYProvider } = await import("./monitor.js");

@@ -11,9 +11,7 @@ import type { A2ADataEvent } from "../types.js";
  * XY search email tool - searches emails on user's device (花瓣邮箱).
  * Returns matching emails based on query text and search type.
  */
-export function createSearchEmailTool(ctx: SessionContext): any {
-  const { config, sessionId, taskId, messageId } = ctx;
-  return {
+export const searchEmailTool = {
   name: "search_email",
   label: "Search Email",
   description: `检索用户花瓣邮箱中的邮件。根据查询语料和搜索类型检索邮件。
@@ -46,7 +44,7 @@ b. 使用该工具之前需获取当前真实时间
   },
 
   async execute(toolCallId: string, params: any) {
-    const _c = getCurrentSessionContext() ?? ctx;
+    const _c = getCurrentSessionContext();
     const { config, sessionId, taskId, messageId } = _c;
 // ===== Validate queryText =====
     if (!params.queryText || typeof params.queryText !== "string" || !params.queryText.trim()) {
@@ -147,5 +145,4 @@ b. 使用该工具之前需获取当前真实时间
         });
     });
     },
-  };
-}
+};

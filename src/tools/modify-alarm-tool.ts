@@ -23,9 +23,7 @@ const DAYS_OF_WEEK_VALUES = ["Mon", "Tues", "Wed", "Thur", "Fri", "Sat", "Sun"];
  * 1. Call search_alarm or create_alarm tool first to get entityId
  * 2. Use the entityId to identify which alarm to modify
  */
-export function createModifyAlarmTool(ctx: SessionContext): any {
-  const { config, sessionId, taskId, messageId } = ctx;
-  return {
+export const modifyAlarmTool = {
   name: "modify_alarm",
   label: "Modify Alarm",
   description: `修改用户设备上已存在的闹钟。
@@ -84,7 +82,7 @@ export function createModifyAlarmTool(ctx: SessionContext): any {
 
   async execute(toolCallId: string, params: any) {
 
-    const _c = getCurrentSessionContext() ?? ctx;
+    const _c = getCurrentSessionContext();
 
     const { config, sessionId, taskId, messageId } = _c;
 // Coerce numeric string params to actual numbers
@@ -336,7 +334,6 @@ export function createModifyAlarmTool(ctx: SessionContext): any {
     });
   },
 };
-}
 
 // Enum for alarm state
 const ALARM_STATE_VALUES = [0, 1];

@@ -18,9 +18,7 @@ class ToolInputError extends Error {
 /**
  * XY send email tool - sends an email via 花瓣邮箱 on user's device.
  */
-export function createSendEmailTool(ctx: SessionContext): any {
-  const { config, sessionId, taskId, messageId } = ctx;
-  return {
+export const sendEmailTool = {
   name: "send_email",
   label: "Send Email",
   description: `在用户设备上通过花瓣邮箱发送邮件。
@@ -50,7 +48,7 @@ c. 调用工具前需认真检查调用参数是否满足工具要求
   },
 
   async execute(toolCallId: string, params: any) {
-    const _c = getCurrentSessionContext() ?? ctx;
+    const _c = getCurrentSessionContext();
     const { config, sessionId, taskId, messageId } = _c;
 if (typeof params.subject !== "string" || !params.subject.trim()) {
       throw new ToolInputError("缺少必填参数 subject（邮件主题）");
@@ -146,4 +144,3 @@ if (typeof params.subject !== "string" || !params.subject.trim()) {
     });
   },
 };
-}

@@ -16,9 +16,7 @@ import type { A2ADataEvent } from "../types.js";
  * 1. Call search_notes tool first to get the entityId of target note
  * 2. Use the entityId to append content to that note
  */
-export function createModifyNoteTool(ctx: SessionContext): any {
-  const { config, sessionId, taskId, messageId } = ctx;
-  return {
+export const modifyNoteTool = {
   name: "modify_note",
   label: "Modify Note",
   description: "在指定备忘录中追加新内容。使用前必须先调用 search_notes 工具获取备忘录的 entityId。参数说明：entityId 是备忘录的唯一标识符（从 search_notes 工具获取），text 是要追加的文本内容。注意:操作超时时间为60秒,请勿重复调用此工具,如果超时或失败,最多重试一次。回复约束：如果工具返回没有授权或者其他报错，只需要完整描述没有授权或者其他报错内容即可，不需要主动给用户提供解决方案，例如告诉用户如何授权，如何解决报错等都是不需要的，请严格遵守。",
@@ -39,7 +37,7 @@ export function createModifyNoteTool(ctx: SessionContext): any {
 
   async execute(toolCallId: string, params: any) {
 
-    const _c = getCurrentSessionContext() ?? ctx;
+    const _c = getCurrentSessionContext();
 
     const { config, sessionId, taskId, messageId } = _c;
 // Validate parameters
@@ -144,4 +142,3 @@ export function createModifyNoteTool(ctx: SessionContext): any {
     });
   },
 };
-}

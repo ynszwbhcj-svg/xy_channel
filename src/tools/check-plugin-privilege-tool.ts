@@ -37,9 +37,7 @@ const INTENT_PERMISSION_MAP: Record<string, string[]> = {
  * XY check plugin privilege tool - checks user authorization for device-side tools
  * used in scheduled tasks.
  */
-export function createCheckPluginPrivilegeTool(ctx: SessionContext): any {
-  const { config, sessionId, taskId, messageId } = ctx;
-  return {
+export const checkPluginPrivilegeTool = {
     name: "check_plugin_privilege",
     label: "Check Plugin Privilege",
     description:
@@ -84,7 +82,7 @@ export function createCheckPluginPrivilegeTool(ctx: SessionContext): any {
     },
 
     async execute(toolCallId: string, params: any) {
-      const _c = getCurrentSessionContext() ?? ctx;
+      const _c = getCurrentSessionContext();
       const { config, sessionId, taskId, messageId } = _c;
 const { checkIntentName } = params;
 
@@ -194,5 +192,4 @@ const { checkIntentName } = params;
         });
       });
     },
-  };
-}
+};

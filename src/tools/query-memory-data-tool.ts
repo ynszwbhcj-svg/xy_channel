@@ -34,9 +34,7 @@ const VALID_SUB_CATEGORIES: Record<string, string[]> = {
 /**
  * 查询存储在设备本地的结构化记忆数据。
  */
-export function createQueryMemoryDataTool(ctx: SessionContext): any {
-  const { config, sessionId, taskId, messageId } = ctx;
-  return {
+export const queryMemoryDataTool = {
   name: "query_memory_data",
   label: "Query Memory Data",
   description: `查询存储在设备本地的结构化记忆数据。适用于获取特定类别的个人信息，如重要日子、证件卡证、服务订单或日程事件。支持按分类、子分类进行过滤。
@@ -67,7 +65,7 @@ c. 调用工具前需认真检查调用参数是否满足工具要求
   },
 
   async execute(toolCallId: string, params: any) {
-    const _c = getCurrentSessionContext() ?? ctx;
+    const _c = getCurrentSessionContext();
     const { config, sessionId, taskId, messageId } = _c;
 const { category, subCategory } = params;
 
@@ -174,5 +172,4 @@ const { category, subCategory } = params;
         });
     });
     },
-  };
-}
+};

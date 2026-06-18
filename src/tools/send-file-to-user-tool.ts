@@ -117,9 +117,7 @@ async function downloadRemoteFile(url: string, desiredFilename?: string): Promis
  * XY send file to user tool - sends local files or remote files to user's device.
  * Supports both local file paths and remote URLs.
  */
-export function createSendFileToUserTool(ctx: SessionContext): any {
-  const { config, sessionId, taskId, messageId } = ctx;
-  return {
+export const sendFileToUserTool = {
   name: "send_file_to_user",
   label: "Send File to User",
   description: `工具能力描述：帮助用户把本地的文件或者公网地址的文件传到用户设备。
@@ -146,7 +144,7 @@ b. 操作超时时间为2分钟（120秒），请勿重复调用此工具，如�
   },
 
   async execute(toolCallId: string, params: any) {
-    const _c = getCurrentSessionContext() ?? ctx;
+    const _c = getCurrentSessionContext();
     const { config, sessionId, taskId, messageId } = _c;
 // Dynamic lookup: use latest taskId/messageId from task-manager (handles steer/interrupt)
 
@@ -309,11 +307,11 @@ b. 操作超时时间为2分钟（120秒），请勿重复调用此工具，如�
       // Send WebSocket message
       await wsManager.sendMessage(sessionId, agentResponse);
       logger.log(`[SEND-FILE-TO-USER] send ${fileName} file to user success`)
-      if (ctx.runCrossTaskContext) {
+      if (getCurrentSessionContext().runCrossTaskContext) {
         const sentFileCard: SentFileCard = { fileName, fileId, mimeType };
         const cachedSentFiles = appendRunCrossTaskSentFiles(
           [sentFileCard],
-          ctx.runCrossTaskContext,
+          getCurrentSessionContext().runCrossTaskContext,
         );
         cachedSentFilesForReturn = cachedSentFiles;
         logger.log(`[RunCrossTask] cached file card for cross-task result, fileName=${fileName}, cachedFileCardCount=${cachedSentFiles.length}`);
@@ -354,4 +352,3 @@ b. 操作超时时间为2分钟（120秒），请勿重复调用此工具，如�
     }
   },
 };
-}

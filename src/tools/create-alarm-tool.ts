@@ -21,9 +21,7 @@ const DAYS_OF_WEEK_VALUES = ["Mon", "Tues", "Wed", "Thur", "Fri", "Sat", "Sun"];
  *
  * Time format: YYYYMMDD hhmmss (e.g., 20240315 143000)
  */
-export function makeAlarmTool(ctx: SessionContext): any {
-  const { config, sessionId, taskId, messageId } = ctx;
-  return {
+export const createAlarmTool = {
   name: "create_alarm",
   label: "Create Alarm",
   description: `在用户设备上创建闹钟。
@@ -71,7 +69,7 @@ b. 使用该工具之前需获取当前真实时间
 
   async execute(toolCallId: string, params: any) {
 
-    const _c = getCurrentSessionContext() ?? ctx;
+    const _c = getCurrentSessionContext();
 
     const { config, sessionId, taskId, messageId } = _c;
 // ===== Validate required parameter: alarmTime =====
@@ -305,7 +303,6 @@ b. 使用该工具之前需获取当前真实时间
     });
   },
 };
-}
 
 /**
  * Parse alarmTime string (YYYYMMDD hhmmss) to timestamp in milliseconds

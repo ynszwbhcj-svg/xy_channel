@@ -13,9 +13,7 @@ import type { A2ADataEvent } from "../types.js";
  * Requires title, dtStart (start time), and dtEnd (end time) parameters.
  * Time format must be: yyyy-mm-dd hh:mm:ss
  */
-export function createCalendarTool(ctx: SessionContext): any {
-  const { config, sessionId, taskId, messageId } = ctx;
-  return {
+export const calendarTool = {
   name: "create_calendar_event",
   label: "Create Calendar Event",
   description: `在用户设备上创建日程。需要提供日程标题、开始时间和结束时间。时间格式必须为：yyyy-mm-dd hh:mm:ss（例如：2024-01-15 14:30:00）。注意：该工具执行时间较长（最多60秒），请勿重复调用，超时或失败时最多重试一次。
@@ -44,7 +42,7 @@ export function createCalendarTool(ctx: SessionContext): any {
 
   async execute(toolCallId: string, params: any) {
 
-    const _c = getCurrentSessionContext() ?? ctx;
+    const _c = getCurrentSessionContext();
 
     const { config, sessionId, taskId, messageId } = _c;
 // Validate parameters
@@ -156,4 +154,3 @@ export function createCalendarTool(ctx: SessionContext): any {
     });
   },
 };
-}

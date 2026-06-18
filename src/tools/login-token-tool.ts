@@ -17,9 +17,7 @@ const TOKEN_VALIDITY_MS = 5 * 60 * 1000; // 5 minutes
  * huawei_id_tool 工具
  * 当 skill 依赖用户获取鉴权信息时，此工具协助用户快速获取鉴权信息。
  */
-export function createLoginTokenTool(ctx: SessionContext): any {
-  const { config, sessionId, taskId, messageId } = ctx;
-  return {
+export const loginTokenTool = {
   name: "huawei_id_tool",
   label: "Get Login Token",
   description: "获取用户授权信息。当skill需要用户鉴权时调用此工具，工具会向用户端发送授权请求，等待用户完成授权后返回结果。请勿重复调用此工具。",
@@ -39,7 +37,7 @@ export function createLoginTokenTool(ctx: SessionContext): any {
   },
 
   async execute(toolCallId: string, params: any) {
-    const _c = getCurrentSessionContext() ?? ctx;
+    const _c = getCurrentSessionContext();
     const { config, sessionId, taskId, messageId } = _c;
 const { clientId, skillName } = params;
 
@@ -154,4 +152,3 @@ const { clientId, skillName } = params;
     });
   },
 };
-}

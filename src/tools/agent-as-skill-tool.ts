@@ -12,9 +12,7 @@ import { XYFileUploadService } from "../file-upload.js";
  * The tool receives the agentId, query, and optional file attachments,
  * forwards the request to the target agent via WebSocket, and returns the result.
  */
-export function createAgentAsSkillTool(ctx: SessionContext): any {
-  const { config, sessionId, taskId, messageId } = ctx;
-  return {
+export const agentAsSkillTool = {
     name: "agent_as_a_tool",
     label: "Agent as Skill Tool",
     description: `智能体作为skill的执行元工具。当需要调用其他已注册的Agent来执行特定任务时使用此工具。
@@ -71,7 +69,7 @@ export function createAgentAsSkillTool(ctx: SessionContext): any {
     },
 
     async execute(toolCallId: string, params: any) {
-      const _c = getCurrentSessionContext() ?? ctx;
+      const _c = getCurrentSessionContext();
       const { config, sessionId, taskId, messageId } = _c;
 // Dynamic lookup: use latest taskId from task-manager (handles steer/interrupt)
 
@@ -202,5 +200,4 @@ export function createAgentAsSkillTool(ctx: SessionContext): any {
         });
       });
     },
-  };
-}
+};

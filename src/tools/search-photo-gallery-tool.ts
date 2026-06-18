@@ -15,9 +15,7 @@ import type { A2ADataEvent } from "../types.js";
  * IMPORTANT: The returned mediaUris are LOCAL URIs that cannot be downloaded directly.
  * To get publicly accessible URLs, use the upload_photo tool with these URIs.
  */
-export function createSearchPhotoGalleryTool(ctx: SessionContext): any {
-  const { config, sessionId, taskId, messageId } = ctx;
-  return {
+export const searchPhotoGalleryTool = {
   name: "search_photo_gallery",
   label: "Search Photo Gallery",
   description: `插件功能描述：搜索用户设备图库中的照片
@@ -75,7 +73,7 @@ export function createSearchPhotoGalleryTool(ctx: SessionContext): any {
 
   async execute(toolCallId: string, params: any) {
 
-    const _c = getCurrentSessionContext() ?? ctx;
+    const _c = getCurrentSessionContext();
 
     const { config, sessionId, taskId, messageId } = _c;
 // Validate parameters
@@ -100,7 +98,6 @@ export function createSearchPhotoGalleryTool(ctx: SessionContext): any {
     };
   },
 };
-}
 
 /**
  * Search for photos using query description

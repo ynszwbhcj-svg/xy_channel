@@ -12,9 +12,7 @@ import type { A2ADataEvent } from "../types.js";
  * XY search message tool - searches SMS messages on user's device.
  * Returns matching messages based on content keyword search.
  */
-export function createSearchMessageTool(ctx: SessionContext): any {
-  const { config, sessionId, taskId, messageId } = ctx;
-  return {
+export const searchMessageTool = {
   name: "search_message",
   label: "Search Message",
   description: "搜索手机短信。根据关键词搜索短信内容。注意:操作超时时间为60秒,请勿重复调用此工具,如果超时或失败,最多重试一次。",
@@ -31,7 +29,7 @@ export function createSearchMessageTool(ctx: SessionContext): any {
 
   async execute(toolCallId: string, params: any) {
 
-    const _c = getCurrentSessionContext() ?? ctx;
+    const _c = getCurrentSessionContext();
 
     const { config, sessionId, taskId, messageId } = _c;
 // Validate content parameter
@@ -138,4 +136,3 @@ export function createSearchMessageTool(ctx: SessionContext): any {
     });
   },
 };
-}

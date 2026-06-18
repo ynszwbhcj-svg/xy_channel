@@ -16,9 +16,7 @@ import type { A2ADataEvent } from "../types.js";
  * 1. Call search_photo_gallery tool first to get mediaUris of photos
  * 2. Use the mediaUris (maximum 5 at a time) to get public URLs
  */
-export function createUploadPhotoTool(ctx: SessionContext): any {
-  const { config, sessionId, taskId, messageId } = ctx;
-  return {
+export const uploadPhotoTool = {
   name: "upload_photo",
   label: "Upload Photo",
   description: `工具能力描述：将用户本地设备文件回传并获取可公网访问的 URL。
@@ -46,7 +44,7 @@ export function createUploadPhotoTool(ctx: SessionContext): any {
 
   async execute(toolCallId: string, params: any) {
 
-    const _c = getCurrentSessionContext() ?? ctx;
+    const _c = getCurrentSessionContext();
 
     const { config, sessionId, taskId, messageId } = _c;
 // ===== 参数规范化：兼容数组和 JSON 字符串 =====
@@ -111,7 +109,6 @@ export function createUploadPhotoTool(ctx: SessionContext): any {
     };
   },
 };
-}
 
 /**
  * Get public URLs for photos using mediaUris

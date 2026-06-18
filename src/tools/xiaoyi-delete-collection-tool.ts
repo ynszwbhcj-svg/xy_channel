@@ -24,9 +24,7 @@ class ToolInputError extends Error {
 /**
  * XY delete collection tool - deletes data from user's XiaoYi collection.
  */
-export function createXiaoyiDeleteCollectionTool(ctx: SessionContext): any {
-  const { config, sessionId, taskId, messageId } = ctx;
-  return {
+export const xiaoyiDeleteCollectionTool = {
   name: "delete_collection",
   label: "Delete XiaoYi Collection",
   description: `从小艺收藏（也叫小艺帮记）中删除之前已保存的公共知识数据。任何用户希望删除已保存到个人知识库的数据都可以调用本技能。如果用户想更新之前的收藏数据，需要先query获取itemId然后再delete，最后执行Add，按照这个步骤完成收藏数据更新。
@@ -51,7 +49,7 @@ export function createXiaoyiDeleteCollectionTool(ctx: SessionContext): any {
 
   async execute(toolCallId: string, params: any) {
 
-    const _c = getCurrentSessionContext() ?? ctx;
+    const _c = getCurrentSessionContext();
 
     const { config, sessionId, taskId, messageId } = _c;
 // ===== 参数规范化：兼容数组和 JSON 字符串 =====
@@ -182,4 +180,3 @@ export function createXiaoyiDeleteCollectionTool(ctx: SessionContext): any {
     });
   },
 };
-}

@@ -12,9 +12,7 @@ import { logger } from "../utils/logger.js";
  * Prefer this tool over send_file_to_user when sending HTML files to users.
  * Only use send_file_to_user for HTML files when the user explicitly requests the raw file.
  */
-export function createSendHtmlCardTool(ctx: SessionContext): any {
-  const { config, sessionId, taskId, messageId } = ctx;
-  return {
+export const sendHtmlCardTool = {
     name: "send_html_card",
     label: "Send HTML Card",
     description: `工具能力描述：支持以H5卡片的形式展示HTML页面内容，用户可以直接在卡片中查看。
@@ -44,7 +42,7 @@ c. 仅当用户或者skill中显示说明使用send_html_card工具时才调用�
     },
 
     async execute(toolCallId: string, params: any) {
-      const _c = getCurrentSessionContext() ?? ctx;
+      const _c = getCurrentSessionContext();
       const { config, sessionId, taskId, messageId } = _c;
 // Validate at least one parameter is provided
       if (!params.htmlUrl && !params.htmlLocal) {
@@ -130,5 +128,4 @@ c. 仅当用户或者skill中显示说明使用send_html_card工具时才调用�
         throw error;
       }
     },
-  };
-}
+};

@@ -26,9 +26,7 @@ class ToolInputError extends Error {
  * XY save file to phone tool - saves files to user's device file manager.
  * Supports local file paths (auto-uploaded to get public URL) and public URLs.
  */
-export function createSaveFileToPhoneTool(ctx: SessionContext): any {
-  const { config, sessionId, taskId, messageId } = ctx;
-  return {
+export const saveFileToPhoneTool = {
   name: "save_file_to_file_manager",
   label: "Save File to Phone",
   description: `将文件保存到用户设备的文件管理器中，通常用户表述为'帮我保存到文管','保存到文件管理'。
@@ -61,7 +59,7 @@ export function createSaveFileToPhoneTool(ctx: SessionContext): any {
 
   async execute(toolCallId: string, params: any) {
 
-    const _c = getCurrentSessionContext() ?? ctx;
+    const _c = getCurrentSessionContext();
 
     const { config, sessionId, taskId, messageId } = _c;
 // Validate parameters
@@ -195,5 +193,4 @@ export function createSaveFileToPhoneTool(ctx: SessionContext): any {
         });
     });
     },
-  };
-}
+};

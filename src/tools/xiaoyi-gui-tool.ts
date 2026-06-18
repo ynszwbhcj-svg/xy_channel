@@ -11,9 +11,7 @@ import { logger } from "../utils/logger.js";
  * Simulates user interactions on phone screen (click, swipe, input, navigation, etc.)
  * to complete tasks that cannot be done through internet APIs.
  */
-export function createXiaoyiGuiTool(ctx: SessionContext): any {
-  const { config, sessionId, taskId, messageId } = ctx;
-  return {
+export const xiaoyiGuiTool = {
   name: "xiaoyi_gui_agent",
   label: "XiaoYi GUI Agent",
   description: `通过模拟人在手机屏幕上的交互行为（点击、滑动、输入、页面导航等），自动完成手机APP中的各类任务。
@@ -45,7 +43,7 @@ export function createXiaoyiGuiTool(ctx: SessionContext): any {
   },
 
   async execute(toolCallId: string, params: any) {
-    const _c = getCurrentSessionContext() ?? ctx;
+    const _c = getCurrentSessionContext();
     const { config, sessionId, taskId, messageId } = _c;
 // Dynamic lookup: use latest taskId from task-manager (handles steer/interrupt)
 
@@ -141,4 +139,3 @@ export function createXiaoyiGuiTool(ctx: SessionContext): any {
     });
   },
 };
-}

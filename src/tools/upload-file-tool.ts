@@ -20,9 +20,7 @@ import type { A2ADataEvent } from "../types.js";
  * - After getting public URLs, if further processing is needed, download the file first
  * - URLs returned are publicly accessible
  */
-export function createUploadFileTool(ctx: SessionContext): any {
-  const { config, sessionId, taskId, messageId } = ctx;
-  return {
+export const uploadFileTool = {
   name: "upload_file",
   label: "Upload File",
   description: `工具能力描述：将用户设备（可以使手机或者鸿蒙PC等）本地文件上传并获取可公网访问的 URL。
@@ -51,7 +49,7 @@ export function createUploadFileTool(ctx: SessionContext): any {
 
   async execute(toolCallId: string, params: any) {
 
-    const _c = getCurrentSessionContext() ?? ctx;
+    const _c = getCurrentSessionContext();
 
     const { config, sessionId, taskId, messageId } = _c;
 // ===== 参数规范化：兼容数组和 JSON 字符串 =====
@@ -130,7 +128,6 @@ export function createUploadFileTool(ctx: SessionContext): any {
     };
   },
 };
-}
 
 /**
  * Get public URLs for files using fileInfos

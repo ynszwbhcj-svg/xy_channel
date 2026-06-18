@@ -1,29 +1,29 @@
-import { createNoteTool } from "./note-tool.js";
-import { createSearchNoteTool } from "./search-note-tool.js";
-import { createModifyNoteTool } from "./modify-note-tool.js";
-import { makeAlarmTool } from "./create-alarm-tool.js";
-import { createSearchAlarmTool } from "./search-alarm-tool.js";
-import { createModifyAlarmTool } from "./modify-alarm-tool.js";
-import { createDeleteAlarmTool } from "./delete-alarm-tool.js";
-import { createSearchContactTool } from "./search-contact-tool.js";
-import { createCallPhoneTool } from "./call-phone-tool.js";
-import { createSearchMessageTool } from "./search-message-tool.js";
-import { createSendMessageTool } from "./send-message-tool.js";
-import { createXiaoyiAddCollectionTool } from "./xiaoyi-add-collection-tool.js";
-import { createXiaoyiCollectionTool } from "./xiaoyi-collection-tool.js";
-import { createXiaoyiDeleteCollectionTool } from "./xiaoyi-delete-collection-tool.js";
-import { createCalendarTool } from "./calendar-tool.js";
-import { createSearchCalendarTool } from "./search-calendar-tool.js";
-import { createSearchPhotoGalleryTool } from "./search-photo-gallery-tool.js";
-import { createUploadPhotoTool } from "./upload-photo-tool.js";
-import { createSaveMediaToGalleryTool } from "./save-media-to-gallery-tool.js";
-import { createSearchFileTool } from "./search-file-tool.js";
-import { createUploadFileTool } from "./upload-file-tool.js";
-import { createSaveFileToPhoneTool } from "./save-file-to-phone-tool.js";
-import { createSendEmailTool } from "./send-email-tool.js";
-import { createSearchEmailTool } from "./search-email-tool.js";
+import { noteTool } from "./note-tool.js";
+import { searchNoteTool } from "./search-note-tool.js";
+import { modifyNoteTool } from "./modify-note-tool.js";
+import { createAlarmTool } from "./create-alarm-tool.js";
+import { searchAlarmTool } from "./search-alarm-tool.js";
+import { modifyAlarmTool } from "./modify-alarm-tool.js";
+import { deleteAlarmTool } from "./delete-alarm-tool.js";
+import { searchContactTool } from "./search-contact-tool.js";
+import { callPhoneTool } from "./call-phone-tool.js";
+import { searchMessageTool } from "./search-message-tool.js";
+import { sendMessageTool } from "./send-message-tool.js";
+import { xiaoyiAddCollectionTool } from "./xiaoyi-add-collection-tool.js";
+import { xiaoyiCollectionTool } from "./xiaoyi-collection-tool.js";
+import { xiaoyiDeleteCollectionTool } from "./xiaoyi-delete-collection-tool.js";
+import { calendarTool } from "./calendar-tool.js";
+import { searchCalendarTool } from "./search-calendar-tool.js";
+import { searchPhotoGalleryTool } from "./search-photo-gallery-tool.js";
+import { uploadPhotoTool } from "./upload-photo-tool.js";
+import { saveMediaToGalleryTool } from "./save-media-to-gallery-tool.js";
+import { searchFileTool } from "./search-file-tool.js";
+import { uploadFileTool } from "./upload-file-tool.js";
+import { saveFileToPhoneTool } from "./save-file-to-phone-tool.js";
+import { sendEmailTool } from "./send-email-tool.js";
+import { searchEmailTool } from "./search-email-tool.js";
+import { getCachedXYWebSocketManager } from "../client.js";
 import { sendStatusUpdate } from "../formatter.js";
-import type { SessionContext } from "./session-manager.js";
 import { getCurrentSessionContext } from './session-manager.js';
 
 
@@ -31,39 +31,11 @@ import { getCurrentSessionContext } from './session-manager.js';
  * call_device_tool - 通用端工具调度器。
  * LLM 必须先通过 get_xxx_tool_schema 获取具体工具 schema，再用本工具执行。
  */
-export function createCallDeviceTool(ctx: SessionContext): any {
-  const { config, sessionId, taskId, messageId } = ctx;
-
-  const noteTool = createNoteTool(ctx);
-  const modifyNoteTool = createModifyNoteTool(ctx);
-  const createAlarmTool = makeAlarmTool(ctx);
-  const modifyAlarmTool = createModifyAlarmTool(ctx);
-  const deleteAlarmTool = createDeleteAlarmTool(ctx);
-  const callPhoneTool = createCallPhoneTool(ctx);
-  const calendarTool = createCalendarTool(ctx);
-  const searchNoteTool = createSearchNoteTool(ctx);
-  const searchMessageTool = createSearchMessageTool(ctx);
-  const sendMessageTool = createSendMessageTool(ctx);
-  const xiaoyiAddCollectionTool = createXiaoyiAddCollectionTool(ctx);
-  const xiaoyiCollectionTool = createXiaoyiCollectionTool(ctx);
-  const xiaoyiDeleteCollectionTool = createXiaoyiDeleteCollectionTool(ctx);
-  const searchPhotoGalleryTool = createSearchPhotoGalleryTool(ctx);
-  const uploadPhotoTool = createUploadPhotoTool(ctx);
-  const uploadFileTool = createUploadFileTool(ctx);
-  const sendEmailTool = createSendEmailTool(ctx);
-  const searchAlarmTool = createSearchAlarmTool(ctx);
-  const searchContactTool = createSearchContactTool(ctx);
-  const searchCalendarTool = createSearchCalendarTool(ctx);
-  const saveMediaToGalleryTool = createSaveMediaToGalleryTool(ctx);
-  const searchFileTool = createSearchFileTool(ctx);
-  const saveFileToPhoneTool = createSaveFileToPhoneTool(ctx);
-  const searchEmailTool = createSearchEmailTool(ctx);
-
-  /**
-   * 端工具注册表 —— 按 name 索引所有可通过 call_device_tool 调度的工具。
-   */
-  const deviceToolRegistry = new Map([
-    [noteTool.name, noteTool],
+/**
+ * 端工具注册表 —— 按 name 索引所有可通过 call_device_tool 调度的工具。
+ */
+const deviceToolRegistry = new Map<string, any>([
+[noteTool.name, noteTool],
     [searchNoteTool.name, searchNoteTool],
     [modifyNoteTool.name, modifyNoteTool],
     [createAlarmTool.name, createAlarmTool],
@@ -83,13 +55,13 @@ export function createCallDeviceTool(ctx: SessionContext): any {
     [uploadPhotoTool.name, uploadPhotoTool],
     [saveMediaToGalleryTool.name, saveMediaToGalleryTool],
     [searchFileTool.name, searchFileTool],
-    [uploadFileTool.name, uploadFileTool],
+[uploadFileTool.name, uploadFileTool],
     [saveFileToPhoneTool.name, saveFileToPhoneTool],
     [sendEmailTool.name, sendEmailTool],
-    [searchEmailTool.name, searchEmailTool],
-  ]);
+[searchEmailTool.name, searchEmailTool],
+]);
 
-  return {
+export const callDeviceTool = {
   name: "call_device_tool",
   label: "Call Device Tool",
   description: "用户设备侧工具调用。必须先调用get_xxx_tool_schema获取了具体的工具schema，才能使用本工具执行对应设备侧工具。",
@@ -108,9 +80,14 @@ export function createCallDeviceTool(ctx: SessionContext): any {
     required: ["toolName", "arguments"],
   },
   async execute(toolCallId: string, params: any) {
-    const _c = getCurrentSessionContext() ?? ctx;
-    const { config, sessionId, taskId, messageId } = _c;
-const { toolName, arguments: toolArgs } = params;
+    const ctx = getCurrentSessionContext();
+    const wsManager = getCachedXYWebSocketManager();
+    const config = wsManager.config;
+    const sessionId = ctx?.sessionId ?? "";
+    const taskId = ctx?.taskId ?? "";
+    const messageId = ctx?.messageId ?? "";
+
+    const { toolName, arguments: toolArgs } = params;
 
     // 向用户端发送具体工具名的状态更新
     try {
@@ -157,4 +134,3 @@ const { toolName, arguments: toolArgs } = params;
     }
   },
 };
-}

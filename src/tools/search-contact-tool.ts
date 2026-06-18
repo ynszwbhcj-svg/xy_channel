@@ -12,9 +12,7 @@ import type { A2ADataEvent } from "../types.js";
  * XY search contact tool - searches contacts on user's device.
  * Returns matching contact information based on name.
  */
-export function createSearchContactTool(ctx: SessionContext): any {
-  const { config, sessionId, taskId, messageId } = ctx;
-  return {
+export const searchContactTool = {
   name: "search_contact",
   label: "Search Contact",
   description: "搜索用户设备上的联系人信息。根据姓名在通讯录中检索联系人详细信息（包括姓名、电话号码、邮箱、组织、职位等）。注意:操作超时时间为60秒,请勿重复调用此工具,如果超时或失败,最多重试一次。",
@@ -31,7 +29,7 @@ export function createSearchContactTool(ctx: SessionContext): any {
 
   async execute(toolCallId: string, params: any) {
 
-    const _c = getCurrentSessionContext() ?? ctx;
+    const _c = getCurrentSessionContext();
 
     const { config, sessionId, taskId, messageId } = _c;
 // Validate parameters
@@ -132,5 +130,4 @@ export function createSearchContactTool(ctx: SessionContext): any {
         });
     });
     },
-  };
-}
+};

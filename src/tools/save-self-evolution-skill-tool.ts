@@ -276,9 +276,7 @@ function buildSkillMarkdown(params: {
   return lines.join("\n");
 }
 
-export function createSaveSelfEvolutionSkillTool(ctx: SessionContext): any {
-  const { sessionId } = ctx;
-  return {
+export const saveSelfEvolutionSkillTool = {
   name: "save_self_evolution_skill",
   label: "Save Self Evolution Skill",
   description:
@@ -322,7 +320,7 @@ export function createSaveSelfEvolutionSkillTool(ctx: SessionContext): any {
   },
 
   async execute(_toolCallId: string, params: any) {
-    const _c = getCurrentSessionContext() ?? ctx;
+    const _c = getCurrentSessionContext();
     const { config, sessionId, taskId, messageId } = _c;
 if (!(await selfEvolutionManager.isEnabled())) {
       throw new Error("Self-evolution is currently disabled by the user.");
@@ -506,5 +504,4 @@ if (!(await selfEvolutionManager.isEnabled())) {
         ],
       };
     },
-  };
-}
+};

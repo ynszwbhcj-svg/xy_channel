@@ -15,10 +15,7 @@ function isJsonObjectOrArray(value: unknown): value is Record<string, unknown> |
   return !!value && typeof value === "object";
 }
 
-export function createDisplayA2UICardTool(ctx: SessionContext): any {
-  const { config, sessionId, taskId, messageId } = ctx;
-
-  return {
+export const displayA2UICardTool = {
     name: "displayA2UICard",
     label: "Display A2UI Card",
     description: "当模型根据 MCP 工具返回结果判断需要向端侧下发 A2UI card 时调用。参数 cardId 和 cardData 由模型根据 MCP 工具返回结果传入，本工具只负责下发卡片展示指令。",
@@ -41,7 +38,7 @@ export function createDisplayA2UICardTool(ctx: SessionContext): any {
     },
 
     async execute(toolCallId: string, params: any) {
-      const _c = getCurrentSessionContext() ?? ctx;
+      const _c = getCurrentSessionContext();
       const { config, sessionId, taskId, messageId } = _c;
 const cardId = typeof params?.cardId === "string" ? params.cardId.trim() : "";
       const cardData = params?.cardData;
@@ -92,5 +89,4 @@ const cardId = typeof params?.cardId === "string" ? params.cardId.trim() : "";
         ],
       };
     },
-  };
-}
+};

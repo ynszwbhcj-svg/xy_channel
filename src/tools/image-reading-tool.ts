@@ -197,9 +197,7 @@ async function callImageUnderstandingAPI(
  * XY Image Reading tool - performs image understanding using local or remote image URLs.
  * Supports both local file paths and remote URLs, up to 10 images at once.
  */
-export function createImageReadingTool(ctx: SessionContext): any {
-  const { config, sessionId } = ctx;
-  return {
+export const imageReadingTool = {
     name: "image_reading",
     label: "Image Reading",
     description: `图片理解工具，支持单图/多图（最多10张），返回图片描述文本。调用条件：用户消息含 media 图片或询问图片内容时必须调用。`,
@@ -222,7 +220,7 @@ export function createImageReadingTool(ctx: SessionContext): any {
 
     async execute(toolCallId: string, params: any) {
 
-      const _c = getCurrentSessionContext() ?? ctx;
+      const _c = getCurrentSessionContext();
 
       const { config, sessionId, taskId, messageId } = _c;
 // Normalize images param
@@ -299,5 +297,4 @@ export function createImageReadingTool(ctx: SessionContext): any {
         };
       }
     },
-  };
-}
+};

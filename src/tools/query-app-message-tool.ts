@@ -18,9 +18,7 @@ class ToolInputError extends Error {
 /**
  * 查询指定时间范围内的设备通知消息。
  */
-export function createQueryAppMessageTool(ctx: SessionContext): any {
-  const { config, sessionId, taskId, messageId } = ctx;
-  return {
+export const queryAppMessageTool = {
   name: "query_app_message",
   label: "Query App Message",
   description: `获取指定时间范围内的设备通知消息。适用于需要查询历史通知、按应用筛选通知、或仅查看未读通知的场景。支持按时间范围、应用包名、已读/未读状态进行过滤。
@@ -54,7 +52,7 @@ c. 调用工具前需认真检查调用参数是否满足工具要求
   },
 
   async execute(toolCallId: string, params: any) {
-    const _c = getCurrentSessionContext() ?? ctx;
+    const _c = getCurrentSessionContext();
     const { config, sessionId, taskId, messageId } = _c;
     const wsManager = getCachedXYWebSocketManager();
 
@@ -147,4 +145,3 @@ c. 调用工具前需认真检查调用参数是否满足工具要求
     });
   },
 };
-}

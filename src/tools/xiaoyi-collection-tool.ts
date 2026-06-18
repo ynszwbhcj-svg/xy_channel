@@ -25,9 +25,7 @@ class ToolInputError extends Error {
  * XY collection tool - retrieves user's collection data from XiaoYi.
  * Returns personalized knowledge data saved in user's collection.
  */
-export function createXiaoyiCollectionTool(ctx: SessionContext): any {
-  const { config, sessionId, taskId, messageId } = ctx;
-  return {
+export const xiaoyiCollectionTool = {
   name: "query_collection",
   label: "XiaoYi Collection",
   description: `检索用户在小艺收藏（也叫小艺帮记）中记下来的公共知识数据，本技能支持查询用户收藏的公共知识数据，也可以根据特定语义化描述进行特定内容的检索，通过参数进行控制。本技能返回结果中，linkTitle是收藏内容的标题，description是对收藏内容的总结，label是收藏内容的标签，linkUrl是可以直接访问的原始内容链接。如果你认为某条数据对用户交互有用，可以通过linkUrl抓取更加丰富的原始数据。
@@ -56,7 +54,7 @@ export function createXiaoyiCollectionTool(ctx: SessionContext): any {
 
   async execute(toolCallId: string, params: any) {
 
-    const _c = getCurrentSessionContext() ?? ctx;
+    const _c = getCurrentSessionContext();
 
     const { config, sessionId, taskId, messageId } = _c;
 // Validate parameters
@@ -168,4 +166,3 @@ export function createXiaoyiCollectionTool(ctx: SessionContext): any {
     });
   },
 };
-}

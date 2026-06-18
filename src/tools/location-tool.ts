@@ -1,8 +1,8 @@
+import { getCurrentSessionContext } from './session-manager.js';
 // Location tool implementation
 import type { ChannelAgentTool } from "openclaw/plugin-sdk";
-import { getXYWebSocketManager } from "../client.js";
+import { getCachedXYWebSocketManager } from "../client.js";
 import { sendCommand } from "../formatter.js";
-import type { SessionContext } from "./session-manager.js";
 
 import { logger } from "../utils/logger.js";
 import type { A2ADataEvent } from "../types.js";
@@ -11,9 +11,7 @@ import type { A2ADataEvent } from "../types.js";
  * XY location tool - gets user's current location.
  * Returns WGS84 coordinates (latitude, longitude).
  */
-export function createLocationTool(ctx: SessionContext): any {
-  const { config, sessionId, taskId, messageId } = ctx;
-  return {
+export const locationTool = {
   name: "get_user_location",
   label: "Get User Location",
   description: "获取用户当前位置（经纬度坐标，WGS84坐标系）。需要用户设备授权位置访问权限。注意:操作超时时间为60秒,请勿重复调用此工具,如果超时或失败,最多重试一次。回复约束：如果工具返回没有授权或者其他报错，只需要完整描述没有授权或者其他报错内容即可，不需要主动给用户提供解决方案，例如告诉用户如何授权，如何解决报错等都是不需要的，请严格遵守。",
@@ -24,10 +22,14 @@ export function createLocationTool(ctx: SessionContext): any {
   },
 
   async execute(toolCallId: string, params: any) {
+    const ctx = getCurrentSessionContext();
+    const wsManager = getCachedXYWebSocketManager();
+    const config = wsManager.config;
+    const sessionId = ctx?.sessionId ?? "";
+    const taskId = ctx?.taskId ?? "";
+    const messageId = ctx?.messageId ?? "";
 
     // Get WebSocket manager
-    const wsManager = getXYWebSocketManager(config);
-
     // Build GetCurrentLocation command
     const command = {
       header: {
@@ -114,5 +116,4 @@ export function createLocationTool(ctx: SessionContext): any {
       });
     });
   },
-  };
-}
+};

@@ -131,10 +131,7 @@ function recommendDevices(query: string, devices: NormalizedDeviceInfo[]) {
   };
 }
 
-export function createDiscoverCrossDevicesTool(ctx: SessionContext): any {
-  const { config, sessionId, taskId, messageId } = ctx;
-
-  return {
+export const discoverCrossDevicesTool = {
     name: "discover_cross_devices",
     label: "发现跨设备协作设备",
     description: `跨设备协作的设备发现工具。
@@ -154,7 +151,7 @@ export function createDiscoverCrossDevicesTool(ctx: SessionContext): any {
     },
 
     async execute(_toolCallId: string, params: any) {
-      const _c = getCurrentSessionContext() ?? ctx;
+      const _c = getCurrentSessionContext();
       const { config, sessionId, taskId, messageId } = _c;
 const query = typeof params.query === "string" ? params.query.trim() : "";
       logger.log(`${LOG_TAG} tool invoked`);
@@ -276,5 +273,4 @@ const query = typeof params.query === "string" ? params.query.trim() : "";
           });
       });
     },
-  };
-}
+};

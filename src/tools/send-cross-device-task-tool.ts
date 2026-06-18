@@ -1,7 +1,7 @@
+import type { SessionContext } from './session-manager.js';
 import { sendCommand, sendStatusUpdate } from "../formatter.js";
 import { getCachedXYWebSocketManager } from "../client.js";
 import type { A2ACommand, CrossDeviceTaskResultEvent, OutboundWebSocketMessage, SentFileCard } from "../types.js";
-import type { SessionContext } from "./session-manager.js";
 import { logger } from "../utils/logger.js";
 import { getCurrentSessionContext } from './session-manager.js';
 
@@ -269,11 +269,7 @@ function buildUnifiedDistributeCommand(
   };
 }
 
-export function createSendCrossDeviceTaskTool(ctx: SessionContext): any {
-  const { config, sessionId, taskId, messageId } = ctx;
-
-  return {
-    name: "send_cross_device_task",
+export const sendCrossDeviceTaskTool = {
     label: "下发跨设备协作任务",
     description: `向用户已经选定的目标设备下发跨设备协作任务。
 
@@ -314,7 +310,7 @@ export function createSendCrossDeviceTaskTool(ctx: SessionContext): any {
     },
 
     async execute(_toolCallId: string, params: any) {
-      const _c = getCurrentSessionContext() ?? ctx;
+      const _c = getCurrentSessionContext();
       const { config, sessionId, taskId, messageId } = _c;
 const query = typeof params.query === "string" ? params.query.trim() : "";
       const targetDeviceInfo = normalizeTargetDeviceInfo(params.targetDeviceInfo);
@@ -326,7 +322,7 @@ const query = typeof params.query === "string" ? params.query.trim() : "";
       }
 
       const wsManager = getCachedXYWebSocketManager();
-      const distributionSessionId = ctx.distributionSessionId || sessionId;
+      const distributionSessionId = getCurrentSessionContext()?.distributionSessionId || sessionId;
       const command = buildUnifiedDistributeCommand(query, targetDeviceInfo, distributionSessionId);
       const statusText = `正在调用${targetDeviceInfo.deviceName}执行“${query}”跨设备任务...`;
 
@@ -385,7 +381,7 @@ const query = typeof params.query === "string" ? params.query.trim() : "";
               sentFiles: event.sentFiles,
               rawEvent: event.rawEvent,
             });
-            const resultWithFileSend = await autoSendFileToUserIfNeeded(result, ctx);
+            const resultWithFileSend = await autoSendFileToUserIfNeeded(result, getCurrentSessionContext());
             finish(resultWithFileSend);
           })();
         };
@@ -430,5 +426,4 @@ const query = typeof params.query === "string" ? params.query.trim() : "";
           });
       });
     },
-  };
-}
+};

@@ -25,9 +25,7 @@ class ToolInputError extends Error {
 /**
  * XY add collection tool - adds data to user's XiaoYi collection.
  */
-export function createXiaoyiAddCollectionTool(ctx: SessionContext): any {
-  const { config, sessionId, taskId, messageId } = ctx;
-  return {
+export const xiaoyiAddCollectionTool = {
   name: "add_collection",
   label: "Add XiaoYi Collection",
   description: `向小艺收藏（也叫小艺帮记）中添加公共知识数据，可以给用户提供个性化体验。任何用户希望保存到个人化知识库中的数据都可以调用本技能。不同类型的数据对应的数据要求如下：
@@ -80,7 +78,7 @@ export function createXiaoyiAddCollectionTool(ctx: SessionContext): any {
 
   async execute(toolCallId: string, params: any) {
 
-    const _c = getCurrentSessionContext() ?? ctx;
+    const _c = getCurrentSessionContext();
 
     const { config, sessionId, taskId, messageId } = _c;
 // Validate parameters
@@ -223,4 +221,3 @@ export function createXiaoyiAddCollectionTool(ctx: SessionContext): any {
     });
   },
 };
-}

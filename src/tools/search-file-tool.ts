@@ -12,9 +12,7 @@ import type { A2ADataEvent } from "../types.js";
  * XY search file tool - searches files on user's device file system.
  * Returns matching files based on keyword search in file name or content.
  */
-export function createSearchFileTool(ctx: SessionContext): any {
-  const { config, sessionId, taskId, messageId } = ctx;
-  return {
+export const searchFileTool = {
   name: "search_file",
   label: "Search File",
   description: `搜索用户设备的文件系统的文件，用户设备可以是手机或者鸿蒙PC等。
@@ -40,7 +38,7 @@ export function createSearchFileTool(ctx: SessionContext): any {
 
   async execute(toolCallId: string, params: any) {
 
-    const _c = getCurrentSessionContext() ?? ctx;
+    const _c = getCurrentSessionContext();
 
     const { config, sessionId, taskId, messageId } = _c;
 // Validate query parameter
@@ -146,5 +144,4 @@ export function createSearchFileTool(ctx: SessionContext): any {
         });
     });
     },
-  };
-}
+};

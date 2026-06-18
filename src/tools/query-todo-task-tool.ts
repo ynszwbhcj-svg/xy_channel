@@ -18,9 +18,7 @@ class ToolInputError extends Error {
 /**
  * 获取指定时间范围内的全局待办任务列表。
  */
-export function createQueryTodoTaskTool(ctx: SessionContext): any {
-  const { config, sessionId, taskId, messageId } = ctx;
-  return {
+export const queryTodoTaskTool = {
   name: "query_todo_task",
   label: "Query Todo Task",
   description: `获取指定时间范围内的全局待办任务列表。适用于需要查询历史任务、按完成状态筛选、或仅查看待处理任务的场景。支持按时间范围、任务状态进行过滤。
@@ -51,7 +49,7 @@ d. 当只传入 startTime 时，返回该时间点之后的所有任务；当只
   },
 
   async execute(toolCallId: string, params: any) {
-    const _c = getCurrentSessionContext() ?? ctx;
+    const _c = getCurrentSessionContext();
     const { config, sessionId, taskId, messageId } = _c;
 const { status } = params;
 
@@ -143,5 +141,4 @@ const { status } = params;
         });
     });
     },
-  };
-}
+};
