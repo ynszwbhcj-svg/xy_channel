@@ -270,6 +270,7 @@ function buildUnifiedDistributeCommand(
 }
 
 export const sendCrossDeviceTaskTool = {
+    name: "send_cross_device_task",
     label: "下发跨设备协作任务",
     description: `向用户已经选定的目标设备下发跨设备协作任务。
 
