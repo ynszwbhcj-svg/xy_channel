@@ -3,6 +3,7 @@ import type { ChannelAgentTool } from "openclaw/plugin-sdk";
 import { getXYWebSocketManager } from "../client.js";
 import { sendCommand } from "../formatter.js";
 import type { SessionContext } from "./session-manager.js";
+import { getCurrentSessionContext } from './session-manager.js';
 
 import { logger } from "../utils/logger.js";
 import type { A2ADataEvent } from "../types.js";
@@ -15,7 +16,6 @@ import type { A2ADataEvent } from "../types.js";
  * To get publicly accessible URLs, use the upload_photo tool with these URIs.
  */
 export function createSearchPhotoGalleryTool(ctx: SessionContext): any {
-  const { config, sessionId, taskId, messageId } = ctx;
   return {
   name: "search_photo_gallery",
   label: "Search Photo Gallery",
@@ -74,7 +74,10 @@ export function createSearchPhotoGalleryTool(ctx: SessionContext): any {
 
   async execute(toolCallId: string, params: any) {
 
-    // Validate parameters
+    const _c = getCurrentSessionContext() ?? ctx;
+
+    const { config, sessionId, taskId, messageId } = _c;
+// Validate parameters
     if (!params.query) {
       throw new Error("Missing required parameter: query is required");
     }

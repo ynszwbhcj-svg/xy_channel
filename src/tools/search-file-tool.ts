@@ -3,6 +3,7 @@ import type { ChannelAgentTool } from "openclaw/plugin-sdk";
 import { getXYWebSocketManager } from "../client.js";
 import { sendCommand } from "../formatter.js";
 import type { SessionContext } from "./session-manager.js";
+import { getCurrentSessionContext } from './session-manager.js';
 
 import { logger } from "../utils/logger.js";
 import type { A2ADataEvent } from "../types.js";
@@ -12,7 +13,6 @@ import type { A2ADataEvent } from "../types.js";
  * Returns matching files based on keyword search in file name or content.
  */
 export function createSearchFileTool(ctx: SessionContext): any {
-  const { config, sessionId, taskId, messageId } = ctx;
   return {
   name: "search_file",
   label: "Search File",
@@ -39,7 +39,10 @@ export function createSearchFileTool(ctx: SessionContext): any {
 
   async execute(toolCallId: string, params: any) {
 
-    // Validate query parameter
+    const _c = getCurrentSessionContext() ?? ctx;
+
+    const { config, sessionId, taskId, messageId } = _c;
+// Validate query parameter
     if (!params.query || typeof params.query !== "string" || params.query.trim() === "") {
       throw new Error("Missing required parameter: query must be a non-empty string");
     }

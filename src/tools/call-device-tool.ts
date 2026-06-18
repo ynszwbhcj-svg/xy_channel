@@ -24,6 +24,7 @@ import { createSendEmailTool } from "./send-email-tool.js";
 import { createSearchEmailTool } from "./search-email-tool.js";
 import { sendStatusUpdate } from "../formatter.js";
 import type { SessionContext } from "./session-manager.js";
+import { getCurrentSessionContext } from './session-manager.js';
 
 
 /**
@@ -31,8 +32,6 @@ import type { SessionContext } from "./session-manager.js";
  * LLM 必须先通过 get_xxx_tool_schema 获取具体工具 schema，再用本工具执行。
  */
 export function createCallDeviceTool(ctx: SessionContext): any {
-  const { config, sessionId, taskId, messageId } = ctx;
-
   const noteTool = createNoteTool(ctx);
   const modifyNoteTool = createModifyNoteTool(ctx);
   const createAlarmTool = makeAlarmTool(ctx);
@@ -107,7 +106,9 @@ export function createCallDeviceTool(ctx: SessionContext): any {
     required: ["toolName", "arguments"],
   },
   async execute(toolCallId: string, params: any) {
-    const { toolName, arguments: toolArgs } = params;
+    const _c = getCurrentSessionContext() ?? ctx;
+    const { config, sessionId, taskId, messageId } = _c;
+const { toolName, arguments: toolArgs } = params;
 
     // 向用户端发送具体工具名的状态更新
     try {

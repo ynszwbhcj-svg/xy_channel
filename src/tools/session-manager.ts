@@ -13,6 +13,7 @@
 import { AsyncLocalStorage } from "async_hooks";
 import type { RunCrossTaskContext, SentFileCard, XYChannelConfig } from "../types.js";
 import { logger } from "../utils/logger.js";
+import { getCurrentTaskId, getCurrentMessageId } from "../task-manager.js";
 
 export interface SessionContext {
   config: XYChannelConfig;
@@ -111,15 +112,26 @@ export function runWithSessionContext<T>(
 }
 
 /**
- * Get the current session context from AsyncLocalStorage.
+ * Get the current session context from AsyncLocalStorage, enriched with the
+ * latest taskId/messageId from the task-manager Map (cross-chain steer bridge).
+ * Follows the openclaw3.24 pattern: ALS is the primary source, Map provides
+ * cross-chain freshness when steer updates the active taskId.
  *
- * Pure ALS — no global Map fallback. Returns null when called outside a
- * runWithSessionContext scope (e.g. cron path, gateway startup). Every read
- * is logged under [ALS-PROOF] so test runs can verify propagation.
+ * Returns null when called outside a runWithSessionContext scope
+ * (e.g. cron path, gateway startup).
  */
 export function getCurrentSessionContext(): SessionContext | null {
   const ctx = asyncLocalStorage.getStore() ?? null;
   if (ctx) {
+    const latestTaskId = getCurrentTaskId(ctx.sessionId);
+    const latestMessageId = getCurrentMessageId(ctx.sessionId);
+    if (latestTaskId && latestTaskId !== ctx.taskId) {
+      logger.log(
+        `[ALS-PROOF] getCurrentSessionContext ALS hit (enriched) sessionId=${ctx.sessionId} ` +
+        `taskId=${ctx.taskId}→${latestTaskId}`,
+      );
+      return { ...ctx, taskId: latestTaskId, messageId: latestMessageId ?? ctx.messageId };
+    }
     logger.log(
       `[ALS-PROOF] getCurrentSessionContext ALS hit sessionId=${ctx.sessionId} taskId=${ctx.taskId}`,
     );

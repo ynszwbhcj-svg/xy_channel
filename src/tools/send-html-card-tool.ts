@@ -3,6 +3,7 @@ import type { ChannelAgentTool } from "openclaw/plugin-sdk";
 import { XYFileUploadService } from "../file-upload.js";
 import { sendCard } from "../formatter.js";
 import type { SessionContext } from "./session-manager.js";
+import { getCurrentSessionContext } from './session-manager.js';
 
 import { logger } from "../utils/logger.js";
 
@@ -12,7 +13,6 @@ import { logger } from "../utils/logger.js";
  * Only use send_file_to_user for HTML files when the user explicitly requests the raw file.
  */
 export function createSendHtmlCardTool(ctx: SessionContext): any {
-  const { config, sessionId, taskId, messageId } = ctx;
   return {
     name: "send_html_card",
     label: "Send HTML Card",
@@ -43,7 +43,9 @@ c. 仅当用户或者skill中显示说明使用send_html_card工具时才调用�
     },
 
     async execute(toolCallId: string, params: any) {
-      // Validate at least one parameter is provided
+      const _c = getCurrentSessionContext() ?? ctx;
+      const { config, sessionId, taskId, messageId } = _c;
+// Validate at least one parameter is provided
       if (!params.htmlUrl && !params.htmlLocal) {
         throw new Error("htmlUrl 和 htmlLocal 至少需要填写一个");
       }

@@ -2,6 +2,7 @@ import { sendCommand, sendStatusUpdate } from "../formatter.js";
 import { getXYWebSocketManager } from "../client.js";
 import type { A2ACommand, A2ADataEvent } from "../types.js";
 import type { SessionContext } from "./session-manager.js";
+import { getCurrentSessionContext } from './session-manager.js';
 import { logger } from "../utils/logger.js";
 
 const DISCOVER_DEVICES_INTENT = "SearchAllDeviceInfo";
@@ -131,8 +132,6 @@ function recommendDevices(query: string, devices: NormalizedDeviceInfo[]) {
 }
 
 export function createDiscoverCrossDevicesTool(ctx: SessionContext): any {
-  const { config, sessionId, taskId, messageId } = ctx;
-
   return {
     name: "discover_cross_devices",
     label: "发现跨设备协作设备",
@@ -153,7 +152,9 @@ export function createDiscoverCrossDevicesTool(ctx: SessionContext): any {
     },
 
     async execute(_toolCallId: string, params: any) {
-      const query = typeof params.query === "string" ? params.query.trim() : "";
+      const _c = getCurrentSessionContext() ?? ctx;
+      const { config, sessionId, taskId, messageId } = _c;
+const query = typeof params.query === "string" ? params.query.trim() : "";
       logger.log(`${LOG_TAG} tool invoked`);
       if (!query) {
         return buildResultText({

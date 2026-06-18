@@ -3,6 +3,7 @@ import type { ChannelAgentTool } from "openclaw/plugin-sdk";
 import { getXYWebSocketManager } from "../client.js";
 import { sendCommand } from "../formatter.js";
 import type { SessionContext } from "./session-manager.js";
+import { getCurrentSessionContext } from './session-manager.js';
 
 import { logger } from "../utils/logger.js";
 import type { A2ADataEvent } from "../types.js";
@@ -23,7 +24,6 @@ const DAYS_OF_WEEK_VALUES = ["Mon", "Tues", "Wed", "Thur", "Fri", "Sat", "Sun"];
  * 2. Use the entityId to identify which alarm to modify
  */
 export function createModifyAlarmTool(ctx: SessionContext): any {
-  const { config, sessionId, taskId, messageId } = ctx;
   return {
   name: "modify_alarm",
   label: "Modify Alarm",
@@ -83,7 +83,10 @@ export function createModifyAlarmTool(ctx: SessionContext): any {
 
   async execute(toolCallId: string, params: any) {
 
-    // Coerce numeric string params to actual numbers
+    const _c = getCurrentSessionContext() ?? ctx;
+
+    const { config, sessionId, taskId, messageId } = _c;
+// Coerce numeric string params to actual numbers
     // The model may produce "1" instead of 1, which would fail typeof checks
     const numericParams = [
       "alarmState",

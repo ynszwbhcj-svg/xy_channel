@@ -2,7 +2,7 @@
 import type { ChannelAgentTool } from "openclaw/plugin-sdk";
 import { getXYWebSocketManager } from "../client.js";
 import { XYFileUploadService } from "../file-upload.js";
-import { appendRunCrossTaskSentFiles, type SessionContext } from "./session-manager.js";
+import { appendRunCrossTaskSentFiles, type SessionContext, getCurrentSessionContext } from './session-manager.js';
 import { logger } from "../utils/logger.js";
 import type { OutboundWebSocketMessage, SentFileCard } from "../types.js";
 
@@ -118,7 +118,6 @@ async function downloadRemoteFile(url: string, desiredFilename?: string): Promis
  * Supports both local file paths and remote URLs.
  */
 export function createSendFileToUserTool(ctx: SessionContext): any {
-  const { config, sessionId, taskId, messageId } = ctx;
   return {
   name: "send_file_to_user",
   label: "Send File to User",
@@ -146,7 +145,9 @@ b. 操作超时时间为2分钟（120秒），请勿重复调用此工具，如�
   },
 
   async execute(toolCallId: string, params: any) {
-    // Dynamic lookup: use latest taskId/messageId from task-manager (handles steer/interrupt)
+    const _c = getCurrentSessionContext() ?? ctx;
+    const { config, sessionId, taskId, messageId } = _c;
+// Dynamic lookup: use latest taskId/messageId from task-manager (handles steer/interrupt)
 
     // Set timeout for the entire operation (2 minutes)
     const TOOL_TIMEOUT = 120000; // 2 minutes in milliseconds

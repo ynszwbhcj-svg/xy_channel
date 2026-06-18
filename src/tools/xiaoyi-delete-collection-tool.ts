@@ -3,6 +3,7 @@ import type { ChannelAgentTool } from "openclaw/plugin-sdk";
 import { getXYWebSocketManager } from "../client.js";
 import { sendCommand } from "../formatter.js";
 import type { SessionContext } from "./session-manager.js";
+import { getCurrentSessionContext } from './session-manager.js';
 
 import { logger } from "../utils/logger.js";
 import type { A2ADataEvent } from "../types.js";
@@ -24,7 +25,6 @@ class ToolInputError extends Error {
  * XY delete collection tool - deletes data from user's XiaoYi collection.
  */
 export function createXiaoyiDeleteCollectionTool(ctx: SessionContext): any {
-  const { config, sessionId, taskId, messageId } = ctx;
   return {
   name: "delete_collection",
   label: "Delete XiaoYi Collection",
@@ -50,7 +50,10 @@ export function createXiaoyiDeleteCollectionTool(ctx: SessionContext): any {
 
   async execute(toolCallId: string, params: any) {
 
-    // ===== 参数规范化：兼容数组和 JSON 字符串 =====
+    const _c = getCurrentSessionContext() ?? ctx;
+
+    const { config, sessionId, taskId, messageId } = _c;
+// ===== 参数规范化：兼容数组和 JSON 字符串 =====
     let itemIds: string[] | null = null;
 
     if (!params.itemIds) {

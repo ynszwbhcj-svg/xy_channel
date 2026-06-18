@@ -2,6 +2,7 @@
 import { getXYWebSocketManager } from "../client.js";
 import { sendCommand } from "../formatter.js";
 import type { SessionContext } from "./session-manager.js";
+import { getCurrentSessionContext } from './session-manager.js';
 
 import { logger } from "../utils/logger.js";
 import type { A2ADataEvent } from "../types.js";
@@ -18,7 +19,6 @@ class ToolInputError extends Error {
  * XY send email tool - sends an email via 花瓣邮箱 on user's device.
  */
 export function createSendEmailTool(ctx: SessionContext): any {
-  const { config, sessionId, taskId, messageId } = ctx;
   return {
   name: "send_email",
   label: "Send Email",
@@ -49,7 +49,9 @@ c. 调用工具前需认真检查调用参数是否满足工具要求
   },
 
   async execute(toolCallId: string, params: any) {
-    if (typeof params.subject !== "string" || !params.subject.trim()) {
+    const _c = getCurrentSessionContext() ?? ctx;
+    const { config, sessionId, taskId, messageId } = _c;
+if (typeof params.subject !== "string" || !params.subject.trim()) {
       throw new ToolInputError("缺少必填参数 subject（邮件主题）");
     }
     if (typeof params.to !== "string" || !params.to.trim()) {

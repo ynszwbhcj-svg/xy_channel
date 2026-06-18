@@ -3,6 +3,7 @@ import type { ChannelAgentTool } from "openclaw/plugin-sdk";
 import { getXYWebSocketManager } from "../client.js";
 import { sendCommand } from "../formatter.js";
 import type { SessionContext } from "./session-manager.js";
+import { getCurrentSessionContext } from './session-manager.js';
 
 import { logger } from "../utils/logger.js";
 import type { A2ADataEvent } from "../types.js";
@@ -13,7 +14,6 @@ import type { A2ADataEvent } from "../types.js";
  * Time format must be: yyyy-mm-dd hh:mm:ss
  */
 export function createCalendarTool(ctx: SessionContext): any {
-  const { config, sessionId, taskId, messageId } = ctx;
   return {
   name: "create_calendar_event",
   label: "Create Calendar Event",
@@ -43,7 +43,10 @@ export function createCalendarTool(ctx: SessionContext): any {
 
   async execute(toolCallId: string, params: any) {
 
-    // Validate parameters
+    const _c = getCurrentSessionContext() ?? ctx;
+
+    const { config, sessionId, taskId, messageId } = _c;
+// Validate parameters
     if (!params.title || !params.dtStart || !params.dtEnd) {
       throw new Error("Missing required parameters: title, dtStart, and dtEnd are required");
     }

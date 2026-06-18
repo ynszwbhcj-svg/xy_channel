@@ -3,6 +3,7 @@ import type { ChannelAgentTool } from "openclaw/plugin-sdk";
 import { getXYWebSocketManager } from "../client.js";
 import { sendCommand } from "../formatter.js";
 import type { SessionContext } from "./session-manager.js";
+import { getCurrentSessionContext } from './session-manager.js';
 
 import { logger } from "../utils/logger.js";
 import type { A2ADataEvent } from "../types.js";
@@ -12,7 +13,6 @@ import type { A2ADataEvent } from "../types.js";
  * Requires phoneNumber parameter and optional slotId (0 for primary SIM, 1 for secondary SIM).
  */
 export function createCallPhoneTool(ctx: SessionContext): any {
-  const { config, sessionId, taskId, messageId } = ctx;
   return {
   name: "call_phone",
   label: "Call Phone",
@@ -35,7 +35,10 @@ export function createCallPhoneTool(ctx: SessionContext): any {
 
   async execute(toolCallId: string, params: any) {
 
-    // Validate phoneNumber parameter
+    const _c = getCurrentSessionContext() ?? ctx;
+
+    const { config, sessionId, taskId, messageId } = _c;
+// Validate phoneNumber parameter
     if (!params.phoneNumber || typeof params.phoneNumber !== "string" || params.phoneNumber.trim() === "") {
       throw new Error("Missing required parameter: phoneNumber must be a non-empty string");
     }

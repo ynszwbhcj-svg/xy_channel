@@ -3,6 +3,7 @@ import type { ChannelAgentTool } from "openclaw/plugin-sdk";
 import { getXYWebSocketManager } from "../client.js";
 import { sendCommand } from "../formatter.js";
 import type { SessionContext } from "./session-manager.js";
+import { getCurrentSessionContext } from './session-manager.js';
 
 import { logger } from "../utils/logger.js";
 import type { A2ADataEvent } from "../types.js";
@@ -21,7 +22,7 @@ const DAYS_OF_WEEK_VALUES = ["Mon", "Tues", "Wed", "Thur", "Fri", "Sat", "Sun"];
  * Time format: YYYYMMDD hhmmss (e.g., 20240315 143000)
  */
 export function makeAlarmTool(ctx: SessionContext): any {
-  const { config, sessionId, taskId, messageId } = ctx;
+  
   return {
   name: "create_alarm",
   label: "Create Alarm",
@@ -70,7 +71,10 @@ b. 使用该工具之前需获取当前真实时间
 
   async execute(toolCallId: string, params: any) {
 
-    // ===== Validate required parameter: alarmTime =====
+    const _c = getCurrentSessionContext() ?? ctx;
+
+    const { config, sessionId, taskId, messageId } = _c;
+// ===== Validate required parameter: alarmTime =====
     if (!params.alarmTime || typeof params.alarmTime !== "string") {
       throw new Error("Missing required parameter: alarmTime must be a string in format YYYYMMDD hhmmss");
     }

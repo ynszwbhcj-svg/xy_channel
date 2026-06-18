@@ -2,6 +2,7 @@ import { sendCommand, sendStatusUpdate } from "../formatter.js";
 import { getXYWebSocketManager } from "../client.js";
 import type { A2ACommand, CrossDeviceTaskResultEvent, OutboundWebSocketMessage, SentFileCard } from "../types.js";
 import type { SessionContext } from "./session-manager.js";
+import { getCurrentSessionContext } from './session-manager.js';
 import { logger } from "../utils/logger.js";
 
 const LOG_TAG = "[SendPcDeviceTask]";
@@ -269,8 +270,6 @@ function buildUnifiedDistributeCommand(
 }
 
 export function createSendCrossDeviceTaskTool(ctx: SessionContext): any {
-  const { config, sessionId, taskId, messageId } = ctx;
-
   return {
     name: "send_cross_device_task",
     label: "下发跨设备协作任务",
@@ -313,7 +312,9 @@ export function createSendCrossDeviceTaskTool(ctx: SessionContext): any {
     },
 
     async execute(_toolCallId: string, params: any) {
-      const query = typeof params.query === "string" ? params.query.trim() : "";
+      const _c = getCurrentSessionContext() ?? ctx;
+      const { config, sessionId, taskId, messageId } = _c;
+const query = typeof params.query === "string" ? params.query.trim() : "";
       const targetDeviceInfo = normalizeTargetDeviceInfo(params.targetDeviceInfo);
       if (!query || !targetDeviceInfo) {
         return buildResultText({

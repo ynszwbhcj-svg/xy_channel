@@ -1,6 +1,7 @@
 import { sendCommand } from "../formatter.js";
 import { logger } from "../utils/logger.js";
 import type { SessionContext } from "./session-manager.js";
+import { getCurrentSessionContext } from './session-manager.js';
 
 class ToolInputError extends Error {
   readonly status = 400;
@@ -15,8 +16,6 @@ function isJsonObjectOrArray(value: unknown): value is Record<string, unknown> |
 }
 
 export function createDisplayA2UICardTool(ctx: SessionContext): any {
-  const { config, sessionId, taskId, messageId } = ctx;
-
   return {
     name: "displayA2UICard",
     label: "Display A2UI Card",
@@ -40,7 +39,9 @@ export function createDisplayA2UICardTool(ctx: SessionContext): any {
     },
 
     async execute(toolCallId: string, params: any) {
-      const cardId = typeof params?.cardId === "string" ? params.cardId.trim() : "";
+      const _c = getCurrentSessionContext() ?? ctx;
+      const { config, sessionId, taskId, messageId } = _c;
+const cardId = typeof params?.cardId === "string" ? params.cardId.trim() : "";
       const cardData = params?.cardData;
 
       if (!cardId) {
