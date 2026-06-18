@@ -325,7 +325,7 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
               taskId: currentTaskId,
               messageId: currentMessageId,
               text: "",
-              append: false,
+              append: true,
               final: true,
             });
             finalSent = true;
@@ -366,7 +366,7 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
               taskId: currentTaskId,
               messageId: currentMessageId,
               text: "任务执行异常，请重试~",
-              append: false,
+              append: true,
               final: true,
               errorCode: 99921111,
               errorMessage: "任务执行异常，请重试",
@@ -481,7 +481,6 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
 
         try {
           if (text.length > 0) {
-            // 🔑 将模型真实的thinking/reasoning内容通过reasoningText转发
             await sendReasoningTextUpdate({
               config,
               sessionId,
@@ -511,7 +510,6 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
             accumulatedText += text;
             hasSentResponse = true;
 
-            // 🔑 流式文本通过 A2A text 通道发送（而非 reasoningText）
             await sendA2AResponse({
               config,
               sessionId,

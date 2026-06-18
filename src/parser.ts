@@ -178,13 +178,13 @@ export function extractDeviceType(parts: A2AMessagePart[]): string | null {
 
 /**
  * Extract modelName from message parts.
- * Looks for modelName in data parts under variables.memoryVariables.modelName
+ * Looks for modelName in data parts under variables.clientVariables.modelName
  * (same level as systemVariables).
  */
 export function extractModelName(parts: A2AMessagePart[]): string | null {
   for (const part of parts) {
     if (part.kind === "data" && part.data) {
-      const modelName = part.data.variables?.memoryVariables?.modelName;
+      const modelName = part.data.variables?.clientVariables?.modelName;
       if (modelName && typeof modelName === "string" && modelName.trim() !== "" && modelName.toLowerCase() !== "none") {
         return modelName;
       }

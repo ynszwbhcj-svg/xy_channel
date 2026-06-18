@@ -1,13 +1,35 @@
 // Dynamic configuration manager for runtime updates
+//
+// NOTE: xy_channel is loaded from multiple module resolution paths
+// (plugin entry vs tool registration), which duplicates class instances.
+// sessionPushIds and globalPushId must live on globalThis so all copies
+// share the same Map — same reason activeSessions is on globalThis in
+// session-manager.ts.
 import { logger } from "./logger.js";
+
+const _g = globalThis as Record<string, unknown>;
+
+if (!_g.__xyConfigSessionPushIds) {
+  _g.__xyConfigSessionPushIds = new Map<string, string>();
+}
+if (!_g.__xyConfigGlobalPushId) {
+  _g.__xyConfigGlobalPushId = null;
+}
 
 /**
  * Manages dynamic configuration updates that can change at runtime.
  * Specifically handles pushId which can be updated per-session.
  */
 class ConfigManager {
-  private sessionPushIds: Map<string, string> = new Map();
-  private globalPushId: string | null = null;
+  private get sessionPushIds(): Map<string, string> {
+    return _g.__xyConfigSessionPushIds as Map<string, string>;
+  }
+  private get globalPushId(): string | null {
+    return _g.__xyConfigGlobalPushId as string | null;
+  }
+  private set globalPushId(value: string | null) {
+    _g.__xyConfigGlobalPushId = value;
+  }
 
   /**
    * Update push ID for a specific session.

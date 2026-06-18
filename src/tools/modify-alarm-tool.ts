@@ -83,6 +83,24 @@ export function createModifyAlarmTool(ctx: SessionContext): any {
 
   async execute(toolCallId: string, params: any) {
 
+    // Coerce numeric string params to actual numbers
+    // The model may produce "1" instead of 1, which would fail typeof checks
+    const numericParams = [
+      "alarmState",
+      "alarmSnoozeDuration",
+      "alarmSnoozeTotal",
+      "alarmRingDuration",
+      "daysOfWakeType",
+    ];
+    for (const key of numericParams) {
+      if (typeof params[key] === "string") {
+        const num = Number(params[key]);
+        if (!isNaN(num)) {
+          params[key] = num;
+        }
+      }
+    }
+
     // ===== Validate required parameter: entityId =====
     if (!params.entityId || typeof params.entityId !== "string") {
       throw new Error("Missing required parameter: entityId must be a string obtained from search_alarm or create_alarm");

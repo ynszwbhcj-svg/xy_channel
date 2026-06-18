@@ -49,7 +49,7 @@ function httpRequest(
         const urlObj = new URL(url);
         const options = {
             hostname: urlObj.hostname,
-            port: urlObj.port || DEFAULT_HTTP_PORT,
+            port: urlObj.port || DEFAULT_HTTPS_PORT,
             path: urlObj.pathname + urlObj.search,
             method: method,
             headers: headers,

@@ -1,5 +1,6 @@
 // Message dispatch engine - following feishu/bot.ts pattern (simplified)
 import type { ClawdbotConfig, RuntimeEnv, ReplyPayload } from "openclaw/plugin-sdk";
+import { updateSessionStoreEntry, updateSessionStore, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { getXYRuntime } from "./runtime.js";
 import { createXYReplyDispatcher } from "./reply-dispatcher.js";
 import { parseA2AMessage, extractTextFromParts, extractFileParts, extractPushId, extractDeviceType, extractModelName, extractTriggerData, extractRunCrossTaskContext, isClearContextMessage, isTasksCancelMessage } from "./parser.js";
@@ -66,8 +67,6 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
   try {
     // Check for special messages BEFORE parsing (these have different param structures)
     const messageMethod = message.method;
-    logger.log(`[BOT] Received A2A message: ${JSON.stringify(message)}`);
-
 
     // Handle clearContext messages (sessionId at top level, no params)
     if (messageMethod === "clearContext" || messageMethod === "clear_context") {
@@ -230,6 +229,52 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
         modelName,
         runCrossTaskContext: runCrossTaskContext ?? undefined,
       });
+
+      // 🔑 Sync A2A modelName to OpenClaw session store so that session_status
+      // reports the correct model. Without this, session_status returns the
+      // configured default model instead of the A2A-specified one.
+      if (modelName && modelName.trim() !== "" && modelName.toLowerCase() !== "none") {
+        try {
+          const storePath = resolveStorePath();
+          const result = await updateSessionStoreEntry({
+            storePath,
+            sessionKey: route.sessionKey,
+            update: async () => ({
+              providerOverride: "xiaoyiprovider",
+              modelOverride: modelName,
+              modelOverrideSource: "user",
+              model: "",
+              modelProvider: "",
+              contextTokens: 256_000,
+            }),
+          });
+          if (!result) {
+            // Session entry doesn't exist yet (first message, xy_channel
+            // bypasses the standard turn kernel). Create a minimal entry
+            // with the override via updateSessionStore.
+            await updateSessionStore(storePath, (store) => {
+              if (!store[route.sessionKey]) {
+                store[route.sessionKey] = {
+                  // sessionId must pass validateSessionId regex /^[a-z0-9][a-z0-9._-]{0,127}$/i
+                  // route.sessionKey like "agent:main:direct:xxx" contains colons which are invalid.
+                  // Use parsed.sessionId (raw UUID from A2A) which is always safe.
+                  sessionId: parsed.sessionId,
+                  updatedAt: Date.now(),
+                  providerOverride: "xiaoyiprovider",
+                  modelOverride: modelName,
+                  modelOverrideSource: "user",
+                  contextTokens: 256_000,
+                } as any;
+              }
+            });
+            log.log(`[BOT] Created session entry with model override: xiaoyiprovider/${modelName}`);
+          } else {
+            log.log(`[BOT] Patched session store model override: xiaoyiprovider/${modelName}`);
+          }
+        } catch (patchErr) {
+          log.error(`[BOT] Failed to patch session model override:`, patchErr);
+        }
+      }
 
       // 🔑 发送初始状态更新
       log.log(`[BOT] Sending initial status update`);

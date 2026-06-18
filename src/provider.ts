@@ -10,7 +10,7 @@
 import { createHash } from "crypto";
 import { logger } from "./utils/logger.js";
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
-import { getCurrentSessionContext } from "./tools/session-manager.js";
+import { getCurrentSessionContext, setCurrentCronJobId } from "./tools/session-manager.js";
 import { selfEvolutionManager } from "./utils/self-evolution-manager.js";
 import { notifyModelStreaming } from "./bot.js";
 
@@ -452,6 +452,32 @@ export const xiaoyiProvider: ProviderPlugin = {
   isCacheTtlEligible: () => true,
 
   /**
+   * Dynamic model resolution for A2A-specified model names.
+   * A2A messages carry a dynamic modelName that isn't in any static catalog.
+   * This hook lets OpenClaw's resolveModelAsync accept any model ID under
+   * xiaoyiprovider as long as the provider has a configured baseUrl.
+   */
+  resolveDynamicModel: (ctx) => {
+    const baseUrl = ctx.providerConfig?.baseUrl;
+    if (!baseUrl || typeof baseUrl !== "string") return null;
+    return {
+      id: ctx.modelId,
+      name: ctx.modelId,
+      api: ctx.providerConfig?.api ?? "openai-completions",
+      provider: "xiaoyiprovider",
+      baseUrl,
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 256_000,
+      maxTokens: 8192,
+      ...(ctx.providerConfig?.headers && typeof ctx.providerConfig.headers === "object"
+        ? { headers: ctx.providerConfig.headers as Record<string, string> }
+        : {}),
+    };
+  },
+
+  /**
    * Store uid-based fallback prefix for lazy timestamp generation in wrapStreamFn.
    * Session-level headers (traceId / sessionId / interactionId) are resolved
    * directly in wrapStreamFn via cron detection, Conversation info extraction,
@@ -515,6 +541,14 @@ export const xiaoyiProvider: ProviderPlugin = {
       const isCron = isCronTriggered(context.messages);
 
       if (isCron) {
+        // fire 期 jobId 桥：把首条消息 `[cron:<jobId> ...]` 解析出的真实 jobId
+        // 绑定到本次 cron run 的合成 sessionId。sendCommand 凭同一 sessionId
+        // 反查 jobId → cron-push-map → 正确设备的 pushId（多设备路由）。
+        const cronJobId = extractCronUuid(context.messages);
+        const cronCtx = getCurrentSessionContext();
+        if (cronJobId && cronCtx?.sessionId) {
+          setCurrentCronJobId(cronCtx.sessionId, cronJobId);
+        }
         const fallbackPrefix = ctx.extraParams?.[FALLBACK_PREFIX_KEY];
         if (typeof fallbackPrefix === "string") {
           const fallbackValue = `${fallbackPrefix}_${Date.now()}`;

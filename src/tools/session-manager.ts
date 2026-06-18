@@ -15,7 +15,7 @@ export interface SessionContext {
   messageId: string;
   agentId: string;
   deviceType?: string;
-  /** Model name extracted from A2A user variables (variables.memoryVariables.modelName).
+  /** Model name extracted from A2A user variables (variables.clientVariables.modelName).
    *  When set, provider.ts replaces model.id in the OpenAI request body. */
   modelName?: string;
   runCrossTaskContext?: RunCrossTaskContext;
@@ -79,6 +79,35 @@ export function clearCronToolCall(toolCallId: string): void {
   cronToolCallMap.delete(toolCallId);
 }
 
+// ── Cron session ↔ jobId bridge ────────────────────────────────────
+// fire 期 jobId 传递桥。provider.ts 在 isCron 分支从首条消息
+// `[cron:<jobId> ...]` 解析出真实 jobId，写入合成 cron sessionId；
+// sendCommand/formatter 凭同一合成 sessionId 反查 jobId，再去
+// cron-push-map 取对应设备的 pushId。同一 cron run 内 ALS 上下文共享，
+// 合成 sessionId 在 provider 与 sendCommand 之间一致。
+if (!_g.__xyCronSessionJobId) {
+  _g.__xyCronSessionJobId = new Map<string, string>();
+}
+const cronSessionJobIdMap = _g.__xyCronSessionJobId as Map<string, string>;
+
+/** 把 fire 期解析出的 jobId 绑定到当前 cron run 的合成 sessionId。 */
+export function setCurrentCronJobId(cronSessionId: string, jobId: string): void {
+  if (cronSessionId && jobId) {
+    cronSessionJobIdMap.set(cronSessionId, jobId);
+  }
+}
+
+/** 凭合成 cron sessionId 取本次 run 的 jobId（供 sendCommand 反查 pushId）。 */
+export function getCurrentCronJobId(cronSessionId?: string): string | undefined {
+  if (!cronSessionId) return undefined;
+  return cronSessionJobIdMap.get(cronSessionId);
+}
+
+/** cron run 结束后清理。 */
+export function clearCronJobId(cronSessionId: string): void {
+  cronSessionJobIdMap.delete(cronSessionId);
+}
+
 // AsyncLocalStorage for thread-safe session context isolation
 export const asyncLocalStorage = new AsyncLocalStorage<SessionContext>();
 
@@ -98,9 +127,17 @@ export function registerSession(sessionKey: string, context: SessionContext): vo
 
   const existing = activeSessions.get(sessionKey);
   if (existing) {
-    // 更新上下文，增加引用计数，刷新存活时间
+    // 更新上下文（全量同步所有字段，避免 global Map 残留旧值，
+    // 当 ALS 丢失回退到 Map 时拿到过期的 modelName / deviceType）
+    existing.config = context.config;
+    existing.sessionId = context.sessionId;
+    existing.distributionSessionId = context.distributionSessionId;
     existing.taskId = context.taskId;
     existing.messageId = context.messageId;
+    existing.agentId = context.agentId;
+    existing.deviceType = context.deviceType;
+    existing.modelName = context.modelName;
+    existing.runCrossTaskContext = context.runCrossTaskContext;
     existing.refCount++;
     existing.createdAt = Date.now();  // 刷新存活时间，长对话不受 TTL 影响
   } else {

@@ -7,6 +7,8 @@ import { callGatewayTool } from "openclaw/plugin-sdk/agent-harness-runtime";
 import * as os from "os";
 import { sendCommand } from "./formatter.js";
 import { resolveXYConfig } from "./config.js";
+import { configManager } from "./utils/config-manager.js";
+import { setJobPushId } from "./utils/cron-push-map.js";
 import { logger } from "./utils/logger.js";
 import { readFileSync, readdirSync } from "fs";
 import { join, dirname } from "path";
@@ -20,7 +22,8 @@ const GATEWAY_TIMEOUT_MS = 60_000;
  */
 export async function handleCronQueryEvent(context, cfg) {
     const { action, jobId, params, sessionId, taskId, messageId } = context;
-    logger.log(`[CRON-QUERY] Received event: action=${action}, jobId=${jobId ?? "(none)"}`);
+    const log = logger.withContext(sessionId ?? "", taskId ?? "");
+    log.log(`[CRON-QUERY] Received event: action=${action}, jobId=${jobId ?? "(none)"}`);
     let result;
     let error;
     try {
@@ -39,6 +42,11 @@ export async function handleCronQueryEvent(context, cfg) {
                 break;
             case "add":
                 result = await callGatewayTool("cron.add", { timeoutMs: GATEWAY_TIMEOUT_MS }, params ?? {});
+                // 捕获 jobId↔pushId：cron-query 路径由 channel 自己建 job，
+                // 此处 context 握着 sessionId，configManager 有对应设备 pushId。
+                await persistCronPushMap(context.sessionId, result).catch((err) => {
+                    logger.error(`[CRON-QUERY] Failed to persist cron-push-map:`, err);
+                });
                 break;
             case "update":
                 result = await callGatewayTool("cron.update", { timeoutMs: GATEWAY_TIMEOUT_MS }, {
@@ -63,17 +71,17 @@ export async function handleCronQueryEvent(context, cfg) {
                 break;
             default:
                 error = `Unknown action: ${context.action}`;
-                logger.error(`[CRON-QUERY] ${error}`);
+                log.error(`[CRON-QUERY] ${error}`);
                 result = { error };
         }
     }
     catch (err) {
         error = err instanceof Error ? err.message : String(err);
-        logger.error(`[CRON-QUERY] RPC call failed for action=${action}:`, err);
+        log.error(`[CRON-QUERY] RPC call failed for action=${action}:`, err);
         result = { error };
     }
     // Log the result
-    logger.log(`[CRON-QUERY] RPC result for action=${action}: ${JSON.stringify(result, null, 2)}`);
+    log.log(`[CRON-QUERY] RPC result for action=${action}: ${JSON.stringify(result, null, 2)}`);
     // Send result back via sendCommand as System.CronQuery with payload.ans
     if (cfg && sessionId && taskId && messageId) {
         try {
@@ -94,17 +102,46 @@ export async function handleCronQueryEvent(context, cfg) {
                 taskId,
                 messageId,
                 command,
-                final: true,
+                final: sessionId.toLowerCase().endsWith("cronquery"),
             });
-            logger.log(`[CRON-QUERY] Sent response via sendCommand, action=${action}`);
+            log.log(`[CRON-QUERY] Sent response via sendCommand, action=${action}`);
         }
         catch (sendErr) {
-            logger.error(`[CRON-QUERY] Failed to send response via sendCommand:`, sendErr);
+            log.error(`[CRON-QUERY] Failed to send response via sendCommand:`, sendErr);
         }
     }
     else {
-        logger.warn(`[CRON-QUERY] Missing cfg/sessionId/taskId/messageId, skipping sendCommand`);
+        log.warn(`[CRON-QUERY] Missing cfg/sessionId/taskId/messageId, skipping sendCommand`);
     }
+}
+
+/**
+ * 从 cron.add 结果中提取 jobId，配合 sessionId 对应的 pushId 写入映射。
+ */
+async function persistCronPushMap(sessionId: string | undefined, result: unknown): Promise<void> {
+    logger.log(`[CRONMAP] cron-query persist: sessionId=${sessionId ?? "(none)"}, resultType=${typeof result}`);
+    if (!sessionId) {
+        logger.log(`[CRONMAP] cron-query skip: no sessionId in context`);
+        return;
+    }
+    let jobId: string | undefined;
+    if (result && typeof result === "object") {
+        const id = (result as { id?: unknown }).id;
+        if (typeof id === "string" && id.trim()) jobId = id.trim();
+    }
+    if (!jobId) {
+        const preview = typeof result === "string" ? result.slice(0, 200) : JSON.stringify(result)?.slice(0, 200);
+        logger.log(`[CRONMAP] cron-query skip: no jobId in result. preview=${preview ?? "(empty)"}`);
+        return;
+    }
+    const pushId = configManager.getPushId(sessionId);
+    if (!pushId) {
+        logger.log(`[CRONMAP] cron-query skip: configManager has no pushId for sessionId=${sessionId}`);
+        return;
+    }
+    logger.log(`[CRONMAP] cron-query writing map: jobId=${jobId}, pushId=${pushId.substring(0, 16)}...`);
+    await setJobPushId(jobId, { pushId, sessionId, source: "cron-query" });
+    logger.log(`[CRONMAP] cron-query map written OK`);
 }
 
 /**
