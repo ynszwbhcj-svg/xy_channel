@@ -42,14 +42,17 @@ export async function handleMemoryQueryEvent(context: any, cfg: any): Promise<vo
 
   try {
     switch (action) {
-      case "memoryStateSet":
+      case "MemoryStateSet":
         result = handleMemoryStateSet(params);
         break;
-      case "userMdQuery":
+      case "UserMdQuery":
         result = handleUserMdQuery();
         break;
-      case "memoryMdQuery":
+      case "MemoryMdQuery":
         result = handleMemoryMdQuery();
+        break;
+      case "MemoryHistory":
+        result = handleMemoryHistory();
         break;
       default:
         log.error(`[MEMORY-QUERY] Unknown action: ${action}`);
@@ -169,4 +172,98 @@ function readMdFile(filePath: string): { fileDetail: string } {
     }
     return { fileDetail: "" };
   }
+}
+
+const MEMORY_LOG_PATH = path.join(os.homedir(), ".openclaw", ".memory.log");
+const MEMORY_HISTORY_DAYS = 7;
+const MEMORY_RETENTION_DAYS = 30;
+
+/**
+ * Read ~/.openclaw/.memory.log, return last 7 days grouped by date,
+ * then prune entries older than 30 days.
+ *
+ * Log line format: `2026-06-22T15:18:00|user.md|更新了xxxx`
+ * Only split on the first two `|`; everything after is the detail
+ * (detail itself may contain `|`).
+ */
+function handleMemoryHistory(): Array<Record<string, Array<{ fileName: string; detail: string; time: string }>>> {
+  let content: string;
+  try {
+    content = readFileSync(MEMORY_LOG_PATH, "utf-8");
+  } catch (err: any) {
+    if (err.code === "ENOENT") {
+      logger.log(`[MEMORY-QUERY] memory.log not found: ${MEMORY_LOG_PATH}`);
+    } else {
+      logger.error(`[MEMORY-QUERY] Failed to read memory.log:`, err);
+    }
+    return [];
+  }
+
+  const lines = content.split("\n");
+  const now = new Date();
+
+  const historySince = new Date(now);
+  historySince.setDate(now.getDate() - (MEMORY_HISTORY_DAYS - 1));
+  historySince.setHours(0, 0, 0, 0);
+
+  const retentionSince = new Date(now);
+  retentionSince.setDate(now.getDate() - (MEMORY_RETENTION_DAYS - 1));
+  retentionSince.setHours(0, 0, 0, 0);
+
+  const byDate = new Map<string, Array<{ fileName: string; detail: string; time: string }>>();
+  const keptLines: string[] = [];
+
+  for (const raw of lines) {
+    const line = raw.trimEnd();
+    if (!line) continue;
+
+    // Split on only the first two `|`; rest is detail (may contain `|`).
+    const firstPipe = line.indexOf("|");
+    if (firstPipe === -1) continue;
+    const secondPipe = line.indexOf("|", firstPipe + 1);
+    if (secondPipe === -1) continue;
+
+    const timestamp = line.slice(0, firstPipe);
+    const fileName = line.slice(firstPipe + 1, secondPipe);
+    const detail = line.slice(secondPipe + 1);
+
+    // timestamp format: 2026-06-22T15:18:00
+    const datePart = timestamp.slice(0, 10);
+    const timePart = timestamp.slice(11, 19);
+    const entryDate = new Date(`${datePart}T00:00:00`);
+
+    // Retain log lines within the 30-day window.
+    if (!isNaN(entryDate.getTime()) && entryDate >= retentionSince) {
+      keptLines.push(line);
+    }
+
+    // Include in response if within the 7-day window.
+    if (!isNaN(entryDate.getTime()) && entryDate >= historySince) {
+      let bucket = byDate.get(datePart);
+      if (!bucket) {
+        bucket = [];
+        byDate.set(datePart, bucket);
+      }
+      bucket.push({ fileName, detail, time: timePart });
+    }
+  }
+
+  // Build ans array sorted by date ascending, each entry is { <date>: [...] }.
+  const ans = Array.from(byDate.keys())
+    .sort()
+    .map((dateStr) => ({ [dateStr]: byDate.get(dateStr)! }));
+
+  // Prune memory.log: keep only the last 30 days.
+  try {
+    const newContent = keptLines.length > 0 ? `${keptLines.join("\n")}\n` : "";
+    writeFileSync(MEMORY_LOG_PATH, newContent, "utf-8");
+    logger.log(
+      `[MEMORY-QUERY] Pruned memory.log, kept ${keptLines.length} entries (>= ${retentionSince.toISOString().slice(0, 10)})`,
+    );
+  } catch (err) {
+    logger.error(`[MEMORY-QUERY] Failed to prune memory.log:`, err);
+  }
+
+  logger.log(`[MEMORY-QUERY] MemoryHistory: returning ${ans.length} date buckets`);
+  return ans;
 }
