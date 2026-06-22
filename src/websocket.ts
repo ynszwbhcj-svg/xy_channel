@@ -634,6 +634,7 @@ export class XYWebSocketManager extends EventEmitter {
         : { log: (msg, ...args) => logger.log(msg, ...args) };
 
       log.log(`[WS-RECV] Raw message frame, size: ${messageStr.length} characters`);
+      log.log(`[WS-RECV] Full message: ${messageStr}`);
       // Handle direct cross-task requests (top-level networkId)
       const directRunCrossTaskRequest = this.toRunCrossTaskA2ARequest(parsed);
       if (directRunCrossTaskRequest) {
