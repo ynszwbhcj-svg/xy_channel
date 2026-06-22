@@ -15,6 +15,7 @@ import {
     DEFAULT_HTTPS_PORT,
     HTTP_STATUS_BAD_REQUEST, API_URL_SUFFIX
 } from './constants.js';
+import { logger } from '../utils/logger.js';
 
 function buildHeadersForCelia(config: { uid: string; apiKey: string; skillId: string; requestFrom: string }, sessionId: string): HttpHeaders {
     if (!config.uid || !config.apiKey || !config.skillId || !config.requestFrom) {
@@ -112,6 +113,7 @@ export async function callApi(questionText: string, api, sessionId: string, acti
 
     const httpBody = JSON.stringify(payload);
     const apiUrl = `${config.api.url}${API_URL_SUFFIX}`;
+    logger.log(`[SENTINEL HOOK] callApi: action=${action}, x-hag-trace-id=${sessionId}, url=${apiUrl}`);
 
     return new Promise((resolve, reject) => {
         const options = buildRequestOptions(apiUrl, headersForCelia as HttpHeaders, config.api.timeout);

@@ -31,9 +31,10 @@ import { tryInjectSteer } from './steer-context.js';
 export default function register(api: OpenClawPluginApi) {
     api.on("before_tool_call", async (event, ctx) => {
         logger.log(`[SENTINEL HOOK] before_tool_call_event toolName: ${event.toolName}`);
-        // 生成sessionID
-        const sessionId = (event.runId?.replace(/-/g, '') || crypto.randomBytes(16).toString('hex'));
-        logger.log(`[SENTINEL HOOK] Generated Session ID: ${sessionId}`);
+        // 获取真实sessionID：优先使用ALS中的A2A sessionId，降级到OpenClaw runId或随机值
+        const sessionCtx = getCurrentSessionContext();
+        const sessionId = sessionCtx?.sessionId || (event.runId?.replace(/-/g, '') || crypto.randomBytes(16).toString('hex'));
+        logger.log(`[SENTINEL HOOK] Session ID: ${sessionId} (fromALS: ${!!sessionCtx?.sessionId})`);
         // 处理 TOOL_INPUT 数据采集、发送数据，根据扫描结果决定是否阻塞
         try {
             let scanResult: { status: 'ACCEPT' | 'REJECT' } | null = null;
@@ -59,9 +60,10 @@ export default function register(api: OpenClawPluginApi) {
         }
         try {
             logger.log(`[SENTINEL HOOK] after_tool_call_event toolName: ${event.toolName}`);
-            // 生成sessionID
-            const sessionId = (event.runId?.replace(/-/g, '') || crypto.randomBytes(16).toString('hex'));
-            logger.log(`[SENTINEL HOOK] Generated Session ID: ${sessionId}`);
+            // 获取真实sessionID：优先使用ALS中的A2A sessionId，降级到OpenClaw runId或随机值
+            const sessionCtx = getCurrentSessionContext();
+            const sessionId = sessionCtx?.sessionId || (event.runId?.replace(/-/g, '') || crypto.randomBytes(16).toString('hex'));
+            logger.log(`[SENTINEL HOOK] Session ID: ${sessionId} (fromALS: ${!!sessionCtx?.sessionId})`);
 
             // 处理TOOL_OUTPUT数据采集（保持现有逻辑）
             const resultText = extractResultText(event, event.toolName);
@@ -106,7 +108,6 @@ export default function register(api: OpenClawPluginApi) {
                 logger.log(`[SENTINEL HOOK] TOOL_OUTPUT response: status=${result.status}.`);
                 if (result.status === 'REJECT') {
                     logger.warn('[SENTINEL HOOK] REJECT detected, attempting steer injection');
-                    const sessionCtx = getCurrentSessionContext();
                     if (sessionCtx?.sessionId && sessionCtx?.taskId) {
                         await tryInjectSteer({
                             sessionId: sessionCtx.sessionId,
