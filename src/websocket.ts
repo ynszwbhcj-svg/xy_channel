@@ -753,8 +753,8 @@ export class XYWebSocketManager extends EventEmitter {
                   taskId: a2aRequest.params?.id,
                   messageId: a2aRequest.id,
                 });
-              } else if (item.header?.namespace === "AgentEvent" && item.header?.name === "memoryQuery") {
-                log.log("[XY] AgentEvent.memoryQuery detected, emitting memory-query-event");
+              } else if (item.header?.namespace === "AgentEvent" && item.header?.name === "MemoryQuery") {
+                log.log("[XY] AgentEvent.MemoryQuery detected, emitting memory-query-event");
                 this.emit("memory-query-event", {
                   ...(item.payload ?? {}),
                   sessionId,
@@ -859,8 +859,8 @@ export class XYWebSocketManager extends EventEmitter {
                     taskId: inboundMsg.taskId || a2aRequest.params?.id,
                     messageId: a2aRequest.id,
                   });
-                } else if (item.header?.namespace === "AgentEvent" && item.header?.name === "memoryQuery") {
-                  log.log("[XY] AgentEvent.memoryQuery detected (wrapped format), emitting memory-query-event");
+                } else if (item.header?.namespace === "AgentEvent" && item.header?.name === "MemoryQuery") {
+                  log.log("[XY] AgentEvent.MemoryQuery detected (wrapped format), emitting memory-query-event");
                   this.emit("memory-query-event", {
                     ...(item.payload ?? {}),
                     sessionId: inboundMsg.sessionId || a2aRequest.params?.sessionId,
