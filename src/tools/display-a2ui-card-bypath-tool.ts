@@ -16,7 +16,7 @@ export function createDisplayA2UICardByPathTool(ctx: SessionContext): any {
   const { config, sessionId, taskId, messageId } = ctx;
 
   return {
-    name: "diplay-a2ui-card-bypath",
+    name: "display-a2ui-card-bypath",
     label: "Display A2UI Card By Path",
     description: "当三方 MCP 返回的数据已经保存到本地文件时，传入 cardDSLPath，读取文件内容并作为 A2UI 卡片 DSL 内容下发给端侧。",
     parameters: {
