@@ -11,6 +11,7 @@ import { handleTriggerEvent } from "./trigger-handler.js";
 import { handleSelfEvolutionEvent, handleSelfEvolutionStateGetEvent } from "./self-evolution-handler.js";
 import { handleLoginTokenEvent } from "./login-token-handler.js";
 import { handleCronQueryEvent } from "./cron-query-handler.js";
+import { handleMemoryQueryEvent } from "./memory-query-handler.js";
 import { cleanupStaleTempFiles } from "./reply-dispatcher.js";
 import { logger } from "./utils/logger.js";
 
@@ -242,6 +243,13 @@ export async function monitorXYProvider(opts: MonitorXYOpts = {}): Promise<void>
       });
     };
 
+    const memoryQueryEventHandler = (context: any) => {
+      logger.log(`[MONITOR] Received memory-query-event, dispatching to handler...`);
+      handleMemoryQueryEvent(context, cfg).catch((err) => {
+        logger.error(`[MONITOR] Failed to handle memory-query-event:`, err);
+      });
+    };
+
     const cleanup = () => {
       logger.log("XY gateway: cleaning up...");
 
@@ -266,6 +274,7 @@ export async function monitorXYProvider(opts: MonitorXYOpts = {}): Promise<void>
       wsManager.off("self-evolution-state-get-event", selfEvolutionStateGetHandler);
       wsManager.off("login-token-event", loginTokenEventHandler);
       wsManager.off("cron-query-event", cronQueryEventHandler);
+      wsManager.off("memory-query-event", memoryQueryEventHandler);
 
       // ✅ Disconnect the wsManager to prevent connection leaks
       // This is safe because each gateway lifecycle should have clean connections
@@ -342,6 +351,7 @@ export async function monitorXYProvider(opts: MonitorXYOpts = {}): Promise<void>
     wsManager.on("self-evolution-state-get-event", selfEvolutionStateGetHandler);
     wsManager.on("login-token-event", loginTokenEventHandler);
     wsManager.on("cron-query-event", cronQueryEventHandler);
+    wsManager.on("memory-query-event", memoryQueryEventHandler);
 
     // Start periodic health check (every 6 hours)
     logger.log("Starting periodic health check (every 6 hours)...");
