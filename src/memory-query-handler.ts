@@ -70,7 +70,7 @@ export async function handleMemoryQueryEvent(context: any, cfg: any): Promise<vo
       const command = {
         header: {
           namespace: "AgentEvent",
-          name: "memoryQuery",
+          name: "MemoryQuery",
         },
         payload: {
           action,
