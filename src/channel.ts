@@ -148,6 +148,7 @@ export const xyPlugin: ChannelPlugin = {
   gateway: {
     async startAccount(context: any) {
       const { monitorXYProvider } = await import("./monitor.js");
+      const { createXyAcpBindingManager } = await import("./acp-session-binding.js");
       const account = resolveXYConfig(context.cfg);
       context.setStatus?.({
         accountId: context.accountId,
@@ -156,6 +157,12 @@ export const xyPlugin: ChannelPlugin = {
       context.log?.info(
         `[${context.accountId}] starting xiaoyi channel (wsUrl: ${account.wsUrl})`,
       );
+
+      // Register ACP session binding adapter for this account.
+      // Enables sessions_spawn(runtime="acp") to bind subagent sessions
+      // to the current A2A conversation.
+      createXyAcpBindingManager({ accountId: context.accountId, cfg: context.cfg });
+
       return monitorXYProvider({
         config: context.cfg,
         runtime: context.runtime,
