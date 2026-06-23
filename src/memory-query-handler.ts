@@ -260,9 +260,9 @@ function handleMemoryHistory(): Array<Record<string, Array<{ fileName: string; d
     const fileName = line.slice(firstPipe + 1, secondPipe);
     const detail = line.slice(secondPipe + 1);
 
-    // timestamp format: 2026-06-22T15:18:00
+    // timestamp format: 2026-06-22T15:18:00 → extract hh:mm
     const datePart = timestamp.slice(0, 10);
-    const timePart = timestamp.slice(11, 19);
+    const timePart = timestamp.slice(11, 16);
     const entryDate = new Date(`${datePart}T00:00:00`);
 
     // Retain log lines within the 30-day window.
