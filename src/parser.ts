@@ -160,6 +160,40 @@ export function extractPushId(parts: A2AMessagePart[]): string | null {
 }
 
 /**
+ * Extract app_ver from message parts.
+ * Looks for app_ver in data parts under variables.systemVariables.app_ver
+ * (same level as push_id).
+ */
+export function extractAppVer(parts: A2AMessagePart[]): string | null {
+  for (const part of parts) {
+    if (part.kind === "data" && part.data) {
+      const appVer = part.data.variables?.systemVariables?.app_ver;
+      if (appVer && typeof appVer === "string") {
+        return appVer;
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Extract display_version from message parts.
+ * Looks for display_version in data parts under variables.systemVariables.display_version
+ * (same level as push_id).
+ */
+export function extractDisplayVersion(parts: A2AMessagePart[]): string | null {
+  for (const part of parts) {
+    if (part.kind === "data" && part.data) {
+      const displayVersion = part.data.variables?.systemVariables?.display_version;
+      if (displayVersion && typeof displayVersion === "string") {
+        return displayVersion;
+      }
+    }
+  }
+  return null;
+}
+
+/**
  * Extract deviceType from message parts.
  * Looks for deviceType in data parts under variables.systemVariables.deviceType
  * (same level as push_id).
