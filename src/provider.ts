@@ -589,6 +589,16 @@ export const xiaoyiProvider: ProviderPlugin = {
       const deviceType = extractedDeviceType
         ?? getCurrentSessionContext()?.deviceType;
 
+      // app_ver and display_version from session context (ALS)
+      const appVer = sessionCtx?.appVer;
+      const displayVersion = sessionCtx?.displayVersion;
+      if (appVer) {
+        logger.log(`[xiaoyiprovider] app_ver: ${appVer}`);
+      }
+      if (displayVersion) {
+        logger.log(`[xiaoyiprovider] display_version: ${displayVersion}`);
+      }
+
       // 在发送给模型前，优化 systemPrompt 结构
       if (context.systemPrompt) {
         let sp = context.systemPrompt;
@@ -635,9 +645,19 @@ export const xiaoyiProvider: ProviderPlugin = {
       context.systemPrompt = applySelfEvolutionPrompt(context.systemPrompt, selfEvolutionEnabled);
 
       // Append device context to systemPrompt
-      if (deviceType) {
+      if (deviceType || appVer || displayVersion) {
         const displayDevice = (deviceType === "2in1") ? "鸿蒙PC" : deviceType;
-        const deviceSection = `\n\n## Current User Device Context\nThe current user is using the following device: ${displayDevice}\nYou need to be aware of the user's current device and provide guidance accordingly. If the response involves device-related tools or actions, you must tailor the reply based on the user's current device, using device-specific references such as "saved to the Notes/Calendar on your {deviceType}.\n"`;
+        let deviceSection = `\n\n## Current User Device Context\n`;
+        if (deviceType) {
+          deviceSection += `The current user is using the following device: ${displayDevice}\n`;
+        }
+        if (appVer) {
+          deviceSection += `当前用户小艺APP版本是${appVer}\n`;
+        }
+        if (displayVersion) {
+          deviceSection += `当前用户系统Rom版本是${displayVersion}\n`;
+        }
+        deviceSection += `You need to be aware of the user's current device and provide guidance accordingly. If the response involves device-related tools or actions, you must tailor the reply based on the user's current device, using device-specific references such as "saved to the Notes/Calendar on your {deviceType}.\n"`;
         context.systemPrompt = (context.systemPrompt ?? "") + deviceSection;
       }
 
