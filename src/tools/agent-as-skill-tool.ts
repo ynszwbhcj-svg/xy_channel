@@ -56,11 +56,7 @@ export function createAgentAsSkillTool(ctx: SessionContext): any {
               },
               fileUrl: {
                 type: "string",
-                description: "文件可访问下载链接（完整HTTP/HTTPS地址）",
-              },
-              fileUrlLocal: {
-                type: "string",
-                description: "文件本地路径，如果提供此字段，工具会自动上传文件并将公网URL填入fileUrl",
+                description: "文件可访问下载链接（完整HTTP/HTTPS地址）或文件本地路径。若为本地路径，工具会自动上传文件并替换为公网URL",
               },
             },
           },
@@ -111,21 +107,20 @@ export function createAgentAsSkillTool(ctx: SessionContext): any {
         );
 
         for (const fileInfo of filesInfo) {
-          if (fileInfo.fileUrlLocal && !fileInfo.fileUrl) {
+          if (fileInfo.fileUrl && !/^https?:\/\//i.test(fileInfo.fileUrl)) {
+            const localPath = fileInfo.fileUrl;
             try {
-              const publicUrl = await uploadService.uploadFileAndGetUrl(fileInfo.fileUrlLocal, "TEMPORARY_MATERIAL_DOC");
+              const publicUrl = await uploadService.uploadFileAndGetUrl(localPath, "TEMPORARY_MATERIAL_DOC");
               if (publicUrl) {
                 fileInfo.fileUrl = publicUrl;
               } else {
-                logger.warn("[AGENT-AS-SKILL] 上传文件未返回公网URL", { fileUrlLocal: fileInfo.fileUrlLocal });
+                logger.warn("[AGENT-AS-SKILL] 上传文件未返回公网URL", { localPath });
               }
             } catch (uploadError) {
-              logger.error("[AGENT-AS-SKILL] 上传本地文件失败", { fileUrlLocal: fileInfo.fileUrlLocal, error: uploadError });
-              throw new Error(`上传本地文件失败 (${fileInfo.fileUrlLocal}): ${uploadError instanceof Error ? uploadError.message : String(uploadError)}`);
+              logger.error("[AGENT-AS-SKILL] 上传本地文件失败", { localPath, error: uploadError });
+              throw new Error(`上传本地文件失败 (${localPath}): ${uploadError instanceof Error ? uploadError.message : String(uploadError)}`);
             }
           }
-          // Remove fileUrlLocal from the final payload
-          delete fileInfo.fileUrlLocal;
         }
       }
 
