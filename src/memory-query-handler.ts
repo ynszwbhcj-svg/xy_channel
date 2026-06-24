@@ -248,9 +248,10 @@ function handleMemoryHistory(): Array<Record<string, Array<{ fileName: string; d
     }
   }
 
-  // Build ans array sorted by date ascending, each entry is { <date>: [...] }.
+  // Build ans array sorted by date descending, each entry is { <date>: [...] }.
   const ans = Array.from(byDate.keys())
     .sort()
+    .reverse()
     .map((dateStr) => ({ [dateStr]: byDate.get(dateStr)!.reverse() }));
 
   // Prune memory.log: keep only the last 30 days.
