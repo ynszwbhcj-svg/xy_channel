@@ -194,11 +194,7 @@ function handleMemoryMdQuery(): { fileDetail: string } {
 
 function readMdFile(filePath: string): { fileDetail: string } {
   try {
-    let content = readFileSync(filePath, "utf-8");
-    // If content is only a newline, treat as empty
-    if (content === "\n" || content === "\r\n") {
-      content = "";
-    }
+    const content = readFileSync(filePath, "utf-8");
     logger.log(`[MEMORY-QUERY] Read file: ${filePath}, size: ${content.length}`);
     return { fileDetail: content };
   } catch (err: any) {
