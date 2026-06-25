@@ -663,7 +663,7 @@ export const xiaoyiProvider: ProviderPlugin = {
           deviceSection += `当前用户小艺APP版本是${appVer}\n`;
         }
         if (sdkApiVersion) {
-          deviceSection += `当前用户系统Rom版本是${sdkApiVersion}\n`;
+          deviceSection += `当前用户系统软件API版本是${sdkApiVersion}\n`;
         }
         deviceSection += `You need to be aware of the user's current device and provide guidance accordingly. If the response involves device-related tools or actions, you must tailor the reply based on the user's current device, using device-specific references such as "saved to the Notes/Calendar on your {deviceType}.\n"`;
         context.systemPrompt = (context.systemPrompt ?? "") + deviceSection;
