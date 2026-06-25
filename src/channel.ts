@@ -31,6 +31,7 @@ import { agentAsSkillTool } from "./tools/agent-as-skill-tool.js";
 import { discoverCrossDevicesTool } from "./tools/discover-cross-devices-tool.js";
 import { sendCrossDeviceTaskTool } from "./tools/send-cross-device-task-tool.js";
 import { displayA2UICardTool } from "./tools/display-a2ui-card-tool.js";
+import { displayA2UICardByPathTool } from "./tools/display-a2ui-card-bypath-tool.js";
 import { checkPluginPrivilegeTool } from "./tools/check-plugin-privilege-tool.js";
 
 const ALL_TOOLS: any[] = [
@@ -38,6 +39,7 @@ const ALL_TOOLS: any[] = [
   discoverCrossDevicesTool,
   sendCrossDeviceTaskTool,
   displayA2UICardTool,
+  displayA2UICardByPathTool,
   callDeviceTool,
   getNoteToolSchemaTool,
   getCalendarToolSchemaTool,
