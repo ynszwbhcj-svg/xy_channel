@@ -25,8 +25,8 @@ export interface SessionContext {
   deviceType?: string;
   /** App version extracted from A2A systemVariables (variables.systemVariables.app_ver). */
   appVer?: string;
-  /** Display version (ROM version) extracted from A2A systemVariables (variables.systemVariables.display_version). */
-  displayVersion?: string;
+  /** SDK API version extracted from A2A systemVariables (variables.systemVariables.sdk_api_version). */
+  sdkApiVersion?: string;
   /** Model name extracted from A2A user variables (variables.clientVariables.modelName).
    *  When set, provider.ts replaces model.id in the OpenAI request body. */
   modelName?: string;

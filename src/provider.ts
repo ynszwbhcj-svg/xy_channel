@@ -571,14 +571,14 @@ export const xiaoyiProvider: ProviderPlugin = {
       // deviceType: read from ALS (no more text-extraction).
       const deviceType = getCurrentSessionContext()?.deviceType;
 
-      // app_ver and display_version from session context (ALS)
+      // app_ver and sdk_api_version from session context (ALS)
       const appVer = sessionCtx?.appVer;
-      const displayVersion = sessionCtx?.displayVersion;
+      const sdkApiVersion = sessionCtx?.sdkApiVersion;
       if (appVer) {
         logger.log(`[xiaoyiprovider] app_ver: ${appVer}`);
       }
-      if (displayVersion) {
-        logger.log(`[xiaoyiprovider] display_version: ${displayVersion}`);
+      if (sdkApiVersion) {
+        logger.log(`[xiaoyiprovider] sdk_api_version: ${sdkApiVersion}`);
       }
 
       // 在发送给模型前，优化 systemPrompt 结构
@@ -627,7 +627,7 @@ export const xiaoyiProvider: ProviderPlugin = {
       context.systemPrompt = applySelfEvolutionPrompt(context.systemPrompt, selfEvolutionEnabled);
 
       // Append device context to systemPrompt
-      if (deviceType || appVer || displayVersion) {
+      if (deviceType || appVer || sdkApiVersion) {
         const displayDevice = (deviceType === "2in1") ? "鸿蒙PC" : deviceType;
         let deviceSection = `\n\n## Current User Device Context\n`;
         if (deviceType) {
@@ -636,8 +636,8 @@ export const xiaoyiProvider: ProviderPlugin = {
         if (appVer) {
           deviceSection += `当前用户小艺APP版本是${appVer}\n`;
         }
-        if (displayVersion) {
-          deviceSection += `当前用户系统Rom版本是${displayVersion}\n`;
+        if (sdkApiVersion) {
+          deviceSection += `当前用户系统Rom版本是${sdkApiVersion}\n`;
         }
         deviceSection += `You need to be aware of the user's current device and provide guidance accordingly. If the response involves device-related tools or actions, you must tailor the reply based on the user's current device, using device-specific references such as "saved to the Notes/Calendar on your {deviceType}.\n"`;
         context.systemPrompt = (context.systemPrompt ?? "") + deviceSection;

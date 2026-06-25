@@ -3,7 +3,7 @@ import type { ClawdbotConfig, RuntimeEnv, ReplyPayload } from "openclaw/plugin-s
 import { updateSessionStoreEntry, updateSessionStore, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { getXYRuntime } from "./runtime.js";
 import { createXYReplyDispatcher } from "./reply-dispatcher.js";
-import { parseA2AMessage, extractTextFromParts, extractFileParts, extractPushId, extractDeviceType, extractAppVer, extractDisplayVersion, extractModelName, extractTriggerData, extractRunCrossTaskContext, isClearContextMessage, isTasksCancelMessage } from "./parser.js";
+import { parseA2AMessage, extractTextFromParts, extractFileParts, extractPushId, extractDeviceType, extractAppVer, extractSdkApiVersion, extractModelName, extractTriggerData, extractRunCrossTaskContext, isClearContextMessage, isTasksCancelMessage } from "./parser.js";
 import { downloadFilesFromParts } from "./file-download.js";
 import { resolveXYConfig } from "./config.js";
 import { sendStatusUpdate, sendClearContextResponse, sendTasksCancelResponse, sendA2AResponse } from "./formatter.js";
@@ -191,14 +191,14 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
       log.log(`[BOT] Extracted deviceType: ${deviceType}`);
     }
 
-    // Extract app_ver and display_version if present
+    // Extract app_ver and sdk_api_version if present
     const appVer = extractAppVer(parsed.parts);
     if (appVer) {
       log.log(`[BOT] Extracted app_ver: ${appVer}`);
     }
-    const displayVersion = extractDisplayVersion(parsed.parts);
-    if (displayVersion) {
-      log.log(`[BOT] Extracted display_version: ${displayVersion}`);
+    const sdkApiVersion = extractSdkApiVersion(parsed.parts);
+    if (sdkApiVersion) {
+      log.log(`[BOT] Extracted sdk_api_version: ${sdkApiVersion}`);
     }
 
     // Extract modelName if present (used by provider.ts to override model.id)
@@ -440,6 +440,8 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
       messageId: parsed.messageId,
       agentId: route.accountId,
       deviceType,
+      appVer: appVer ?? undefined,
+      sdkApiVersion: sdkApiVersion ?? undefined,
       modelName,
       runCrossTaskContext: runCrossTaskContext ?? undefined,
     };
