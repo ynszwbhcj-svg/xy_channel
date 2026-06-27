@@ -177,16 +177,16 @@ export function extractAppVer(parts: A2AMessagePart[]): string | null {
 }
 
 /**
- * Extract display_version from message parts.
- * Looks for display_version in data parts under variables.systemVariables.display_version
+ * Extract sdk_api_version from message parts.
+ * Looks for sdk_api_version in data parts under variables.systemVariables.sdk_api_version
  * (same level as push_id).
  */
-export function extractDisplayVersion(parts: A2AMessagePart[]): string | null {
+export function extractSdkApiVersion(parts: A2AMessagePart[]): string | null {
   for (const part of parts) {
     if (part.kind === "data" && part.data) {
-      const displayVersion = part.data.variables?.systemVariables?.display_version;
-      if (displayVersion && typeof displayVersion === "string") {
-        return displayVersion;
+      const sdkApiVersion = part.data.variables?.systemVariables?.sdk_api_version;
+      if (sdkApiVersion && typeof sdkApiVersion === "string") {
+        return sdkApiVersion;
       }
     }
   }

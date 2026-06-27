@@ -30,9 +30,7 @@ const DEVICE_TOOL_POLICY: Partial<Record<DeviceType, DeviceToolPolicy>> = {
   },
   "pad": {
     allowlist: false,
-    tools: [
-      "xiaoyi_gui_agent"
-    ],
+    tools: [],
   },
   "web": {
     allowlist: true,
