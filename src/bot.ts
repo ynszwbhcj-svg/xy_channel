@@ -161,6 +161,14 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
     if (!skipReg) {
       registerTaskId(parsed.sessionId, parsed.taskId, parsed.messageId);
 
+      // 🔑 steer 场景：同步更新活跃 dispatcher 的 fallback taskId/messageId
+      if (isUpdate) {
+        const updater = dispatcherUpdaters.get(parsed.sessionId);
+        if (updater) {
+          updater(parsed.taskId, parsed.messageId);
+        }
+      }
+
       // Extract and update push_id if present
       const pushId = extractPushId(parsed.parts);
       if (pushId) {
@@ -427,7 +435,7 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
       log.log(`[BOT] Cleanup completed`);
     };
 
-    const { dispatcher, replyOptions, markDispatchIdle, startStatusInterval } = createXYReplyDispatcher({
+    const { dispatcher, replyOptions, markDispatchIdle, startStatusInterval, updateFallbackTaskId } = createXYReplyDispatcher({
       cfg,
       runtime,
       sessionId: parsed.sessionId,
@@ -437,6 +445,9 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
       steerState,
       onIdleComplete: cleanup,
     });
+
+    // 🔑 注册 dispatcher 的 fallback taskId 更新函数，供 steer 路径调用
+    dispatcherUpdaters.set(parsed.sessionId, updateFallbackTaskId);
 
     // Steer injections don't need status intervals
     if (!skipReg) {
@@ -473,6 +484,7 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
 
         // cleanup 已由 onIdleComplete 在 onIdle 的 finally 中执行。
         // onSettled 不做任何清理（直接在这里清理会发生 race condition）。
+        dispatcherUpdaters.delete(parsed.sessionId);
       },
       run: () => {
         // 🔐 Use AsyncLocalStorage to provide session context to tools.
@@ -582,9 +594,11 @@ const _g = globalThis as Record<string, unknown>;
 
 if (!_g.__xyStreamingSignals) _g.__xyStreamingSignals = new Map<string, StreamingSignal>();
 if (!_g.__xySteerQueues) _g.__xySteerQueues = new Map<string, Promise<void>>();
+if (!_g.__xyDispatcherUpdaters) _g.__xyDispatcherUpdaters = new Map<string, (taskId: string, messageId: string) => void>();
 
 const streamingSignals = _g.__xyStreamingSignals as Map<string, StreamingSignal>;
 const steerQueues = _g.__xySteerQueues as Map<string, Promise<void>>;
+const dispatcherUpdaters = _g.__xyDispatcherUpdaters as Map<string, (taskId: string, messageId: string) => void>;
 
 /**
  * 由 provider.ts 在 wrapStreamFn 调用时触发。

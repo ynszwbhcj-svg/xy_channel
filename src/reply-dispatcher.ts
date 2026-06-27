@@ -133,17 +133,25 @@ export async function cleanupStaleTempFiles(tempDir: string = "/tmp/xy_channel")
 export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): any {
   const { cfg, runtime, sessionId, taskId, messageId, accountId, steerState, onIdleComplete } = params;
 
-  // 初始taskId和messageId（作为fallback）
-  const initialTaskId = taskId;
-  const initialMessageId = messageId;
+  // fallback taskId/messageId（当 task-manager 返回 null 时使用）
+  // steer 触发时会通过 updateFallbackTaskId() 更新为最新的 taskId
+  let currentFallbackTaskId = taskId;
+  let currentFallbackMessageId = messageId;
 
   // 跨链读取：steer 消息通过 registerTaskId 更新 Map，这里读取最新 taskId
   const getActiveTaskId = (): string => {
-    return getCurrentTaskId(sessionId) ?? initialTaskId;
+    return getCurrentTaskId(sessionId) ?? currentFallbackTaskId;
   };
 
   const getActiveMessageId = (): string => {
-    return getCurrentMessageId(sessionId) ?? initialMessageId;
+    return getCurrentMessageId(sessionId) ?? currentFallbackMessageId;
+  };
+
+  /** steer 触发时调用，同步 fallback taskId/messageId 到最新值 */
+  const updateFallbackTaskId = (newTaskId: string, newMessageId: string) => {
+    currentFallbackTaskId = newTaskId;
+    currentFallbackMessageId = newMessageId;
+    logger.log(`[DISPATCHER-UPDATE] Updated fallback taskId: ${newTaskId}`);
   };
 
   // Create a scoped logger that always uses this session's sessionId
@@ -544,5 +552,6 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
     markDispatchIdle,
     startStatusInterval,
     stopStatusInterval,
+    updateFallbackTaskId,
   };
 }
