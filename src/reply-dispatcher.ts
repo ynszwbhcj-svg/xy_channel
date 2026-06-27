@@ -299,104 +299,110 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
           return;  // ← 直接返回，不发送任何东西！
         }
 
-        // 正常模式（或未被steer的dispatch）
-        if (hasSentResponse && !finalSent) {
-          const trimmedFinalReplyText = finalReplyText.trim();
-          const trimmedAccumulatedText = accumulatedText.trim();
-          const crossTaskResultMessage = trimmedFinalReplyText || trimmedAccumulatedText;
-          const crossTaskResultSource = trimmedFinalReplyText ? "final" : "accumulated";
-          scopedLog().log(`[ON-IDLE] [SendCrossResult]Sending cross-task result, source=${crossTaskResultSource}, resultMessage.length=${crossTaskResultMessage.length}`);
-          try {
-            const runCrossTaskContext = getRunCrossTaskContext();
-            if (runCrossTaskContext) {
-              await sendRunCrossTaskResult({
+        // 🔑 用 try/finally 确保 cleanup 在 onIdle 的 async 工作全部完成后才执行。
+        // openclaw 的 waitForIdle() 以 void options.onIdle?.() 调用 onIdle，
+        // 不会 await 返回的 Promise，因此 onSettled 可能在 onIdle 中途触发。
+        // 所有清理逻辑必须放在 finally 块中，不要依赖 onSettled。
+        try {
+          // 正常模式（或未被steer的dispatch）
+          if (hasSentResponse && !finalSent) {
+            const trimmedFinalReplyText = finalReplyText.trim();
+            const trimmedAccumulatedText = accumulatedText.trim();
+            const crossTaskResultMessage = trimmedFinalReplyText || trimmedAccumulatedText;
+            const crossTaskResultSource = trimmedFinalReplyText ? "final" : "accumulated";
+            scopedLog().log(`[ON-IDLE] [SendCrossResult]Sending cross-task result, source=${crossTaskResultSource}, resultMessage.length=${crossTaskResultMessage.length}`);
+            try {
+              const runCrossTaskContext = getRunCrossTaskContext();
+              if (runCrossTaskContext) {
+                await sendRunCrossTaskResult({
+                  config,
+                  sessionId,
+                  taskId: getActiveTaskId(),
+                  messageId: getActiveMessageId(),
+                  context: runCrossTaskContext,
+                  resultCode: "0",
+                  resultMessage: crossTaskResultMessage,
+                });
+              }
+
+              // 🔑 使用动态taskId发送完成状态
+              await sendStatusUpdate({
                 config,
                 sessionId,
                 taskId: getActiveTaskId(),
                 messageId: getActiveMessageId(),
-                context: runCrossTaskContext,
-                resultCode: "0",
-                resultMessage: crossTaskResultMessage,
+                text: "任务处理已完成~",
+                state: "completed",
               });
-            }
+              scopedLog().log(`[ON-IDLE] Sent completion status update`);
 
-            // 🔑 使用动态taskId发送完成状态
-            await sendStatusUpdate({
-              config,
-              sessionId,
-              taskId: getActiveTaskId(),
-              messageId: getActiveMessageId(),
-              text: "任务处理已完成~",
-              state: "completed",
-            });
-            scopedLog().log(`[ON-IDLE] Sent completion status update`);
-
-            // 🔑 使用动态taskId发送最终响应（空字符串表示流结束）
-            await sendA2AResponse({
-              config,
-              sessionId,
-              taskId: getActiveTaskId(),
-              messageId: getActiveMessageId(),
-              text: "",
-              append: true,
-              final: true,
-            });
-            finalSent = true;
-            scopedLog().log(`[ON-IDLE] Sent final response (empty, stream end)`);
-          } catch (err) {
-            scopedLog().error(`[ON-IDLE] Failed to send final response:`, err);
-          }
-        } else {
-          // 正常失败场景（非steered）
-          scopedLog().log(`[ON-IDLE] Skipping final message: hasSentResponse=${hasSentResponse}, finalSent=${finalSent}`);
-          try {
-            const runCrossTaskContext = getRunCrossTaskContext();
-            if (runCrossTaskContext) {
-              await sendRunCrossTaskResult({
+              // 🔑 使用动态taskId发送最终响应（空字符串表示流结束）
+              await sendA2AResponse({
                 config,
                 sessionId,
                 taskId: getActiveTaskId(),
                 messageId: getActiveMessageId(),
-                context: runCrossTaskContext,
-                resultCode: "1",
-                resultMessage: "任务执行异常，请重试",
+                text: "",
+                append: true,
+                final: true,
               });
+              finalSent = true;
+              scopedLog().log(`[ON-IDLE] Sent final response (empty, stream end)`);
+            } catch (err) {
+              scopedLog().error(`[ON-IDLE] Failed to send final response:`, err);
             }
+          } else {
+            // 正常失败场景（非steered）
+            scopedLog().log(`[ON-IDLE] Skipping final message: hasSentResponse=${hasSentResponse}, finalSent=${finalSent}`);
+            try {
+              const runCrossTaskContext = getRunCrossTaskContext();
+              if (runCrossTaskContext) {
+                await sendRunCrossTaskResult({
+                  config,
+                  sessionId,
+                  taskId: getActiveTaskId(),
+                  messageId: getActiveMessageId(),
+                  context: runCrossTaskContext,
+                  resultCode: "1",
+                  resultMessage: "任务执行异常，请重试",
+                });
+              }
 
-            await sendStatusUpdate({
-              config,
-              sessionId,
-              taskId: getActiveTaskId(),
-              messageId: getActiveMessageId(),
-              text: "任务处理中断了~",
-              state: "failed",
-            });
-            scopedLog().log(`[ON-IDLE] Sent failure status update`);
+              await sendStatusUpdate({
+                config,
+                sessionId,
+                taskId: getActiveTaskId(),
+                messageId: getActiveMessageId(),
+                text: "任务处理中断了~",
+                state: "failed",
+              });
+              scopedLog().log(`[ON-IDLE] Sent failure status update`);
 
-            await sendA2AResponse({
-              config,
-              sessionId,
-              taskId: getActiveTaskId(),
-              messageId: getActiveMessageId(),
-              text: "任务执行异常，请重试~",
-              append: true,
-              final: true,
-              errorCode: 99921111,
-              errorMessage: "任务执行异常，请重试",
-            });
-            finalSent = true;
-            scopedLog().log(`[ON-IDLE] Sent error response, code=99921111`);
-          } catch (err) {
-            scopedLog().error(`[ON-IDLE] Failed to send error response:`, err);
+              await sendA2AResponse({
+                config,
+                sessionId,
+                taskId: getActiveTaskId(),
+                messageId: getActiveMessageId(),
+                text: "任务执行异常，请重试~",
+                append: true,
+                final: true,
+                errorCode: 99921111,
+                errorMessage: "任务执行异常，请重试",
+              });
+              finalSent = true;
+              scopedLog().log(`[ON-IDLE] Sent error response, code=99921111`);
+            } catch (err) {
+              scopedLog().error(`[ON-IDLE] Failed to send error response:`, err);
+            }
           }
+        } finally {
+          stopStatusInterval();
+
+          // 🔑 清理必须在 onIdle 内部完成，因为 openclaw 的 waitForIdle() 不会
+          // await onIdle 返回的 Promise（源码中为 void options.onIdle?.()），
+          // 导致 onSettled 在 onIdle 的 async 工作完成之前就执行。
+          await onIdleComplete?.();
         }
-
-        stopStatusInterval();
-
-        // 🔑 清理必须在 onIdle 内部完成，因为 openclaw 的 waitForIdle() 不会
-        // await onIdle 返回的 Promise（源码中为 void options.onIdle?.()），
-        // 导致 onSettled 在 onIdle 的 async 工作完成之前就执行。
-        await onIdleComplete?.();
       },
 
       onCleanup: () => {

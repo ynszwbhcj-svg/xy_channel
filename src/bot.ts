@@ -471,9 +471,8 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
           return;
         }
 
-        // Fallback cleanup: 正常流程下 onIdleComplete 已经执行过，cleaned=true 会跳过。
-        // 仅在 onIdle 未正常完成时（如异常），这里做兜底清理。
-        cleanup();
+        // cleanup 已由 onIdleComplete 在 onIdle 的 finally 中执行。
+        // onSettled 不做任何清理（直接在这里清理会发生 race condition）。
       },
       run: () => {
         // 🔐 Use AsyncLocalStorage to provide session context to tools.
