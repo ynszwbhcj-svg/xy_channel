@@ -18,6 +18,9 @@ export interface CreateXYReplyDispatcherParams {
   messageId: string;
   accountId: string;
   steerState: { steered: boolean };  // Dynamic flag set when dispatchReplyFromConfig steers
+  /** Called at end of onIdle, after final frame is sent. openclaw's waitForIdle() does
+   *  not await the async onIdle, so cleanup must happen inside onIdle itself. */
+  onIdleComplete?: () => void | Promise<void>;
 }
 
 const TEMP_FILE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
@@ -128,7 +131,7 @@ export async function cleanupStaleTempFiles(tempDir: string = "/tmp/xy_channel")
  * Runtime is expected to be validated before calling this function.
  */
 export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): any {
-  const { cfg, runtime, sessionId, taskId, messageId, accountId, steerState } = params;
+  const { cfg, runtime, sessionId, taskId, messageId, accountId, steerState, onIdleComplete } = params;
 
   // 初始taskId和messageId（作为fallback）
   const initialTaskId = taskId;
@@ -389,6 +392,11 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
         }
 
         stopStatusInterval();
+
+        // 🔑 清理必须在 onIdle 内部完成，因为 openclaw 的 waitForIdle() 不会
+        // await onIdle 返回的 Promise（源码中为 void options.onIdle?.()），
+        // 导致 onSettled 在 onIdle 的 async 工作完成之前就执行。
+        await onIdleComplete?.();
       },
 
       onCleanup: () => {

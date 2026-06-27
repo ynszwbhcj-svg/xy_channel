@@ -416,6 +416,17 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
     // 🔑 创建dispatcher
     log.log(`[BOT-DISPATCHER] Creating reply dispatcher`);
 
+    // Cleanup: 必须在 onIdle 内部执行（参见 reply-dispatcher.ts 中 onIdleComplete 的注释）
+    let cleaned = false;
+    const cleanup = () => {
+      if (cleaned) return;
+      cleaned = true;
+      log.log(`[BOT] Cleanup started`);
+      streamingSignals.delete(parsed.sessionId);
+      decrementTaskIdRef(parsed.sessionId);
+      log.log(`[BOT] Cleanup completed`);
+    };
+
     const { dispatcher, replyOptions, markDispatchIdle, startStatusInterval } = createXYReplyDispatcher({
       cfg,
       runtime,
@@ -424,6 +435,7 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
       messageId: parsed.messageId,
       accountId: route.accountId,
       steerState,
+      onIdleComplete: cleanup,
     });
 
     // Steer injections don't need status intervals
@@ -453,15 +465,15 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
       onSettled: () => {
         log.log(`[BOT] onSettled, steered=${steerState.steered}`);
 
-        // 🔑 When steered, skip heavy cleanup — the first message's dispatcher is still running
+        // 🔑 When steered, skip cleanup — the first message's dispatcher is still running
         if (steerState.steered) {
           log.log(`[BOT] Steered dispatch settled, skipping cleanup`);
           return;
         }
 
-        streamingSignals.delete(parsed.sessionId);
-        decrementTaskIdRef(parsed.sessionId);
-        log.log(`[BOT] Cleanup completed`);
+        // Fallback cleanup: 正常流程下 onIdleComplete 已经执行过，cleaned=true 会跳过。
+        // 仅在 onIdle 未正常完成时（如异常），这里做兜底清理。
+        cleanup();
       },
       run: () => {
         // 🔐 Use AsyncLocalStorage to provide session context to tools.
