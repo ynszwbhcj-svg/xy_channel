@@ -45,6 +45,9 @@ export async function handleMemoryQueryEvent(context: any, cfg: any): Promise<vo
       case "MemoryStateSet":
         result = handleMemoryStateSet(params);
         break;
+      case "MemoryStateGet":
+        result = handleMemoryStateGet();
+        break;
       case "UserMdQuery":
         result = handleUserMdQuery();
         break;
@@ -141,6 +144,36 @@ function handleMemoryStateSet(params: any): { code: number } {
 
   logger.log(`[MEMORY-QUERY] updated ${MEMORY_STATE_KEY}=${value} in ${filePath}`);
   return { code: 0 };
+}
+
+/**
+ * Read MEMORYSTATE from .xiaoyiruntime and return its boolean value.
+ * Missing file or key defaults to false.
+ */
+function handleMemoryStateGet(): { memoryState: boolean } {
+  const filePath = resolveXiaoyiRuntimePath();
+  let content: string;
+  try {
+    content = readFileSync(filePath, "utf-8");
+  } catch (err: any) {
+    if (err.code === "ENOENT") {
+      logger.log(`[MEMORY-QUERY] ${filePath} not found`);
+    } else {
+      logger.error(`[MEMORY-QUERY] Failed to read ${filePath}:`, err);
+    }
+    return { memoryState: false };
+  }
+
+  for (const line of content.split("\n")) {
+    if (line.startsWith(`${MEMORY_STATE_KEY}=`)) {
+      const value = line.slice(`${MEMORY_STATE_KEY}=`.length).trim();
+      logger.log(`[MEMORY-QUERY] read ${MEMORY_STATE_KEY}=${value} from ${filePath}`);
+      return { memoryState: value === "true" };
+    }
+  }
+
+  logger.log(`[MEMORY-QUERY] ${MEMORY_STATE_KEY} not found in ${filePath}`);
+  return { memoryState: false };
 }
 
 /**
