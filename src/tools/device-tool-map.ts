@@ -42,7 +42,6 @@ const DEVICE_TOOL_POLICY: Partial<Record<DeviceType, DeviceToolPolicy>> = {
       "image_reading",
       "convert_time_to_utc8_time",
       "save_self_evolution_skill",
-      "displayA2UICard",
       "display-a2ui-card-bypath",
     ],
   },
