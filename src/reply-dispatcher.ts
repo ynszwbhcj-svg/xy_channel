@@ -493,18 +493,15 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
       onReasoningStream: async (payload: ReplyPayload) => {
         // 🔑 steered dispatch不发送reasoning stream
         if (steerState.steered) {
-          scopedLog().log(`[REASONING-STREAM] Skipped (steered dispatch)`);
           return;
         }
 
         let text = payload.text ?? "";
-        scopedLog().log(`[REASONING-STREAM] Received reasoning chunk, rawText.length=${text.length}, steered=${steerState.steered}`);
 
         // Strip "Reasoning:" prefix that some reasoning models add to their thinking output
         const lines = text.split(/\r?\n/);
         if (lines[0]?.trim() === "Reasoning:") {
           text = lines.slice(1).join("\n").trim();
-          scopedLog().log(`[REASONING-STREAM] Stripped "Reasoning:" prefix, text.length=${text.length}`);
         }
 
         try {
@@ -517,8 +514,6 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
               text,
               append: false,
             });
-          } else {
-            scopedLog().log(`[REASONING-STREAM] Skipped (empty text after stripping)`);
           }
         } catch (err) {
           scopedLog().error(`[REASONING-STREAM] Failed to send reasoning text:`, err);

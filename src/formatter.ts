@@ -199,9 +199,6 @@ export async function sendReasoningTextUpdate(params: SendReasoningTextUpdatePar
     result: artifact,
   };
 
-  const redactedText = redactSensitiveText(bridgedText);
-  log.log(`[A2A_REASONING] Sending reasoning update, append=${append}, taskId=${taskId}, messageId=${messageId}, text=${buildTextPreview(redactedText)}, sensitive=${containsSensitiveInfo(bridgedText)}`);
-
   const wsManager = getXYWebSocketManager(config);
   const outboundMessage: OutboundWebSocketMessage = {
     msgType: "agent_response",
@@ -211,7 +208,6 @@ export async function sendReasoningTextUpdate(params: SendReasoningTextUpdatePar
     msgDetail: JSON.stringify(jsonRpcResponse),
   };
   await wsManager.sendMessage(sessionId, outboundMessage);
-  log.log(`[A2A_REASONING] Reasoning update sent successfully`);
 }
 
 /**
