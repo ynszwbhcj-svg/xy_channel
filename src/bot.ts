@@ -1,5 +1,6 @@
 // Message dispatch engine - following feishu/bot.ts pattern (simplified)
 import type { ClawdbotConfig, RuntimeEnv, ReplyPayload } from "openclaw/plugin-sdk";
+import { resolveRuntimeConversationBindingRoute } from "openclaw/plugin-sdk/conversation-runtime";
 import { updateSessionStoreEntry, updateSessionStore, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { getXYRuntime } from "./runtime.js";
 import { createXYReplyDispatcher } from "./reply-dispatcher.js";
@@ -233,6 +234,22 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
     });
 
     log.log(`[BOT] Resolved route, sessionKey=${route.sessionKey}`);
+
+    // Check for ACP runtime binding on this A2A conversation
+    const runtimeRoute = resolveRuntimeConversationBindingRoute({
+      route,
+      channel: "xiaoyi-channel",
+      accountId,
+      conversationId: parsed.sessionId,
+    });
+    route = runtimeRoute.route;
+    if (runtimeRoute.bindingRecord) {
+      log.log(
+        runtimeRoute.boundSessionKey
+          ? `[BOT] routed via bound conversation ${parsed.sessionId} -> ${runtimeRoute.boundSessionKey}`
+          : `[BOT] plugin-bound conversation ${parsed.sessionId}`,
+      );
+    }
 
     // ALS only: no registerSession. The sessionContext built below is handed
     // to runWithSessionContext() inside withReplyDispatcher.run, which is the

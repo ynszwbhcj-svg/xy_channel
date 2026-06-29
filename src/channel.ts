@@ -139,6 +139,14 @@ export const xyPlugin: ChannelPlugin = {
         ? { conversationId, matchPriority: 2 }
         : null;
     },
+    resolveCommandConversation: ({ accountId }) => {
+      // xiaoyi-channel: the A2A sessionId IS the conversationId.
+      // Read from the current ALS session context.
+      const ctx = getCurrentSessionContext();
+      const sessionId = ctx?.sessionId?.trim();
+      if (!sessionId) return null;
+      return { conversationId: sessionId };
+    },
   },
 
   reload: {
