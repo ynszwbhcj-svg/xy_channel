@@ -428,6 +428,26 @@ function trimUserMetadata(text: string): string {
   return text.replace(/\n{3,}/g, "\n\n");
 }
 
+/**
+ * Extract A2A taskId and deviceType from Conversation info JSON.
+ * bot.ts stores them as MessageSid = "xiaoyi_taskId_deviceType".
+ * The "xiaoyi_" prefix ensures extraction only happens for messages
+ * routed through xiaoyi-channel, not other channels sharing the provider.
+ *
+ * This is the most reliable source during steer scenarios: ALS still holds
+ * the first message's taskId, but the text extraction sees the latest
+ * injected user message which carries the updated taskId.
+ */
+function extractA2AFromConversationInfo(text: string): { taskId: string; deviceType: string } | null {
+  const match = text.match(/Conversation info \(untrusted metadata\):\n```json\n([\s\S]*?)\n```/);
+  if (!match) return null;
+  const msgIdMatch = match[1].match(/"message_id"\s*:\s*"([^"]+)"/);
+  if (!msgIdMatch) return null;
+  const parts = msgIdMatch[1].split("_");
+  if (parts.length < 3 || parts[0] !== "xiaoyi") return null;
+  return { taskId: parts[1], deviceType: parts[2] };
+}
+
 export const xiaoyiProvider: ProviderPlugin = {
   id: "xiaoyiprovider",
   label: "Xiaoyi Provider",
@@ -498,11 +518,38 @@ export const xiaoyiProvider: ProviderPlugin = {
     return async (model, context, options) => {
       const dynamicHeaders: Record<string, string> = {};
 
+      // ── Extract A2A taskId/deviceType from Conversation info ──
+      // bot.ts stores taskId_deviceType as MessageSid, which the framework
+      // renders as message_id in the Conversation info JSON block.
+      // This is the priority source: it reflects the latest user message
+      // even during steer when ALS still holds the first message's taskId.
+      let extractedTaskId: string | null = null;
+      let extractedDeviceType: string | null = null;
+      if (context.messages) {
+        for (let i = context.messages.length - 1; i >= 0; i--) {
+          const msg = context.messages[i];
+          if (msg.role !== "user") continue;
+          const text = typeof msg.content === "string"
+            ? msg.content
+            : Array.isArray(msg.content)
+              ? (msg.content.find((b: any) => b.type === "text") as any)?.text ?? ""
+              : "";
+          if (!text) continue;
+          const extracted = extractA2AFromConversationInfo(text);
+          if (extracted) {
+            extractedTaskId = extracted.taskId;
+            extractedDeviceType = extracted.deviceType;
+            break;
+          }
+        }
+      }
+
       // ── Build dynamic headers ────────────────────────────
       // Priority:
       //   1. Cron-triggered: uid → cronUuid, with cron-specific headers
-      //   2. Xiaoyi A2A: rawTaskId from AsyncLocalStorage, split on "&"
-      //   3. UID-based fallback: sha256(uid).hex[:32]_timestamp
+      //   2. Xiaoyi A2A: taskId from Conversation info text (latest msg, steer-safe)
+      //   3. ALS fallback: rawTaskId from AsyncLocalStorage
+      //   4. UID-based fallback: sha256(uid).hex[:32]_timestamp
       const isCron = isCronTriggered(context.messages);
 
       if (isCron) {
@@ -531,11 +578,17 @@ export const xiaoyiProvider: ProviderPlugin = {
         if (cronTitle) dynamicHeaders["x-cron-title"] = encodeURIComponent(cronTitle);
         if (context.messages?.length === 1) dynamicHeaders["x-cron-flag"] = "begin";
         logger.log(`[ALS-PROOF] provider headers source=cron`);
+      } else if (extractedTaskId) {
+        const sessionId = extractedTaskId.split("&")[0];
+        const interactionId = extractedTaskId.split("&")[1] ?? "";
+        dynamicHeaders[HEADER_TRACE_ID] = extractedTaskId;
+        dynamicHeaders[HEADER_SESSION_ID] = sessionId;
+        dynamicHeaders[HEADER_INTERACTION_ID] = interactionId;
+        logger.log(`[ALS-PROOF] provider headers source=text-extract traceId=${extractedTaskId} sessionId=${sessionId} interactionId=${interactionId}`);
       } else {
-        // ALS path: rawTaskId comes from the per-turn AsyncLocalStorage scope
-        // set by bot.ts runWithSessionContext. Real upstream params.id is
-        // `realSession&realInteraction`; tester UUIDs degenerate to the whole
-        // id as sessionId with empty interactionId.
+        // ALS fallback: rawTaskId from the per-turn AsyncLocalStorage scope.
+        // Text extraction (above) is preferred because during steer the ALS
+        // scope may still hold the first message's taskId.
         const als = getCurrentSessionContext();
         const rawTaskId = als?.taskId;
         if (rawTaskId) {
@@ -568,8 +621,9 @@ export const xiaoyiProvider: ProviderPlugin = {
       if (context.systemPrompt) {
         logger.log(`[xiaoyiprovider] system prompt length: ${context.systemPrompt.length}`);
       }
-      // deviceType: read from ALS (no more text-extraction).
-      const deviceType = getCurrentSessionContext()?.deviceType;
+      // deviceType: prefer text-extracted value, ALS as fallback.
+      const deviceType = extractedDeviceType
+        ?? getCurrentSessionContext()?.deviceType;
 
       // app_ver and sdk_api_version from session context (ALS)
       const appVer = sessionCtx?.appVer;
