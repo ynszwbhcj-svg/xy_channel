@@ -8,6 +8,7 @@ const DEFAULT_CONFIG: ToolRetrieverConfig = {
   includeUninstalledOnly: true,
   envFilePath: "~/.openclaw/.xiaoyienv",
   timeoutMs: 1000,
+  excludedSkills: ["content-compliance", "plugin-audit"],
 };
 
 export function normalizeToolRetrieverConfig(raw?: unknown): NormalizedConfig {
@@ -26,5 +27,6 @@ export function normalizeToolRetrieverConfig(raw?: unknown): NormalizedConfig {
     apiKey: cfg.apiKey,
     uid: cfg.uid,
     timeoutMs: cfg.timeoutMs ?? DEFAULT_CONFIG.timeoutMs,
+    excludedSkills: cfg.excludedSkills ?? DEFAULT_CONFIG.excludedSkills,
   };
 }

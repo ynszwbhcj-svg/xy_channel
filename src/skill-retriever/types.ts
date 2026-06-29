@@ -7,6 +7,7 @@ export interface ToolRetrieverConfig {
   apiKey?: string;
   uid?: string;
   timeoutMs?: number;
+  excludedSkills?: string[];
 }
 
 export interface RawSkill {

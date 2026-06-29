@@ -62,25 +62,40 @@ export function readEnvFile(filePath: string): EnvConfig {
   return envDict;
 }
 
-export function getInstalledSkills(): string[] {
-  const skillsDir = expandPath("~/.openclaw/workspace/skills");
-  const installedSkills: string[] = [];
+export function getSkillsInDirectory(dirPath: string): string[] {
+  const expandedDir = expandPath(dirPath);
+  const skills: string[] = [];
 
   try {
-    if (fs.existsSync(skillsDir) && fs.statSync(skillsDir).isDirectory()) {
-      const entries = fs.readdirSync(skillsDir);
+    if (fs.existsSync(expandedDir) && fs.statSync(expandedDir).isDirectory()) {
+      const entries = fs.readdirSync(expandedDir);
       for (const entry of entries) {
-        const entryPath = path.join(skillsDir, entry);
+        const entryPath = path.join(expandedDir, entry);
         if (fs.statSync(entryPath).isDirectory()) {
-          installedSkills.push(entry);
+          skills.push(entry);
         }
       }
     }
   } catch {
-    // Directory doesn't exist or read error - return empty list
+    // 目录不存在或读取错误 - 返回空列表
   }
 
-  return installedSkills;
+  return skills;
+}
+
+export function getInstalledSkills(): string[] {
+  return getSkillsInDirectory("~/.openclaw/workspace/skills");
+}
+
+export function buildExcludedSkillIds(excludedSkills?: string[]): Set<string> {
+  const coreSkills = getSkillsInDirectory("~/core_skills");
+  const excluded = new Set<string>(coreSkills);
+  if (excludedSkills) {
+    for (const skillId of excludedSkills) {
+      excluded.add(skillId);
+    }
+  }
+  return excluded;
 }
 
 function formatSkillData(rawSkills: RawSkill[], installedSkills: string[]): FormattedSkill[] {
@@ -110,6 +125,7 @@ export interface SearchToolsOptions {
   apiKey?: string;
   uid?: string;
   timeoutMs?: number;
+  configExcludedSkills?: string[];
 }
 
 export async function searchTools(options: SearchToolsOptions): Promise<ToolSearchResult | null> {
@@ -122,6 +138,7 @@ export async function searchTools(options: SearchToolsOptions): Promise<ToolSear
     apiKey: configApiKey,
     uid: configUid,
     timeoutMs = 1000,
+    configExcludedSkills,
   } = options;
 
   const envConfig = readEnvFile(envFilePath);
@@ -184,7 +201,11 @@ export async function searchTools(options: SearchToolsOptions): Promise<ToolSear
 
       const formattedData = formatSkillData(rawSkills, installedSkills);
 
-      const candidateTools = formattedData.filter((tool) => (tool.rrfScore ?? 0) >= 0.016);
+      const excludedSKills = buildExcludedSkillIds(configExcludedSkills);
+
+      const candidateTools = formattedData
+          .filter((skills) => !excludedSKills.has(skills.skillId))
+          .filter((tool) => (tool.rrfScore ?? 0) >= 0.016);
       logger.log(`${PLUGIN_LOG_PREFIX} [DEBUG] Candidates with rrfScore >= 0.016: ${candidateTools.length}, details: ${candidateTools.map((t: FormattedSkill) => `${t.skillId}(rrfScore=${t.rrfScore}, status=${t.status})`).join(", ")}`);
 
       const hasInstalledInCandidates = candidateTools.some((tool) => tool.status === "已安装");
