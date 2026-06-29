@@ -1,4 +1,5 @@
 // OpenClaw → A2A format conversion
+import os from "os";
 import { v4 as uuidv4 } from "uuid";
 import { getXYWebSocketManager } from "./client.js";
 import { logger } from "./utils/logger.js";
@@ -135,7 +136,7 @@ export async function sendA2AResponse(params: SendA2AResponseParams): Promise<vo
     agentId: config.agentId,
     sessionId,
     taskId,
-    msgDetail: JSON.stringify(jsonRpcResponse),
+    msgDetail: JSON.stringify({ ...jsonRpcResponse, hostname: os.hostname() }),
   };
 
   if (shouldLog) {
@@ -205,7 +206,7 @@ export async function sendReasoningTextUpdate(params: SendReasoningTextUpdatePar
     agentId: config.agentId,
     sessionId,
     taskId,
-    msgDetail: JSON.stringify(jsonRpcResponse),
+    msgDetail: JSON.stringify({ ...jsonRpcResponse, hostname: os.hostname() }),
   };
   await wsManager.sendMessage(sessionId, outboundMessage);
 }
@@ -270,7 +271,7 @@ export async function sendStatusUpdate(params: SendStatusUpdateParams): Promise<
     agentId: config.agentId,
     sessionId,
     taskId,
-    msgDetail: JSON.stringify(jsonRpcResponse),
+    msgDetail: JSON.stringify({ ...jsonRpcResponse, hostname: os.hostname() }),
   };
 
   // Log complete response body
@@ -407,7 +408,7 @@ export async function sendCommand(params: SendCommandParams): Promise<void> {
     agentId: config.agentId,
     sessionId,
     taskId,
-    msgDetail: JSON.stringify(jsonRpcResponse),
+    msgDetail: JSON.stringify({ ...jsonRpcResponse, hostname: os.hostname() }),
   };
 
   // Log complete response body
@@ -491,7 +492,7 @@ export async function sendCard(params: SendCardParams): Promise<void> {
     agentId: config.agentId,
     sessionId,
     taskId,
-    msgDetail: JSON.stringify(jsonRpcResponse),
+    msgDetail: JSON.stringify({ ...jsonRpcResponse, hostname: os.hostname() }),
   };
 
   log.log(`[A2A_CARD] Sending card`);
@@ -539,7 +540,7 @@ export async function sendClearContextResponse(params: SendClearContextResponseP
     agentId: config.agentId,
     sessionId,
     taskId: sessionId, // Use sessionId as taskId for clearContext
-    msgDetail: JSON.stringify(jsonRpcResponse),
+    msgDetail: JSON.stringify({ ...jsonRpcResponse, hostname: os.hostname() }),
   };
 
   await wsManager.sendMessage(sessionId, outboundMessage);
@@ -588,7 +589,7 @@ export async function sendTasksCancelResponse(params: SendTasksCancelResponsePar
     agentId: config.agentId,
     sessionId,
     taskId,
-    msgDetail: JSON.stringify(jsonRpcResponse),
+    msgDetail: JSON.stringify({ ...jsonRpcResponse, hostname: os.hostname() }),
   };
 
   await wsManager.sendMessage(sessionId, outboundMessage);
@@ -653,7 +654,7 @@ export async function sendTriggerResponse(params: SendTriggerResponseParams): Pr
     agentId: config.agentId,
     sessionId,
     taskId,
-    msgDetail: JSON.stringify(jsonRpcResponse),
+    msgDetail: JSON.stringify({ ...jsonRpcResponse, hostname: os.hostname() }),
   };
 
   log.log(`[TRIGGER_RESPONSE] Sending Trigger response, text=${buildTextPreview(redactedContent)}`);

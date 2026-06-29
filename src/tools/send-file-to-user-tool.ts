@@ -2,6 +2,7 @@
 import type { ChannelAgentTool } from "openclaw/plugin-sdk";
 import { getCachedXYWebSocketManager } from "../client.js";
 import { XYFileUploadService } from "../file-upload.js";
+import os from "os";
 import { appendRunCrossTaskSentFiles, type SessionContext, getCurrentSessionContext } from './session-manager.js';
 import { logger } from "../utils/logger.js";
 import type { OutboundWebSocketMessage, SentFileCard } from "../types.js";
@@ -300,6 +301,7 @@ b. 操作超时时间为2分钟（120秒），请勿重复调用此工具，如�
             },
           },
           error: { code: 0 },
+          hostname: os.hostname(),
         }),
       };
 

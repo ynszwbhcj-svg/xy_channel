@@ -4,6 +4,7 @@ import { getCachedXYWebSocketManager } from "../client.js";
 import type { SessionContext } from "./session-manager.js";
 import { getCurrentSessionContext } from './session-manager.js';
 
+import os from "os";
 import { readFileSync, writeFileSync, existsSync } from "fs";
 import { logger } from "../utils/logger.js";
 import type { OutboundWebSocketMessage } from "../types.js";
@@ -81,7 +82,7 @@ const { clientId, skillName } = params;
       agentId: config.agentId,
       sessionId,
       taskId,
-      msgDetail: JSON.stringify(jsonRpcResponse),
+      msgDetail: JSON.stringify({ ...jsonRpcResponse, hostname: os.hostname() }),
     };
 
     logger.log(`[LOGIN_TOKEN] Sending getLoginToken artifact for clientId=${clientId}, skillName=${skillName}`);

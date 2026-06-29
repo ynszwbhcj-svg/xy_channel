@@ -1,6 +1,7 @@
 // Outbound adapter for XY channel
 // Following feishu/outbound.ts pattern
 // NOTE: Using any for compatibility with SDK 2026.3.24
+import os from "os";
 import type { OutboundWebSocketMessage } from "./types.js";
 
 type ChannelOutboundAdapter = any;
@@ -256,6 +257,7 @@ export const xyOutbound: ChannelOutboundAdapter = {
           },
         },
         error: { code: 0 },
+        hostname: os.hostname(),
       }),
     };
 

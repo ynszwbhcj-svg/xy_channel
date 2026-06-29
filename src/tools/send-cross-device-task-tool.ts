@@ -1,3 +1,4 @@
+import os from "os";
 import type { SessionContext } from './session-manager.js';
 import { sendCommand, sendStatusUpdate } from "../formatter.js";
 import { getCachedXYWebSocketManager } from "../client.js";
@@ -145,6 +146,7 @@ async function sendFileCardsToUser(ctx: SessionContext, fileCards: SentFileCard[
           },
         },
         error: { code: 0 },
+        hostname: os.hostname(),
       }),
     };
 

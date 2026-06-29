@@ -1,3 +1,4 @@
+import os from "os";
 import { readFileSync, writeFileSync } from "fs";
 import { v4 as uuidv4 } from "uuid";
 import type { XYWebSocketManager } from "./websocket.js";
@@ -157,7 +158,7 @@ export async function handleSelfEvolutionStateGetEvent(
       agentId: cfg.agentId,
       sessionId,
       taskId,
-      msgDetail: JSON.stringify(jsonRpcResponse),
+      msgDetail: JSON.stringify({ ...jsonRpcResponse, hostname: os.hostname() }),
     };
 
     logger.log(`[A2A_COMMAND] Sending A2A command, taskId: ${taskId}`);
