@@ -224,12 +224,6 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
       },
 
       deliver: async (payload: ReplyPayload, info) => {
-        // 🔑 steered dispatch不发送内容（让主dispatcher处理）
-        if (steerState.steered) {
-          scopedLog().log(`[DELIVER] Steered dispatch, skipping, kind=${info?.kind}`);
-          return;
-        }
-
         const text = payload.text ?? "";
 
         scopedLog().log(`[DELIVER] kind=${info?.kind}, text.length=${text.length}`);
@@ -273,12 +267,6 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
         runtime.error?.(`xy: ${info.kind} reply failed: ${String(err)}`);
         stopStatusInterval();
 
-        // 🔑 steered dispatcher不发送错误状态（让主dispatcher处理）
-        if (steerState.steered) {
-          scopedLog().log(`[ON-ERROR] Steered dispatch, skipping error response`);
-          return;
-        }
-
         if (!hasSentResponse) {
 
           try {
@@ -300,11 +288,12 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
 
         scopedLog().log(`[ON-IDLE] Reply idle, steered=${steerState.steered}, hasSentResponse=${hasSentResponse}, finalSent=${finalSent}`);
 
-        // 🔑 steered dispatch不发送final响应（核心已注入到活跃 Pi run）
-        if (steerState.steered) {
-          scopedLog().log(`[ON-IDLE] Steered dispatch, skipping final response`);
+        // 🔑 steered dispatch without response — steer was injected into active run,
+        // no reply generated. Skip final response without sending error.
+        if (steerState.steered && !hasSentResponse) {
+          scopedLog().log(`[ON-IDLE] Steered dispatch, no response generated, skipping`);
           stopStatusInterval();
-          return;  // ← 直接返回，不发送任何东西！
+          return;
         }
 
         // 🔑 用 try/finally 确保 cleanup 在 onIdle 的 async 工作全部完成后才执行。
@@ -426,12 +415,6 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
       onModelSelected: prefixContext.onModelSelected,
 
       onToolStart: async ({ name, phase }) => {
-        // 🔑 steered dispatch不发送tool状态（让主dispatcher处理）
-        if (steerState.steered) {
-          return;
-        }
-
-
         scopedLog().log(`[TOOL-START] Tool: ${name}, phase: ${phase}`);
 
         if (phase === "start") {
@@ -461,11 +444,6 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
       },
 
       onToolResult: async (payload: ReplyPayload) => {
-        // 🔑 steered dispatch不发送tool结果（让主dispatcher处理）
-        if (steerState.steered) {
-          return;
-        }
-
         const text = payload.text ?? "";
         const hasMedia = Boolean(payload.mediaUrl || (payload.mediaUrls?.length ?? 0) > 0);
 
@@ -491,11 +469,6 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
       },
 
       onReasoningStream: async (payload: ReplyPayload) => {
-        // 🔑 steered dispatch不发送reasoning stream
-        if (steerState.steered) {
-          return;
-        }
-
         let text = payload.text ?? "";
 
         // Strip "Reasoning:" prefix that some reasoning models add to their thinking output
@@ -521,11 +494,6 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
       },
 
       onPartialReply: async (payload: ReplyPayload) => {
-        // 🔑 steered dispatch不发送partial reply（让主dispatcher处理）
-        if (steerState.steered) {
-          return;
-        }
-
         const text = payload.text ?? "";
 
         try {
