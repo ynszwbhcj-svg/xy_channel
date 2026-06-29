@@ -494,23 +494,31 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
       },
 
       onPartialReply: async (payload: ReplyPayload) => {
-        const text = payload.text ?? "";
+        let text = payload.text ?? "";
 
         try {
           if (text.length > 0) {
-            accumulatedText += text;
+            // 模型可能返回完整文本（非纯增量），如果新文本以已累积内容开头，
+            // 则只取新增的后缀部分，避免 append 模式下重复拼接。
+            let sendText = text;
+            if (accumulatedText.length > 0 && text.startsWith(accumulatedText)) {
+              sendText = text.slice(accumulatedText.length);
+            }
+            accumulatedText += sendText;
             hasSentResponse = true;
 
-            await sendA2AResponse({
-              config,
-              sessionId,
-              taskId: getActiveTaskId(),
-              messageId: getActiveMessageId(),
-              text,
-              append: false,
-              final: false,
-              log: false,
-            });
+            if (sendText.length > 0) {
+              await sendA2AResponse({
+                config,
+                sessionId,
+                taskId: getActiveTaskId(),
+                messageId: getActiveMessageId(),
+                text: sendText,
+                append: true,
+                final: false,
+                log: false,
+              });
+            }
           }
         } catch (err) {
           scopedLog().error(`[PARTIAL-REPLY] Failed to send partial reply:`, err);
