@@ -138,7 +138,7 @@ function createRetryingStream(
       let hasContent = false;
       const buffer: any[] = [];
       let errorResult: any = null;
-      let fullResponseText = "";
+      const fullResponseEvents: any[] = [];
 
       for await (const event of stream) {
         const isContent = CONTENT_EVENT_TYPES.has(event.type);
@@ -163,19 +163,20 @@ function createRetryingStream(
           if (!hasContent) {
             logger.log("[xiaoyiprovider] first content event received, switching to streaming mode");
             hasContent = true;
-            for (const b of buffer) yield b;
+            for (const b of buffer) {
+              if (CONTENT_EVENT_TYPES.has(b.type)) fullResponseEvents.push(b);
+              yield b;
+            }
           }
+          if (isContent) fullResponseEvents.push(event);
           // IMPORTANT: resolve result() BEFORE yielding terminal events to avoid deadlock.
           // The SDK calls result() when it sees done/error — if we yield first, the generator
           // suspends and can never reach resolve, causing a permanent deadlock.
-          if (event.type === "text_delta") {
-            fullResponseText += (event as any).delta ?? "";
-          }
           if (event.type === "done") {
             logger.log(
               `[xiaoyiprovider] stream completed, usage: input=${event.message?.usage?.input} output=${event.message?.usage?.output}`,
             );
-            logger.log(`[xiaoyiprovider] full model response: ${fullResponseText}`);
+            logger.log(`[xiaoyiprovider] full model response: ${JSON.stringify(fullResponseEvents)}`);
             resultResolve(event.message);
             yield event;
             return;
