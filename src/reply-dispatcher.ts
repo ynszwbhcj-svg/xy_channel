@@ -522,7 +522,7 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
                 text: sendText,
                 append: true,
                 final: false,
-                log: false,
+                log: true,
               });
             }
           }
