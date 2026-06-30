@@ -547,7 +547,12 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
             } else {
               // 新文本不以已累积内容为前缀（如工具调用后模型重新开始生成），
               // 更新 accumulatedText 为当前文本，后续基于此新前缀做去重
+              const wasFirstRound = accumulatedText.length === 0;
               accumulatedText = "";
+              // 新一轮输出前加换行分隔（第一轮除外）
+              if (sendText.length > 0 && !wasFirstRound) {
+                sendText = "\n" + sendText;
+              }
             }
             accumulatedText += sendText;
             hasSentResponse = true;
