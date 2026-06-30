@@ -16,6 +16,7 @@ import {
   markSubagentSpawned,
   markSubagentEnded,
 } from "./src/subagent-wait-state.js";
+import { logger } from "./src/utils/logger.js";
 
 /**
  * Register the cron detection hook.
@@ -191,7 +192,7 @@ function registerSubagentHooks(api: OpenClawPluginApi) {
     if (!requesterSessionKey) return;
     const count = markSubagentSpawned(requesterSessionKey);
     if (count > 0) {
-      console.log(`[XY-SUBAGENT] spawned, requesterSessionKey=${requesterSessionKey.slice(0, 30)}, expected=${count}`);
+      logger.log(`[XY-SUBAGENT] spawned, requesterSessionKey=${requesterSessionKey.slice(0, 30)}, expected=${count}`);
     }
   });
 
@@ -202,33 +203,33 @@ function registerSubagentHooks(api: OpenClawPluginApi) {
     try {
       const requesterSessionKey = ctx?.requesterSessionKey;
       if (!requesterSessionKey) {
-        console.log(`[XY-SUBAGENT-END] no requesterSessionKey in ctx`);
+        logger.log(`[XY-SUBAGENT-END] no requesterSessionKey in ctx`);
         return;
       }
       const transition = markSubagentEnded(requesterSessionKey);
-      console.log(`[XY-SUBAGENT-END] ended, targetSessionKey=${event?.targetSessionKey?.slice(0, 30)}, outcome=${event?.outcome}, complete=${transition?.isComplete ?? false}, shouldFinalize=${transition?.shouldFinalize ?? false}, transition=${!!transition}`);
+      logger.log(`[XY-SUBAGENT-END] ended, targetSessionKey=${event?.targetSessionKey?.slice(0, 30)}, outcome=${event?.outcome}, complete=${transition?.isComplete ?? false}, shouldFinalize=${transition?.shouldFinalize ?? false}, transition=${!!transition}`);
 
       if (transition?.shouldFinalize) {
-        console.log(`[XY-SUBAGENT-END] Starting finalization...`);
+        logger.log(`[XY-SUBAGENT-END] Starting finalization...`);
         const [{ resolveXYConfig }, { deliverSubagentFinalResult }, { getXYRuntime }] = await Promise.all([
           import("./src/config.js"),
           import("./src/outbound.js"),
           import("./src/runtime.js"),
         ]);
         const rt = getXYRuntime();
-        console.log(`[XY-SUBAGENT-END] Runtime config type: ${typeof rt.config}, keys: ${rt.config ? Object.keys(rt.config as any).slice(0, 5).join(',') : 'null'}`);
+        logger.log(`[XY-SUBAGENT-END] Runtime config type: ${typeof rt.config}, hasConfig=${!!rt.config}`);
         const cfg = (rt as any).config;
         const config = resolveXYConfig(cfg);
-        console.log(`[XY-SUBAGENT-END] XY config resolved, wsUrl=${config.wsUrl?.slice(0, 20)}`);
+        logger.log(`[XY-SUBAGENT-END] XY config resolved, wsUrl=${config.wsUrl?.slice(0, 20)}`);
         await deliverSubagentFinalResult({
           config,
           state: transition.state,
           reason: "all-subagents-ended-after-parent-settled",
         });
-        console.log(`[XY-SUBAGENT-END] Finalized A2A session after all subagents ended`);
+        logger.log(`[XY-SUBAGENT-END] Finalized A2A session after all subagents ended`);
       }
     } catch (err) {
-      console.error(`[XY-SUBAGENT-END] Error in subagent_ended hook:`, err instanceof Error ? `${err.name}: ${err.message}\n${err.stack}` : String(err));
+      logger.error(`[XY-SUBAGENT-END] Error in subagent_ended hook:`, err);
     }
   });
 }
