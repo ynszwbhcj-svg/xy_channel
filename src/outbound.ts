@@ -179,16 +179,31 @@ export const xyOutbound: ChannelOutboundAdapter = {
     const config = resolveXYConfig(cfg);
 
     // ── Subagent completion interception ─────────────────────────
-    // Isolation guards:
-    //   1. ALS context is null (subagent completions arrive outside any agent turn)
-    //   2. A wait state exists for the target sessionId
-    //   3. The taskId matches (enhanced by resolveTarget from wait state)
-    const alsCtx = getCurrentSessionContext();
-    if (!alsCtx && to && to !== DEFAULT_PUSH_MARKER) {
+    // Detect subagent completions by checking if the resolved target
+    // matches a wait state's sessionId + taskId. This works regardless
+    // of ALS context because:
+    //   - Normal agent turns: ALS enhances target with CURRENT taskId,
+    //     which differs from wait state's taskId (no match → skip)
+    //   - Subagent completions: ALS is null, resolveTarget enhanced
+    //     from wait state's taskId (match → intercept)
+    //   - Cron: to=DEFAULT_PUSH_MARKER (no match)
+    //   - Message tool: ALS enhances with current taskId (no match
+    //     unless the agent happens to be on the same yielded task)
+    if (to && to !== DEFAULT_PUSH_MARKER) {
       const [targetSessionId, targetTaskId] = String(to).split("::");
       const waitState = getWaitState(targetSessionId, targetTaskId);
+      const alsCtx = getCurrentSessionContext();
 
-      if (waitState && !waitState.finalizationClaimed) {
+      // Only intercept when ALS is null OR the target taskId matches
+      // the wait state (not the current ALS taskId). This ensures
+      // we don't intercept normal agent turn deliveries.
+      const isFromWaitState = waitState &&
+        (!alsCtx || alsCtx.taskId !== targetTaskId);
+
+      if (isFromWaitState && !waitState.finalizationClaimed) {
+        const log = logger.withContext(waitState.sessionId, waitState.taskId);
+        log.log(`[xyOutbound.sendText] Subagent completion detected, als=${!!alsCtx}, delivered=${waitState.deliveredCompletions}/${waitState.expectedCompletions}`);
+
         const delivered = markCompletionDelivered(
           targetSessionId,
           targetTaskId,
@@ -197,18 +212,25 @@ export const xyOutbound: ChannelOutboundAdapter = {
 
         if (delivered) {
           const { state, isComplete, shouldFinalize } = delivered;
-          const log = logger.withContext(state.sessionId, state.taskId);
 
           if (shouldFinalize) {
-            // All completions arrived and parent already settled → send final
-            log.log(`[xyOutbound.sendText] All subagent results arrived after parent settled, finalizing`);
+            // All completions arrived and parent already settled → finalize
+            log.log(`[xyOutbound.sendText] Finalizing subagent results`);
             await deliverSubagentFinalResult({ config, state, reason: "all-subagent-results-delivered-after-parent-settled", text: text as string });
-          } else if (isComplete) {
-            // All completions arrived but parent hasn't settled yet → defer
+            // Subagent completion delivered via A2A, skip push
+            return {
+              channel: "xiaoyi-channel",
+              messageId: state.artifactId,
+              chatId: to,
+            };
+          }
+
+          if (isComplete) {
+            // All completions arrived but parent hasn't settled yet → defer to onSettled
             log.log(`[xyOutbound.sendText] All subagent results arrived before parent settled, deferring finalization`);
           } else {
-            // Still waiting for more completions → send progress update
-            log.log(`[xyOutbound.sendText] Subagent completion ${state.deliveredCompletions}/${state.expectedCompletions}`);
+            // Still waiting for more completions → send progress via A2A, skip push
+            log.log(`[xyOutbound.sendText] Subagent progress ${state.deliveredCompletions}/${state.expectedCompletions}`);
             try {
               await sendStatusUpdate({
                 config,
@@ -224,7 +246,12 @@ export const xyOutbound: ChannelOutboundAdapter = {
             }
           }
         }
-        // Continue with push delivery (subagent result also delivered as push)
+        // Skip push delivery for subagent completions — only send via A2A
+        return {
+          channel: "xiaoyi-channel",
+          messageId: waitState.artifactId,
+          chatId: to,
+        };
       }
     }
     // ── End subagent interception ───────────────────────────────
