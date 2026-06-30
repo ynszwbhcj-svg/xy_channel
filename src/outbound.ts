@@ -11,7 +11,7 @@ import { XYPushService } from "./push.js";
 import { getCurrentSessionContext } from "./tools/session-manager.js";
 import {
   getWaitState,
-  addCompletionText,
+  markCompletionDelivered,
   clearWaitState,
 } from "./subagent-wait-state.js";
 import { decrementTaskIdRef } from "./task-manager.js";
@@ -178,26 +178,75 @@ export const xyOutbound: ChannelOutboundAdapter = {
     // Resolve configuration
     const config = resolveXYConfig(cfg);
 
-    // ── Subagent completion text capture ─────────────────────────
-    // Subagent completions may arrive here when openclaw's announce
-    // flow delivers through the channel outbound. We capture the text
-    // for the final A2A response but do NOT track delivery count here.
-    // Delivery tracking is done by the subagent_ended hook (index.ts).
+    // ── Subagent completion interception ─────────────────────────
+    // Detect subagent completions by checking if the resolved target
+    // matches a wait state's sessionId + taskId. This works regardless
+    // of ALS context because:
+    //   - Normal agent turns: ALS enhances target with CURRENT taskId,
+    //     which differs from wait state's taskId (no match → skip)
+    //   - Subagent completions: ALS is null, resolveTarget enhanced
+    //     from wait state's taskId (match → intercept)
+    //   - Cron: to=DEFAULT_PUSH_MARKER (no match)
+    //   - Message tool: ALS enhances with current taskId (no match
+    //     unless the agent happens to be on the same yielded task)
     if (to && to !== DEFAULT_PUSH_MARKER) {
       const [targetSessionId, targetTaskId] = String(to).split("::");
       const waitState = getWaitState(targetSessionId, targetTaskId);
       const alsCtx = getCurrentSessionContext();
 
+      // Only intercept when ALS is null OR the target taskId matches
+      // the wait state (not the current ALS taskId). This ensures
+      // we don't intercept normal agent turn deliveries.
       const isFromWaitState = waitState &&
         (!alsCtx || alsCtx.taskId !== targetTaskId);
 
       if (isFromWaitState && !waitState.finalizationClaimed) {
         const log = logger.withContext(waitState.sessionId, waitState.taskId);
-        log.log(`[xyOutbound.sendText] Subagent completion text captured, len=${(text as string)?.length ?? 0}`);
+        log.log(`[xyOutbound.sendText] Subagent completion detected, als=${!!alsCtx}, delivered=${waitState.deliveredCompletions}/${waitState.expectedCompletions}`);
 
-        // Store the text for later use in final response
-        addCompletionText(targetSessionId, targetTaskId, text as string);
-        // Skip push delivery — subagent completions go through A2A
+        const delivered = markCompletionDelivered(
+          targetSessionId,
+          targetTaskId,
+          text as string,
+        );
+
+        if (delivered) {
+          const { state, isComplete, shouldFinalize } = delivered;
+
+          if (shouldFinalize) {
+            // All completions arrived and parent already settled → finalize
+            log.log(`[xyOutbound.sendText] Finalizing subagent results`);
+            await deliverSubagentFinalResult({ config, state, reason: "all-subagent-results-delivered-after-parent-settled", text: text as string });
+            // Subagent completion delivered via A2A, skip push
+            return {
+              channel: "xiaoyi-channel",
+              messageId: state.artifactId,
+              chatId: to,
+            };
+          }
+
+          if (isComplete) {
+            // All completions arrived but parent hasn't settled yet → defer to onSettled
+            log.log(`[xyOutbound.sendText] All subagent results arrived before parent settled, deferring finalization`);
+          } else {
+            // Still waiting for more completions → send progress via A2A, skip push
+            log.log(`[xyOutbound.sendText] Subagent progress ${state.deliveredCompletions}/${state.expectedCompletions}`);
+            try {
+              await sendStatusUpdate({
+                config,
+                sessionId: state.sessionId,
+                taskId: state.taskId,
+                messageId: state.messageId,
+                text: `已收到子任务结果 ${state.deliveredCompletions}/${state.expectedCompletions}，继续等待其他子任务~`,
+                state: "working",
+                useLatestTask: false,
+              });
+            } catch (err) {
+              log.error(`[xyOutbound.sendText] Failed to send subagent progress status:`, err);
+            }
+          }
+        }
+        // Skip push delivery for subagent completions — only send via A2A
         return {
           channel: "xiaoyi-channel",
           messageId: waitState.artifactId,
@@ -205,7 +254,7 @@ export const xyOutbound: ChannelOutboundAdapter = {
         };
       }
     }
-    // ── End subagent text capture ───────────────────────────────
+    // ── End subagent interception ───────────────────────────────
 
     // Handle default push marker (for cron jobs without explicit target)
     let actualTo = to;
