@@ -28,7 +28,6 @@ import {
 import {
   registerSessionKeyMapping,
   getWaitState,
-  hasWaitState,
   markParentSettled,
 } from "./subagent-wait-state.js";
 import type { A2AJsonRpcRequest } from "./types.js";
@@ -457,14 +456,10 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
     let cleaned = false;
     const cleanup = () => {
       if (cleaned) return;
-      // Check for pending subagent wait on this session (any taskId).
-      // Steer dispatches have a different taskId, so we check both
-      // exact match and session-wide presence.
-      const pendingWait = getWaitState(parsed.sessionId, parsed.taskId) ??
-        (hasWaitState(parsed.sessionId) ? { deliveredCompletions: 0, expectedCompletions: 1 } : null);
+      const pendingWait = getWaitState(parsed.sessionId, parsed.taskId);
       if (pendingWait && pendingWait.deliveredCompletions < pendingWait.expectedCompletions) {
         // Subagent wait active — skip cleanup, session stays alive
-        log.log(`[BOT] Cleanup suppressed — subagent wait active on session, taskId=${parsed.taskId}`);
+        log.log(`[BOT] Cleanup suppressed — subagent wait active ${pendingWait.deliveredCompletions}/${pendingWait.expectedCompletions}`);
         return;
       }
       cleaned = true;
