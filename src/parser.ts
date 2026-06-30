@@ -234,13 +234,17 @@ export function extractModelName(parts: A2AMessagePart[]): string | null {
 export function extractTriggerData(parts: A2AMessagePart[]): { pushDataId: string } | null {
   for (const part of parts) {
     if (part.kind === "data" && part.data) {
+      const directPushDataId = part.data.pushDataId;
+      if (typeof directPushDataId === "string" && directPushDataId.trim()) {
+        return { pushDataId: directPushDataId.trim() };
+      }
       const events = part.data.events;
       if (Array.isArray(events)) {
         for (const event of events) {
           if (event.header?.namespace === "Common" && event.header?.name === "Trigger") {
-            const pushDataId = event.payload?.dataMap?.pushDataId;
-            if (pushDataId && typeof pushDataId === "string") {
-              return { pushDataId };
+            const pushDataId = event.payload?.dataMap?.pushDataId ?? event.payload?.pushDataId;
+            if (typeof pushDataId === "string" && pushDataId.trim()) {
+              return { pushDataId: pushDataId.trim() };
             }
           }
         }

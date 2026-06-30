@@ -3,9 +3,17 @@ import type { ClawdbotConfig, RuntimeEnv, ReplyPayload } from "openclaw/plugin-s
 import { getXYRuntime } from "./runtime.js";
 import { sendA2AResponse, sendStatusUpdate, sendReasoningTextUpdate, sendCommand } from "./formatter.js";
 import { resolveXYConfig } from "./config.js";
-import { getCurrentTaskId, getCurrentMessageId } from "./task-manager.js";
+import { decrementTaskIdRef, getCurrentTaskId, getCurrentMessageId } from "./task-manager.js";
 import type { A2ACommand, RunCrossTaskContext, XYChannelConfig } from "./types.js";
-import { clearRunCrossTaskSentFiles, getCurrentSessionContext } from "./tools/session-manager.js";
+import { clearRunCrossTaskSentFiles, getCurrentSessionContext, unregisterSession } from "./tools/session-manager.js";
+import {
+  attachSubagentWaitHeartbeat,
+  clearSubagentWaitState,
+  getSubagentWaitState,
+  markSubagentCompletionExpected,
+  markSubagentWaitStarted,
+} from "./subagent-wait-state.js";
+import { clearSteeredCompletionState } from "./steered-completion-state.js";
 import fs from "fs/promises";
 import path from "path";
 import { logger } from "./utils/logger.js";
@@ -17,11 +25,19 @@ export interface CreateXYReplyDispatcherParams {
   taskId: string;
   messageId: string;
   accountId: string;
+  sessionKey: string;
   steerState: { steered: boolean };  // Dynamic flag set when dispatchReplyFromConfig steers
 }
 
 const TEMP_FILE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 const RUN_CROSS_TASK_LOG_TAG = "[RunCrossTask]";
+
+function isSteerControlText(text: string): boolean {
+  const normalized = text.trim().toLowerCase().replace(/\s+/g, " ").replace(/\.+$/, "");
+  if (!normalized) return true;
+  if (normalized === "steered current session") return true;
+  return normalized.includes("current session") && normalized.includes("now");
+}
 
 function buildDistributionStatusCommand(context: RunCrossTaskContext): A2ACommand {
   return {
@@ -128,7 +144,7 @@ export async function cleanupStaleTempFiles(tempDir: string = "/tmp/xy_channel")
  * Runtime is expected to be validated before calling this function.
  */
 export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): any {
-  const { cfg, runtime, sessionId, taskId, messageId, accountId, steerState } = params;
+  const { cfg, runtime, sessionId, taskId, messageId, accountId, sessionKey, steerState } = params;
 
   // 初始taskId和messageId（作为fallback）
   const initialTaskId = taskId;
@@ -214,9 +230,51 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
       },
 
       deliver: async (payload: ReplyPayload, info) => {
-        // 🔑 steered dispatch不发送内容（让主dispatcher处理）
+        // Steer dispatch can emit OpenClaw control acknowledgements as final text.
+        // Skip only those control acknowledgements; otherwise the final is the only
+        // user-visible result for steer paths that do not send through outbound.
         if (steerState.steered) {
-          scopedLog().log(`[DELIVER] Steered dispatch, skipping, kind=${info?.kind}`);
+          const text = payload.text ?? "";
+          if (!text.trim()) {
+            scopedLog().log(`[DELIVER] Steered empty payload skipped, kind=${info?.kind}`);
+            return;
+          }
+          if (info?.kind === "final" && isSteerControlText(text)) {
+            scopedLog().log(`[DELIVER] Steered control text skipped, text.length=${text.length}`);
+            return;
+          }
+          if (info?.kind !== "final") {
+            scopedLog().log(`[DELIVER] Steered non-final dispatch skipped, kind=${info?.kind}, text.length=${text.length}`);
+            return;
+          }
+          try {
+            await sendStatusUpdate({
+              config,
+              sessionId,
+              taskId: initialTaskId,
+              messageId: initialMessageId,
+              text: "任务处理已完成~",
+              state: "completed",
+              useLatestTask: false,
+            });
+            await sendA2AResponse({
+              config,
+              sessionId,
+              taskId: initialTaskId,
+              messageId: initialMessageId,
+              text,
+              append: false,
+              final: true,
+            });
+            finalSent = true;
+            hasSentResponse = true;
+            clearSteeredCompletionState(sessionId, "steered-dispatch-final-delivered", initialTaskId);
+            decrementTaskIdRef(sessionId, initialTaskId);
+            unregisterSession(sessionKey);
+            scopedLog().log(`[DELIVER] Steered final response sent, text.length=${text.length}`);
+          } catch (deliverError) {
+            scopedLog().error(`[DELIVER] Failed to send steered final response:`, deliverError);
+          }
           return;
         }
 
@@ -303,6 +361,52 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
           return;  // ← 直接返回，不发送任何东西！
         }
 
+        const subagentWaitState = getSubagentWaitState(sessionId, initialTaskId);
+
+        // 正常模式（或未被steer的dispatch）
+        if (
+          subagentWaitState &&
+          subagentWaitState.deliveredCompletions < subagentWaitState.expectedCompletions &&
+          !finalSent
+        ) {
+          scopedLog().log(`[ON-IDLE] Waiting for subagent completion, suppressing premature final response`);
+          try {
+            await sendStatusUpdate({
+              config,
+              sessionId,
+              taskId: initialTaskId,
+              messageId: initialMessageId,
+              text: "子任务正在处理中，请稍候~",
+              state: "working",
+              useLatestTask: false,
+            });
+            scopedLog().log(`[ON-IDLE] Sent subagent waiting status update`);
+          } catch (err) {
+            scopedLog().error(`[ON-IDLE] Failed to send subagent waiting status:`, err);
+          }
+          attachSubagentWaitHeartbeat(sessionId, initialTaskId, stopStatusInterval);
+          return;
+        }
+
+        if (subagentWaitState && !hasSentResponse && !finalSent) {
+          scopedLog().log(`[ON-IDLE] Subagent results are ready, waiting for main agent final response`);
+          try {
+            await sendStatusUpdate({
+              config,
+              sessionId,
+              taskId: initialTaskId,
+              messageId: initialMessageId,
+              text: "子任务结果已收齐，主任务正在整理最终回复~",
+              state: "working",
+              useLatestTask: false,
+            });
+          } catch (err) {
+            scopedLog().error(`[ON-IDLE] Failed to send main-agent waiting status:`, err);
+          }
+          attachSubagentWaitHeartbeat(sessionId, initialTaskId, stopStatusInterval);
+          return;
+        }
+
         // 正常模式（或未被steer的dispatch）
         if (hasSentResponse && !finalSent) {
           const trimmedFinalReplyText = finalReplyText.trim();
@@ -346,6 +450,9 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
               final: true,
             });
             finalSent = true;
+            if (subagentWaitState) {
+              clearSubagentWaitState(sessionId, "main-final-delivered", initialTaskId);
+            }
             scopedLog().log(`[ON-IDLE] Sent final response (empty, stream end)`);
           } catch (err) {
             scopedLog().error(`[ON-IDLE] Failed to send final response:`, err);
@@ -412,6 +519,25 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
       onModelSelected: prefixContext.onModelSelected,
 
       onToolStart: async ({ name, phase }) => {
+        const toolName = name || "unknown";
+        if (phase === "start" && toolName === "sessions_spawn") {
+          markSubagentCompletionExpected(sessionId, initialTaskId);
+        }
+        if (phase === "start" && toolName === "sessions_yield") {
+          const waitState = markSubagentWaitStarted({
+            sessionId,
+            sessionKey,
+            taskId: initialTaskId,
+            messageId: initialMessageId,
+          });
+          if (waitState) {
+            clearSteeredCompletionState(sessionId, "subagent-wait-started", initialTaskId);
+            scopedLog().log(`[TOOL-START] sessions_yield detected; final response will wait for subagent completion`);
+          } else {
+            scopedLog().log(`[TOOL-START] sessions_yield detected without sessions_spawn; not entering subagent wait`);
+          }
+        }
+
         // 🔑 steered dispatch不发送tool状态（让主dispatcher处理）
         if (steerState.steered) {
           return;
@@ -423,8 +549,6 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
         scopedLog().log(`[TOOL-START] Tool: ${name}, phase: ${phase}`);
 
         if (phase === "start") {
-          const toolName = name || "unknown";
-
           // call_device_tool 由自身 execute() 内部发送具体子工具名的状态更新
           // get_xxx_tool_schema 是给 LLM 查 schema 用的，无需向用户展示
           if (toolName === "call_device_tool" || toolName.endsWith("_tool_schema") || toolName === "huawei_id_tool") {

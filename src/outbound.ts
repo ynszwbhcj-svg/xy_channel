@@ -5,15 +5,32 @@ import type { OutboundWebSocketMessage } from "./types.js";
 
 type ChannelOutboundAdapter = any;
 import { resolveXYConfig } from "./config.js";
+import { sendA2AResponse, sendReasoningTextUpdate, sendStatusUpdate } from "./formatter.js";
 import { XYFileUploadService } from "./file-upload.js";
 import { XYPushService } from "./push.js";
-import { getCurrentSessionContext } from "./tools/session-manager.js";
+import { getCurrentSessionContext, unregisterSession } from "./tools/session-manager.js";
+import { decrementTaskIdRef } from "./task-manager.js";
+import {
+  clearSubagentWaitState,
+  getSubagentWaitState,
+  markSubagentCompletionDelivered,
+  type SubagentWaitState,
+} from "./subagent-wait-state.js";
+import { clearSteeredCompletionState, getSteeredCompletionState } from "./steered-completion-state.js";
 import { savePushData } from "./utils/pushdata-manager.js";
 import { getAllPushIds } from "./utils/pushid-manager.js";
 import { logger } from "./utils/logger.js";
 
 // Special marker for default push delivery when no target is specified
 const DEFAULT_PUSH_MARKER = "default";
+
+function normalizePushTarget(to: unknown, fallbackSessionId?: string): string {
+  const rawTarget = String(to ?? "").trim();
+  if (!rawTarget || rawTarget === DEFAULT_PUSH_MARKER) {
+    return fallbackSessionId ?? "";
+  }
+  return rawTarget.split("::")[0] ?? "";
+}
 
 // File extension to MIME type mapping
 const FILE_TYPE_TO_MIME_TYPE: Record<string, string> = {
@@ -50,6 +67,46 @@ function getMimeTypeFromFilename(filename: string): string {
   return "text/plain"; // Default fallback
 }
 
+function buildSubagentFinalText(state: SubagentWaitState, fallbackText?: string): string {
+  if (state.completionTexts.length > 0) {
+    return state.completionTexts.join("\n\n");
+  }
+  return fallbackText ?? "";
+}
+
+export async function deliverSubagentFinalResult(params: {
+  config: ReturnType<typeof resolveXYConfig>;
+  state: SubagentWaitState;
+  reason: string;
+  text?: string;
+}): Promise<void> {
+  const { config, state, reason, text } = params;
+  const log = logger.withContext(state.sessionId, state.taskId);
+  await sendStatusUpdate({
+    config,
+    sessionId: state.sessionId,
+    taskId: state.taskId,
+    messageId: state.messageId,
+    text: "任务处理已完成~",
+    state: "completed",
+    useLatestTask: false,
+  });
+  await sendA2AResponse({
+    config,
+    sessionId: state.sessionId,
+    taskId: state.taskId,
+    messageId: state.messageId,
+    text: buildSubagentFinalText(state, text),
+    append: false,
+    final: true,
+    artifactId: state.artifactId,
+  });
+  clearSubagentWaitState(state.sessionId, reason, state.taskId);
+  decrementTaskIdRef(state.sessionId, state.taskId);
+  unregisterSession(state.sessionKey);
+  log.log(`[xyOutbound] Subagent final delivered to original A2A task, reason=${reason}`);
+}
+
 /**
  * Outbound adapter for sending messages from OpenClaw to XY.
  * Uses Push service for direct message delivery.
@@ -63,8 +120,8 @@ export const xyOutbound: ChannelOutboundAdapter = {
    * When no target is specified (e.g., in cron jobs with announce mode),
    * returns a default marker that will be handled by sendText.
    *
-   * For message tool calls, if only sessionId is provided, it will look up
-   * the active session context to construct the full "sessionId::taskId" format.
+   * Bare sessionId targets are upgraded to a task target when A2A delivery needs
+   * one. Push delivery later normalizes the target back to the session only.
    */
   resolveTarget: ({ cfg, to, accountId, mode }) => {
     // If no target provided, use default marker for push delivery
@@ -82,11 +139,25 @@ export const xyOutbound: ChannelOutboundAdapter = {
     if (!trimmedTo.includes("::")) {
       logger.log(`[xyOutbound.resolveTarget] Target "${trimmedTo}" missing taskId, looking up session context`);
 
-      // Try to get the current session context
+      const waitState = getSubagentWaitState(trimmedTo);
       const sessionContext = getCurrentSessionContext();
       if (sessionContext && sessionContext.sessionId === trimmedTo) {
         const enhancedTarget = `${trimmedTo}::${sessionContext.taskId}`;
-        logger.log(`[xyOutbound.resolveTarget] Enhanced target: ${enhancedTarget}`);
+        const source = waitState && waitState.taskId !== sessionContext.taskId
+          ? "current session context over subagent wait state"
+          : "current session context";
+        logger.log(`[xyOutbound.resolveTarget] Enhanced target from ${source}: ${enhancedTarget}`);
+        return {
+          ok: true,
+          to: enhancedTarget,
+        };
+      }
+
+      if (waitState) {
+        const enhancedTarget = `${waitState.sessionId}::${waitState.taskId}`;
+        logger.withContext(waitState.sessionId, waitState.taskId).log(
+          `[xyOutbound.resolveTarget] Enhanced target from subagent wait state: ${enhancedTarget}`,
+        );
         return {
           ok: true,
           to: enhancedTarget,
@@ -109,9 +180,142 @@ export const xyOutbound: ChannelOutboundAdapter = {
 
     // Resolve configuration
     const config = resolveXYConfig(cfg);
+    const [waitSessionId, waitTaskId] = String(to).split("::");
+    const waitState = waitSessionId ? getSubagentWaitState(waitSessionId, waitTaskId) : null;
+    let steeredCompletionState =
+      waitState || !waitSessionId ? null : getSteeredCompletionState(waitSessionId, waitTaskId);
+    if (waitState && (!waitTaskId || waitTaskId === waitState.taskId)) {
+      const expectedCompletions = Math.max(1, waitState.expectedCompletions);
+      if (waitState.finalizationClaimed) {
+        logger.withContext(waitState.sessionId, waitState.taskId).log(
+          `[xyOutbound.sendText] Subagent finalization already claimed; skipping A2A wait delivery and continuing with push`,
+        );
+      } else if (waitState.deliveredCompletions >= expectedCompletions) {
+        logger.withContext(waitState.sessionId, waitState.taskId).log(
+          `[xyOutbound.sendText] Subagent results already complete; delivering text as main final response`,
+        );
+        try {
+          await sendStatusUpdate({
+            config,
+            sessionId: waitState.sessionId,
+            taskId: waitState.taskId,
+            messageId: waitState.messageId,
+            text: "任务处理已完成~",
+            state: "completed",
+            useLatestTask: false,
+          });
+          await sendA2AResponse({
+            config,
+            sessionId: waitState.sessionId,
+            taskId: waitState.taskId,
+            messageId: waitState.messageId,
+            text,
+            append: waitState.deliveredCompletions > 0,
+            final: true,
+            artifactId: waitState.artifactId,
+          });
+          clearSubagentWaitState(waitState.sessionId, "main-final-delivered-through-outbound", waitState.taskId);
+          decrementTaskIdRef(waitState.sessionId, waitState.taskId);
+          unregisterSession(waitState.sessionKey);
+          logger.withContext(waitState.sessionId, waitState.taskId).log(
+            `[xyOutbound.sendText] Main final delivered to original A2A task; continuing with push delivery`,
+          );
+        } catch (err) {
+          logger.withContext(waitState.sessionId, waitState.taskId).error(
+            `[xyOutbound.sendText] Failed to deliver main final response to A2A task:`,
+            err,
+          );
+        }
+      } else {
+        const delivery = markSubagentCompletionDelivered(waitState.sessionId, waitState.taskId, text);
+        const deliveredState = delivery?.state ?? waitState;
+        const allExpectedCompletionsArrived = delivery?.isComplete ?? false;
+        const shouldCloseOriginalTask = delivery?.shouldFinalize ?? false;
+        logger.withContext(waitState.sessionId, waitState.taskId).log(
+          `[xyOutbound.sendText] Delivering subagent completion update to original A2A task before push, allExpectedCompletionsArrived=${allExpectedCompletionsArrived}, parentSettled=${deliveredState.parentSettled}`,
+        );
+        try {
+          if (shouldCloseOriginalTask) {
+            await deliverSubagentFinalResult({
+              config,
+              state: deliveredState,
+              reason: "all-subagent-results-delivered-after-parent-settled",
+              text,
+            });
+          } else if (!allExpectedCompletionsArrived) {
+            await sendStatusUpdate({
+              config,
+              sessionId: deliveredState.sessionId,
+              taskId: deliveredState.taskId,
+              messageId: deliveredState.messageId,
+              text: `已收到子任务结果 ${deliveredState.deliveredCompletions}/${deliveredState.expectedCompletions}，继续等待其他子任务~`,
+              state: "working",
+              useLatestTask: false,
+            });
+            await sendReasoningTextUpdate({
+              config,
+              sessionId: deliveredState.sessionId,
+              taskId: deliveredState.taskId,
+              messageId: deliveredState.messageId,
+              text: `子任务结果 ${deliveredState.deliveredCompletions}/${deliveredState.expectedCompletions}：\n${text}`,
+              append: true,
+            });
+          } else {
+            logger.withContext(deliveredState.sessionId, deliveredState.taskId).log(
+              `[xyOutbound.sendText] All subagent results arrived before parent settled; deferring final A2A completion to parent settlement`,
+            );
+          }
+          logger.withContext(waitState.sessionId, waitState.taskId).log(
+            `[xyOutbound.sendText] Subagent completion update delivered to A2A task; continuing with push delivery, allExpectedCompletionsArrived=${allExpectedCompletionsArrived}, final=${shouldCloseOriginalTask}`,
+          );
+        } catch (err) {
+          logger.withContext(waitState.sessionId, waitState.taskId).error(
+            `[xyOutbound.sendText] Failed to deliver subagent completion update to A2A task:`,
+            err,
+          );
+        }
+      }
+    }
+    if (!waitState && steeredCompletionState && (!waitTaskId || waitTaskId === steeredCompletionState.taskId)) {
+      logger.withContext(steeredCompletionState.sessionId, steeredCompletionState.taskId).log(
+        `[xyOutbound.sendText] Delivering steered completion to current A2A task before push`,
+      );
+      try {
+        await sendStatusUpdate({
+          config,
+          sessionId: steeredCompletionState.sessionId,
+          taskId: steeredCompletionState.taskId,
+          messageId: steeredCompletionState.messageId,
+          text: "任务处理已完成~",
+          state: "completed",
+          useLatestTask: false,
+        });
+        await sendA2AResponse({
+          config,
+          sessionId: steeredCompletionState.sessionId,
+          taskId: steeredCompletionState.taskId,
+          messageId: steeredCompletionState.messageId,
+          text,
+          append: false,
+          final: true,
+        });
+        logger.withContext(steeredCompletionState.sessionId, steeredCompletionState.taskId).log(
+          `[xyOutbound.sendText] Steered completion delivered to A2A task; continuing with push delivery`,
+        );
+      } finally {
+        clearSteeredCompletionState(
+          steeredCompletionState.sessionId,
+          "completion-delivered",
+          steeredCompletionState.taskId,
+        );
+        decrementTaskIdRef(steeredCompletionState.sessionId, steeredCompletionState.taskId);
+        unregisterSession(steeredCompletionState.sessionKey);
+      }
+    }
 
     // Handle default push marker (for cron jobs without explicit target)
-    let actualTo = to;
+    let actualTo = normalizePushTarget(to, waitState?.sessionId ?? steeredCompletionState?.sessionId);
+    logger.log(`[xyOutbound.sendText] Normalized push target: ${actualTo || "(none)"}`);
     if (to === DEFAULT_PUSH_MARKER) {
       logger.log(`[xyOutbound.sendText] Using default push delivery (no specific target)`);
       // For push notifications, we don't need a specific target
