@@ -5,11 +5,6 @@ import { sendA2AResponse, sendStatusUpdate, sendReasoningTextUpdate, sendCommand
 import { resolveXYConfig } from "./config.js";
 import type { A2ACommand, RunCrossTaskContext, XYChannelConfig } from "./types.js";
 import { clearRunCrossTaskSentFiles, getCurrentSessionContext } from "./tools/session-manager.js";
-import {
-  getWaitState,
-  clearWaitState,
-  attachHeartbeat,
-} from "./subagent-wait-state.js";
 import fs from "fs/promises";
 import path from "path";
 import { logger } from "./utils/logger.js";
@@ -301,38 +296,6 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
           return;
         }
 
-        // ── Subagent wait state check ─────────────────────────────
-        // If this session has pending subagent completions, suppress final:true
-        // and keep the A2A session alive. The final response will be sent when
-        // all completions arrive via xyOutbound.sendText interception.
-        const waitState = getWaitState(sessionId, taskId);
-        if (
-          waitState &&
-          waitState.deliveredCompletions < waitState.expectedCompletions &&
-          !finalSent
-        ) {
-          scopedLog().log(
-            `[ON-IDLE] Waiting for subagent completions ${waitState.deliveredCompletions}/${waitState.expectedCompletions}, suppressing final:true`,
-          );
-          try {
-            await sendStatusUpdate({
-              config,
-              sessionId,
-              taskId,
-              messageId,
-              text: "子任务正在处理中，请稍候~",
-              state: "working",
-              useLatestTask: false,
-            });
-          } catch (err) {
-            scopedLog().error(`[ON-IDLE] Failed to send subagent waiting status:`, err);
-          }
-          // Attach heartbeat so the status interval stays alive during wait
-          attachHeartbeat(sessionId, taskId, stopStatusInterval);
-          return;
-        }
-        // ── End subagent wait state check ─────────────────────────
-
         // 🔑 用 try/finally 确保 cleanup 在 onIdle 的 async 工作全部完成后才执行。
         // openclaw 的 waitForIdle() 以 void options.onIdle?.() 调用 onIdle，
         // 不会 await 返回的 Promise，因此 onSettled 可能在 onIdle 中途触发。
@@ -381,9 +344,6 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
                 final: true,
               });
               finalSent = true;
-              if (waitState) {
-                clearWaitState(sessionId, "main-final-delivered", taskId);
-              }
               scopedLog().log(`[ON-IDLE] Sent final response (empty, stream end)`);
             } catch (err) {
               scopedLog().error(`[ON-IDLE] Failed to send final response:`, err);
