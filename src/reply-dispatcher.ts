@@ -245,9 +245,6 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
             return;
           }
 
-          // DEBUG: 记录 deliver 发送内容
-          scopedLog().log(`[DEBUG-DEDUP] deliver: text_len=${text.length}, accumulated_len=${accumulatedText.length}, text_preview="${text.slice(0, 100)}", accumulated_preview="${accumulatedText.slice(0, 100)}"`);
-
           accumulatedText += text;
           hasSentResponse = true;
 
@@ -507,9 +504,11 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
             const dedupApplied = accumulatedText.length > 0 && text.startsWith(accumulatedText);
             if (dedupApplied) {
               sendText = text.slice(accumulatedText.length);
+            } else {
+              // 新文本不以已累积内容为前缀（如工具调用后模型重新开始生成），
+              // 更新 accumulatedText 为当前文本，后续基于此新前缀做去重
+              accumulatedText = "";
             }
-            // DEBUG: 记录 onPartialReply 去重详情
-            scopedLog().log(`[DEBUG-DEDUP] onPartialReply: text_len=${text.length}, accumulated_len=${accumulatedText.length}, sendText_len=${sendText.length}, dedup=${dedupApplied}, text_preview="${text.slice(0, 100)}", accumulated_preview="${accumulatedText.slice(0, 100)}", sendText_preview="${sendText.slice(0, 100)}"`);
             accumulatedText += sendText;
             hasSentResponse = true;
 
@@ -522,7 +521,7 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
                 text: sendText,
                 append: true,
                 final: false,
-                log: true,
+                log: false,
               });
             }
           }
