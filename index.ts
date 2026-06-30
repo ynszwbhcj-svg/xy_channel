@@ -199,36 +199,23 @@ function registerSubagentHooks(api: OpenClawPluginApi) {
   // This is the PRIMARY delivery tracking mechanism. When all expected
   // subagents have ended and parent has settled, we finalize the A2A session.
   api.on("subagent_ended", async (event, ctx) => {
-    try {
-      const requesterSessionKey = ctx?.requesterSessionKey;
-      if (!requesterSessionKey) {
-        console.log(`[XY-SUBAGENT-END] no requesterSessionKey in ctx`);
-        return;
-      }
-      const transition = markSubagentEnded(requesterSessionKey);
-      console.log(`[XY-SUBAGENT-END] ended, targetSessionKey=${event?.targetSessionKey?.slice(0, 30)}, outcome=${event?.outcome}, complete=${transition?.isComplete ?? false}, shouldFinalize=${transition?.shouldFinalize ?? false}, transition=${!!transition}`);
+    const requesterSessionKey = ctx?.requesterSessionKey;
+    if (!requesterSessionKey) return;
+    const transition = markSubagentEnded(requesterSessionKey);
+    console.log(`[XY-SUBAGENT] ended, sessionKey=${event?.targetSessionKey?.slice(0, 30)}, outcome=${event?.outcome}, complete=${transition?.isComplete ?? false}, shouldFinalize=${transition?.shouldFinalize ?? false}`);
 
-      if (transition?.shouldFinalize) {
-        console.log(`[XY-SUBAGENT-END] Starting finalization...`);
-        const [{ resolveXYConfig }, { deliverSubagentFinalResult }, { getXYRuntime }] = await Promise.all([
-          import("./src/config.js"),
-          import("./src/outbound.js"),
-          import("./src/runtime.js"),
-        ]);
-        const rt = getXYRuntime();
-        console.log(`[XY-SUBAGENT-END] Runtime config type: ${typeof rt.config}, keys: ${rt.config ? Object.keys(rt.config as any).slice(0, 5).join(',') : 'null'}`);
-        const cfg = (rt as any).config;
-        const config = resolveXYConfig(cfg);
-        console.log(`[XY-SUBAGENT-END] XY config resolved, wsUrl=${config.wsUrl?.slice(0, 20)}`);
-        await deliverSubagentFinalResult({
-          config,
-          state: transition.state,
-          reason: "all-subagents-ended-after-parent-settled",
-        });
-        console.log(`[XY-SUBAGENT-END] Finalized A2A session after all subagents ended`);
-      }
-    } catch (err) {
-      console.error(`[XY-SUBAGENT-END] Error in subagent_ended hook:`, err instanceof Error ? `${err.name}: ${err.message}\n${err.stack}` : String(err));
+    if (transition?.shouldFinalize) {
+      // All subagents ended and parent already settled — finalize A2A session
+      const { resolveXYConfig } = await import("./src/config.js");
+      const { deliverSubagentFinalResult } = await import("./src/outbound.js");
+      const { getXYRuntime } = await import("./src/runtime.js");
+      const config = resolveXYConfig((getXYRuntime() as any).config);
+      await deliverSubagentFinalResult({
+        config,
+        state: transition.state,
+        reason: "all-subagents-ended-after-parent-settled",
+      });
+      console.log(`[XY-SUBAGENT] Finalized A2A session after all subagents ended`);
     }
   });
 }

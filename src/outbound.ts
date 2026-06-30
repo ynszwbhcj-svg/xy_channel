@@ -36,7 +36,7 @@ export async function deliverSubagentFinalResult(params: {
 
   const finalText = state.completionTexts.length > 0
     ? state.completionTexts.join("\n\n")
-    : (text || undefined) ?? "子任务已完成";
+    : (text ?? "");
 
   await sendStatusUpdate({
     config,
