@@ -173,53 +173,37 @@ export function markSubagentSpawned(
 }
 
 /**
- * Called from subagent_ended hook. Marks a subagent run as ended.
- * Does NOT decrement expected count — that's done when completion is delivered via outbound.
+ * Called from subagent_ended hook. Marks a subagent run as ended AND
+ * counts it as a delivery. This is the primary completion tracking
+ * mechanism because subagent completions may not route through
+ * xyOutbound.sendText (they go through openclaw's internal gateway
+ * agent path with potentially deliver=false).
+ *
+ * Returns transition with shouldFinalize if all completions have ended.
  */
 export function markSubagentEnded(
   sessionKey: string,
-): void {
+): SubagentWaitTransition | null {
   const mapped = resolveSessionIdFromSessionKey(sessionKey);
-  if (!mapped) return;
+  if (!mapped) return null;
 
   const { sessionId, taskId } = mapped;
   const states = getStatesArray(sessionId);
   const state = states.find((s) => s.taskId === taskId);
-  if (!state) return;
-
-  logger.withContext(sessionId, taskId).log(
-    `[SUBAGENT-WAIT] Subagent ended, delivered=${state.deliveredCompletions}/${state.expectedCompletions}`,
-  );
-}
-
-/**
- * Called from xyOutbound.sendText when a subagent completion is delivered.
- * Increments delivered count and returns transition state.
- */
-export function markCompletionDelivered(
-  sessionId: string,
-  taskId: string,
-  text?: string,
-): SubagentWaitTransition | null {
-  const states = getStatesArray(sessionId);
-  const state = states.find((s) => s.taskId === taskId);
   if (!state) {
     logger.withContext(sessionId, taskId).log(
-      `[SUBAGENT-WAIT] No wait state matched for completion delivery`,
+      `[SUBAGENT-WAIT] Subagent ended but no wait state found`,
     );
     return null;
   }
 
   state.deliveredCompletions += 1;
-  if (text?.trim()) {
-    state.completionTexts.push(text.trim());
-  }
   const complete = isComplete(state);
   const shouldFinalize = claimFinalizationIfReady(state);
   waitStates.set(sessionId, states);
 
   logger.withContext(sessionId, taskId).log(
-    `[SUBAGENT-WAIT] Completion delivered=${state.deliveredCompletions}/${state.expectedCompletions}, complete=${complete}, shouldFinalize=${shouldFinalize}`,
+    `[SUBAGENT-WAIT] Subagent ended, delivered=${state.deliveredCompletions}/${state.expectedCompletions}, complete=${complete}, shouldFinalize=${shouldFinalize}`,
   );
   return { state, isComplete: complete, shouldFinalize };
 }
@@ -250,6 +234,22 @@ export function markParentSettled(
     `[SUBAGENT-WAIT] Parent settled, completions=${state.deliveredCompletions}/${state.expectedCompletions}, shouldFinalize=${shouldFinalize}`,
   );
   return { state, isComplete: complete, shouldFinalize };
+}
+
+/**
+ * Store a completion text snippet captured from xyOutbound.sendText.
+ * Does NOT increment delivery count (that's done by markSubagentEnded).
+ */
+export function addCompletionText(
+  sessionId: string,
+  taskId: string,
+  text: string,
+): void {
+  const states = getStatesArray(sessionId);
+  const state = states.find((s) => s.taskId === taskId);
+  if (!state || !text.trim()) return;
+  state.completionTexts.push(text.trim());
+  waitStates.set(sessionId, states);
 }
 
 export function attachHeartbeat(
