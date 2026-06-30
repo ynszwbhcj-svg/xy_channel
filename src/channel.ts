@@ -139,13 +139,26 @@ export const xyPlugin: ChannelPlugin = {
         ? { conversationId, matchPriority: 2 }
         : null;
     },
-    resolveCommandConversation: ({ accountId }) => {
+    resolveCommandConversation: ({ accountId, sessionKey }) => {
       // xiaoyi-channel: the A2A sessionId IS the conversationId.
-      // Read from the current ALS session context.
+      // 1. Prefer the current ALS session context (works when the command
+      //    is processed inside an active A2A message-handling turn).
       const ctx = getCurrentSessionContext();
-      const sessionId = ctx?.sessionId?.trim();
-      if (!sessionId) return null;
-      return { conversationId: sessionId };
+      const alsSessionId = ctx?.sessionId?.trim();
+      if (alsSessionId) return { conversationId: alsSessionId };
+
+      // 2. Fall back to parsing the session key. For xiaoyi-channel the
+      //    session key has the form:
+      //      agent:<agentId>:xiaoyi-channel:<accountId>:<sessionId>
+      //    The last `:`-delimited segment is the A2A sessionId.
+      if (sessionKey) {
+        const lastColon = sessionKey.lastIndexOf(":");
+        if (lastColon >= 0) {
+          const sessionId = sessionKey.slice(lastColon + 1).trim();
+          if (sessionId) return { conversationId: sessionId };
+        }
+      }
+      return null;
     },
   },
 
