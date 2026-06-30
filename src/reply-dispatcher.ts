@@ -245,6 +245,9 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
             return;
           }
 
+          // DEBUG: 记录 deliver 发送内容
+          scopedLog().log(`[DEBUG-DEDUP] deliver: text_len=${text.length}, accumulated_len=${accumulatedText.length}, text_preview="${text.slice(0, 100)}", accumulated_preview="${accumulatedText.slice(0, 100)}"`);
+
           accumulatedText += text;
           hasSentResponse = true;
 
@@ -501,9 +504,12 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
             // 模型可能返回完整文本（非纯增量），如果新文本以已累积内容开头，
             // 则只取新增的后缀部分，避免 append 模式下重复拼接。
             let sendText = text;
-            if (accumulatedText.length > 0 && text.startsWith(accumulatedText)) {
+            const dedupApplied = accumulatedText.length > 0 && text.startsWith(accumulatedText);
+            if (dedupApplied) {
               sendText = text.slice(accumulatedText.length);
             }
+            // DEBUG: 记录 onPartialReply 去重详情
+            scopedLog().log(`[DEBUG-DEDUP] onPartialReply: text_len=${text.length}, accumulated_len=${accumulatedText.length}, sendText_len=${sendText.length}, dedup=${dedupApplied}, text_preview="${text.slice(0, 100)}", accumulated_preview="${accumulatedText.slice(0, 100)}", sendText_preview="${sendText.slice(0, 100)}"`);
             accumulatedText += sendText;
             hasSentResponse = true;
 

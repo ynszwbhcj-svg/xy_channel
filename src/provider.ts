@@ -176,7 +176,6 @@ function createRetryingStream(
             logger.log(
               `[xiaoyiprovider] stream completed, usage: input=${event.message?.usage?.input} output=${event.message?.usage?.output}`,
             );
-            logger.log(`[xiaoyiprovider] full model response: ${JSON.stringify(fullResponseEvents)}`);
             resultResolve(event.message);
             yield event;
             return;
