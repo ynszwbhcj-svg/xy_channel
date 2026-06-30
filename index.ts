@@ -12,6 +12,10 @@ import { getAllPushIds } from "./src/utils/pushid-manager.js";
 import { registerSelfEvolutionToolResultNudge } from "./src/self-evolution-tool-result-nudge.js";
 import { createBeforePromptBuildHandler } from "./src/skill-retriever/hooks.js";
 import { normalizeToolRetrieverConfig } from "./src/skill-retriever/config.js";
+import {
+  markSubagentSpawned,
+  markSubagentEnded,
+} from "./src/subagent-wait-state.js";
 
 /**
  * Register the cron detection hook.
@@ -179,7 +183,33 @@ function readJobIdFromResult(result: unknown): string | undefined {
   return undefined;
 }
 
+function registerSubagentHooks(api: OpenClawPluginApi) {
+  // subagent_spawned: fires after a subagent run is successfully registered.
+  // We increment the expected completion count so that onIdle knows to wait.
+  api.on("subagent_spawned", async (_event, ctx) => {
+    const requesterSessionKey = ctx?.requesterSessionKey;
+    if (!requesterSessionKey) return;
+    const count = markSubagentSpawned(requesterSessionKey);
+    if (count > 0) {
+      console.log(`[XY-SUBAGENT] spawned, requesterSessionKey=${requesterSessionKey.slice(0, 30)}, expected=${count}`);
+    }
+  });
+
+  // subagent_ended: fires when a subagent run terminates (complete/error/killed).
+  // We log the event for tracking; the actual completion count is decremented
+  // when the subagent result is delivered via xyOutbound.sendText.
+  api.on("subagent_ended", async (event, ctx) => {
+    const requesterSessionKey = ctx?.requesterSessionKey;
+    if (!requesterSessionKey) return;
+    markSubagentEnded(requesterSessionKey);
+    console.log(`[XY-SUBAGENT] ended, sessionKey=${event?.targetSessionKey?.slice(0, 30)}, outcome=${event?.outcome}, requester=${requesterSessionKey.slice(0, 30)}`);
+  });
+}
+
 function registerFullHooks(api: OpenClawPluginApi) {
+  // SUBAGENT HOOKS: track subagent spawn/end lifecycle for session keep-alive
+  registerSubagentHooks(api);
+
   // SKILL RETRIEVER HOOK: before_prompt_build hook
   const pluginConfig = (api as { pluginConfig?: unknown }).pluginConfig as Record<string, unknown> || {};
   const skillRetrieverConfig = normalizeToolRetrieverConfig({

@@ -9,12 +9,66 @@ import { resolveXYConfig } from "./config.js";
 import { XYFileUploadService } from "./file-upload.js";
 import { XYPushService } from "./push.js";
 import { getCurrentSessionContext } from "./tools/session-manager.js";
+import {
+  getWaitState,
+  markCompletionDelivered,
+  clearWaitState,
+} from "./subagent-wait-state.js";
+import { decrementTaskIdRef } from "./task-manager.js";
+import { sendA2AResponse, sendStatusUpdate } from "./formatter.js";
 import { savePushData } from "./utils/pushdata-manager.js";
 import { getAllPushIds } from "./utils/pushid-manager.js";
 import { logger } from "./utils/logger.js";
 
 // Special marker for default push delivery when no target is specified
 const DEFAULT_PUSH_MARKER = "default";
+
+// ─── Subagent completion delivery ──────────────────────────────
+
+export async function deliverSubagentFinalResult(params: {
+  config: ReturnType<typeof resolveXYConfig>;
+  state: import("./subagent-wait-state.js").SubagentWaitState;
+  reason?: string;
+  text?: string;
+}): Promise<void> {
+  const { config, state, reason, text } = params;
+  const log = logger.withContext(state.sessionId, state.taskId);
+
+  const finalText = state.completionTexts.length > 0
+    ? state.completionTexts.join("\n\n")
+    : (text ?? "");
+
+  await sendStatusUpdate({
+    config,
+    sessionId: state.sessionId,
+    taskId: state.taskId,
+    messageId: state.messageId,
+    text: "任务处理已完成~",
+    state: "completed",
+    useLatestTask: false,
+  });
+
+  await sendA2AResponse({
+    config,
+    sessionId: state.sessionId,
+    taskId: state.taskId,
+    messageId: state.messageId,
+    text: finalText,
+    append: false,
+    final: true,
+    artifactId: state.artifactId,
+  });
+
+  clearWaitState(
+    state.sessionId,
+    reason ?? "all-subagent-results-delivered",
+    state.taskId,
+  );
+  decrementTaskIdRef(state.sessionId, state.taskId);
+  log.log(`[xyOutbound] Subagent final delivered to original A2A task, reason=${reason}`);
+}
+
+// ─── MIME types ─────────────────────────────────────────────────
 
 // File extension to MIME type mapping
 const FILE_TYPE_TO_MIME_TYPE: Record<string, string> = {
@@ -83,19 +137,32 @@ export const xyOutbound: ChannelOutboundAdapter = {
     if (!trimmedTo.includes("::")) {
       logger.log(`[xyOutbound.resolveTarget] Target "${trimmedTo}" missing taskId, looking up session context`);
 
-      // Try to get the current session context
+      // Try ALS context first (normal agent turn)
       const sessionContext = getCurrentSessionContext();
       if (sessionContext && sessionContext.sessionId === trimmedTo) {
         const enhancedTarget = `${trimmedTo}::${sessionContext.taskId}`;
-        logger.log(`[xyOutbound.resolveTarget] Enhanced target: ${enhancedTarget}`);
+        logger.log(`[xyOutbound.resolveTarget] Enhanced target from ALS: ${enhancedTarget}`);
         return {
           ok: true,
           to: enhancedTarget,
         };
-      } else {
-        logger.log(`[xyOutbound.resolveTarget] Could not find matching session context for "${trimmedTo}"`);
-        // Still return the original target, but it may fail in sendMedia
       }
+
+      // Fallback: subagent wait state (ALS is null for subagent completion deliveries)
+      const waitState = getWaitState(trimmedTo);
+      if (waitState) {
+        const enhancedTarget = `${waitState.sessionId}::${waitState.taskId}`;
+        logger.withContext(waitState.sessionId, waitState.taskId).log(
+          `[xyOutbound.resolveTarget] Enhanced target from subagent wait state: ${enhancedTarget}`,
+        );
+        return {
+          ok: true,
+          to: enhancedTarget,
+        };
+      }
+
+      logger.log(`[xyOutbound.resolveTarget] Could not find matching session context or wait state for "${trimmedTo}"`);
+      // Still return the original target, but it may fail in sendMedia
     }
 
     // Otherwise, use the provided target (either already in correct format or for sendText)
@@ -110,6 +177,57 @@ export const xyOutbound: ChannelOutboundAdapter = {
 
     // Resolve configuration
     const config = resolveXYConfig(cfg);
+
+    // ── Subagent completion interception ─────────────────────────
+    // Isolation guards:
+    //   1. ALS context is null (subagent completions arrive outside any agent turn)
+    //   2. A wait state exists for the target sessionId
+    //   3. The taskId matches (enhanced by resolveTarget from wait state)
+    const alsCtx = getCurrentSessionContext();
+    if (!alsCtx && to && to !== DEFAULT_PUSH_MARKER) {
+      const [targetSessionId, targetTaskId] = String(to).split("::");
+      const waitState = getWaitState(targetSessionId, targetTaskId);
+
+      if (waitState && !waitState.finalizationClaimed) {
+        const delivered = markCompletionDelivered(
+          targetSessionId,
+          targetTaskId,
+          text as string,
+        );
+
+        if (delivered) {
+          const { state, isComplete, shouldFinalize } = delivered;
+          const log = logger.withContext(state.sessionId, state.taskId);
+
+          if (shouldFinalize) {
+            // All completions arrived and parent already settled → send final
+            log.log(`[xyOutbound.sendText] All subagent results arrived after parent settled, finalizing`);
+            await deliverSubagentFinalResult({ config, state, reason: "all-subagent-results-delivered-after-parent-settled", text: text as string });
+          } else if (isComplete) {
+            // All completions arrived but parent hasn't settled yet → defer
+            log.log(`[xyOutbound.sendText] All subagent results arrived before parent settled, deferring finalization`);
+          } else {
+            // Still waiting for more completions → send progress update
+            log.log(`[xyOutbound.sendText] Subagent completion ${state.deliveredCompletions}/${state.expectedCompletions}`);
+            try {
+              await sendStatusUpdate({
+                config,
+                sessionId: state.sessionId,
+                taskId: state.taskId,
+                messageId: state.messageId,
+                text: `已收到子任务结果 ${state.deliveredCompletions}/${state.expectedCompletions}，继续等待其他子任务~`,
+                state: "working",
+                useLatestTask: false,
+              });
+            } catch (err) {
+              log.error(`[xyOutbound.sendText] Failed to send subagent progress status:`, err);
+            }
+          }
+        }
+        // Continue with push delivery (subagent result also delivered as push)
+      }
+    }
+    // ── End subagent interception ───────────────────────────────
 
     // Handle default push marker (for cron jobs without explicit target)
     let actualTo = to;

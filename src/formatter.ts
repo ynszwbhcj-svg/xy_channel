@@ -65,6 +65,9 @@ export interface SendA2AResponseParams {
   text?: string;
   append: boolean;
   final: boolean;
+  /** Optional: reuse an existing artifactId instead of generating a new one.
+   *  Used by subagent completion to link results to the original artifact. */
+  artifactId?: string;
   files?: Array<{ fileName: string; fileType: string; fileId: string }>;
   errorCode?: number | string; // 错误码，用于任务执行异常场景
   errorMessage?: string; // 错误描述
@@ -75,7 +78,7 @@ export interface SendA2AResponseParams {
  * Send an A2A artifact update response.
  */
 export async function sendA2AResponse(params: SendA2AResponseParams): Promise<void> {
-  const { config, sessionId, taskId, messageId, text, append, final, files, errorCode, errorMessage, log: shouldLog = true } = params;
+  const { config, sessionId, taskId, messageId, text, append, final, artifactId, files, errorCode, errorMessage, log: shouldLog = true } = params;
   const log = logger.withContext(sessionId, taskId);
 
   // 审批桥接：将 OpenClaw 的审批提示翻译成用户友好的确认文案
@@ -89,7 +92,7 @@ export async function sendA2AResponse(params: SendA2AResponseParams): Promise<vo
     lastChunk: true,
     final,
     artifact: {
-      artifactId: uuidv4(),
+      artifactId: artifactId ?? uuidv4(),
       parts: [],
     },
   };
@@ -221,6 +224,8 @@ export interface SendStatusUpdateParams {
   messageId: string;
   text: string;
   state: "submitted" | "working" | "input-required" | "completed" | "canceled" | "failed" | "unknown";
+  /** When false, use the exact taskId/messageId passed in. Default true (dynamic lookup). */
+  useLatestTask?: boolean;
 }
 
 /**
@@ -228,7 +233,7 @@ export interface SendStatusUpdateParams {
  * Follows A2A protocol standard format with nested status object.
  */
 export async function sendStatusUpdate(params: SendStatusUpdateParams): Promise<void> {
-  const { config, sessionId, taskId, messageId, text, state } = params;
+  const { config, sessionId, taskId, messageId, text, state, useLatestTask = true } = params;
 
   const log = logger.withContext(sessionId, taskId);
 
