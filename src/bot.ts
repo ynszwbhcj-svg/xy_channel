@@ -12,6 +12,7 @@ import {
   appendSelfEvolutionKeywordNudge,
   shouldNudgeForSelfEvolutionKeyword,
 } from "./self-evolution-keyword.js";
+import { queueAgentHarnessMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { runWithSessionContext } from "./tools/session-manager.js";
 import { configManager } from "./utils/config-manager.js";
 import { addPushId } from "./utils/pushid-manager.js";
@@ -681,7 +682,7 @@ function enqueueSteer(params: EnqueueSteerParams): Promise<void> {
 }
 
 async function dispatchSteerWhenReady(params: EnqueueSteerParams): Promise<void> {
-  const { sessionId, sessionKey, steerText } = params;
+  const { sessionId, steerText } = params;
   const log = logger.withContext(sessionId, params.parsed.taskId);
 
   // 1. 等待第一条消息开始 streaming
@@ -706,7 +707,7 @@ async function dispatchSteerWhenReady(params: EnqueueSteerParams): Promise<void>
     log.log(`[STEER-QUEUE] Streaming signal received`);
   } else {
     // 轮询超时且 hasActiveTask 仍为 true——说明第一条消息可能卡在异常路径，
-    // 没有创建 signal。此时 dispatch 会与第一条消息的模型调用并发冲突，放弃。
+    // 没有创建 signal。此时放弃，避免并发碰撞。
     log.log(`[STEER-QUEUE] Signal never appeared after polling, skip steer to avoid collision`);
     return;
   }
@@ -717,93 +718,24 @@ async function dispatchSteerWhenReady(params: EnqueueSteerParams): Promise<void>
     return;
   }
 
-  // 3. 构建 dispatch 上下文并 dispatch /steer
-  const core = getXYRuntime() as any;
-  const speaker = sessionId;
-
-  // 如果有文件附件，把路径拼到 steer 文本末尾，让模型通过工具读取
+  // 3. 直接注入到活跃的 Pi run 中，不创建独立 dispatcher。
+  //    模型回复通过第一条消息的 dispatcher 的 onPartialReply 流式发出，
+  //    使用 registerTaskId + updateFallbackTaskId 已同步的最新 taskId。
   const mediaPaths = params.mediaPayload?.MediaPaths;
   const fileHint =
     mediaPaths && mediaPaths.length > 0
       ? `\n【用户上传附件】：${JSON.stringify(mediaPaths)}`
       : "";
-  const steerCommand = `/steer ${steerText}${fileHint}`;
-  const messageBody = `${speaker}: ${steerCommand}`;
-  const envelopeOptions = core.channel.reply.resolveEnvelopeFormatOptions(params.cfg);
-  const body = core.channel.reply.formatAgentEnvelope({
-    channel: "xiaoyi-channel",
-    from: speaker,
-    timestamp: new Date(),
-    envelope: envelopeOptions,
-    body: messageBody,
+  const steerMessage = `${steerText}${fileHint}`;
+
+  log.log(`[STEER-QUEUE] Injecting steer message directly into active run`);
+  const injected = queueAgentHarnessMessage(sessionId, steerMessage, {
+    steeringMode: "all",
   });
 
-  const ctxPayload = core.channel.reply.finalizeInboundContext({
-    Body: body,
-    RawBody: steerCommand,
-    CommandBody: steerCommand,
-    From: sessionId,
-    To: sessionId,
-    SessionKey: params.route.sessionKey,
-    AccountId: params.route.accountId,
-    ChatType: "direct" as const,
-    GroupSubject: undefined,
-    SenderName: sessionId,
-    SenderId: sessionId,
-    Provider: "xiaoyi-channel" as const,
-    Surface: "xiaoyi-channel" as const,
-    MessageSid: `xiaoyi_${params.parsed.taskId}_${params.deviceType}`,
-    Timestamp: Date.now(),
-    WasMentioned: false,
-    CommandAuthorized: true,
-    OriginatingChannel: "xiaoyi-channel" as const,
-    OriginatingTo: sessionId,
-    ReplyToBody: undefined,
-    ...params.mediaPayload,
-  });
-
-  const steerState = { steered: true };
-
-  const { dispatcher, replyOptions } = createXYReplyDispatcher({
-    cfg: params.cfg,
-    runtime: params.runtime,
-    sessionId,
-    taskId: params.parsed.taskId,
-    messageId: params.parsed.messageId,
-    accountId: params.route.accountId,
-    steerState,
-  });
-
-  const sessionContext = {
-    config: resolveXYConfig(params.cfg),
-    sessionId,
-    taskId: params.parsed.taskId,
-    messageId: params.parsed.messageId,
-    agentId: params.route.accountId,
-    deviceType: params.deviceType,
-  };
-
-  log.log(`[STEER-QUEUE] Dispatching steer`);
-
-  await core.channel.reply.withReplyDispatcher({
-    dispatcher,
-    onSettled: () => {
-      log.log(`[STEER-QUEUE] Steer dispatch settled`);
-    },
-    run: () => {
-      return runWithSessionContext(sessionContext, async () => {
-        log.log(`[ALS-PROOF] bot entered steer dispatch scope sessionId=${(sessionContext as any).sessionId} taskId=${(sessionContext as any).taskId} isSteer=true`);
-        const result = await core.channel.reply.dispatchReplyFromConfig({
-          ctx: ctxPayload,
-          cfg: params.cfg,
-          dispatcher,
-          replyOptions,
-        });
-        log.log(`[STEER-QUEUE] dispatch result: ${JSON.stringify(result)}`);
-        return result;
-      });
-    },
-  });
-
-  log.log(`[STEER-QUEUE] Steer dispatch completed`);
+  if (injected) {
+    log.log(`[STEER-QUEUE] Steer message injected successfully`);
+  } else {
+    log.log(`[STEER-QUEUE] Steer injection failed — run may not be accepting messages`);
+  }
 }
