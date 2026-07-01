@@ -706,6 +706,7 @@ export class XYWebSocketManager extends EventEmitter {
 
             log.log(`[XY] Processing ${events.length} events from data.events`);
             for (const item of events) {
+              log.log(`[XY] Raw event: header=${JSON.stringify(item?.header)}, payloadKeys=${Object.keys(item?.payload ?? {}).join(",")}`);
               const dataEvent = this.toUploadExeDataEvent(item);
               const crossDeviceTaskResult = this.toCrossDeviceTaskResultEvent(item, sessionId);
               if (dataEvent) {
@@ -761,6 +762,9 @@ export class XYWebSocketManager extends EventEmitter {
               } else if (item.header?.namespace === "System" && item.header?.name === "ExecuteAgentAsSkillResponse") {
                 log.log("[XY] ExecuteAgentAsSkillResponse detected, emitting agent-as-skill-response");
                 this.emit("agent-as-skill-response", item);
+              } else if (item.header?.namespace === "FunctionExecute" && item.header?.name === "ExecuteCLIRsp") {
+                log.log(`[XY] FunctionExecute.ExecuteCLIRsp detected, emitting cli-response, type=${item.payload?.type}`);
+                this.emit("cli-response", item.payload);
               }
             }
           }
@@ -822,6 +826,7 @@ export class XYWebSocketManager extends EventEmitter {
 
               log.log(`[XY] Processing ${events.length} events from data.events`);
               for (const item of events) {
+                log.log(`[XY] Raw event (wrapped): header=${JSON.stringify(item?.header)}, payloadKeys=${Object.keys(item?.payload ?? {}).join(",")}`);
                 const dataEvent = this.toUploadExeDataEvent(item);
                 const crossDeviceTaskResult = this.toCrossDeviceTaskResultEvent(
                   item,
@@ -867,6 +872,9 @@ export class XYWebSocketManager extends EventEmitter {
                 } else if (item.header?.namespace === "System" && item.header?.name === "ExecuteAgentAsSkillResponse") {
                   log.log("[XY] ExecuteAgentAsSkillResponse detected (wrapped format), emitting agent-as-skill-response");
                   this.emit("agent-as-skill-response", item);
+                } else if (item.header?.namespace === "FunctionExecute" && item.header?.name === "ExecuteCLIRsp") {
+                  log.log(`[XY] FunctionExecute.ExecuteCLIRsp detected (wrapped), emitting cli-response, type=${item.payload?.type}`);
+                  this.emit("cli-response", item.payload);
                 }
               }
             }
