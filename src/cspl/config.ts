@@ -4,6 +4,10 @@
 
 import fs from 'fs';
 import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 import {HttpHeaders, CONFIG_FILE_NAME, ENV_FILE_PATH, API_URL_SUFFIX, REQUIRED_ENV_VARS} from './constants.js';
 import { logger } from '../utils/logger.js';
