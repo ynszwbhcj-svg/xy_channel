@@ -645,9 +645,7 @@ export async function cliBeforeToolCallHandler(
   }
 
   // Get session context and execute
-  const sessionCtx = ctx.sessionKey
-    ? (await import("./session-manager.js")).getSessionContext(ctx.sessionKey)
-    : null;
+  const sessionCtx = (await import("./session-manager.js")).getCurrentSessionContext();
 
   if (!sessionCtx) {
     logger.warn(`[CLI-HOOK] No session context, blocking (${(performance.now() - t0).toFixed(1)}ms)`);
