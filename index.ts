@@ -12,6 +12,7 @@ import { getAllPushIds } from "./src/utils/pushid-manager.js";
 import { registerSelfEvolutionToolResultNudge } from "./src/self-evolution-tool-result-nudge.js";
 import { createBeforePromptBuildHandler } from "./src/skill-retriever/hooks.js";
 import { normalizeToolRetrieverConfig } from "./src/skill-retriever/config.js";
+import { registerCLIHook } from "./src/tools/hmos-cli.js";
 
 /**
  * Register the cron detection hook.
@@ -226,6 +227,8 @@ export default definePluginEntry({
       registerSentinelHook(api);
       // Cron detection hook: marks toolCallIds from cron sessions
       registerCronDetectionHook(api);
+      // CLI exec hook: intercepts built-in exec for HarmonyOS CLI skill tools
+      registerCLIHook(api);
     }
   },
 });
