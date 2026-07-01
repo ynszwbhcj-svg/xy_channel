@@ -195,7 +195,8 @@ function registerFullHooks(api: OpenClawPluginApi) {
   registerSelfEvolutionToolResultNudge(api);
 }
 
-export default definePluginEntry({
+const pluginEntry: ReturnType<typeof definePluginEntry> = definePluginEntry({
+
   id: "xiaoyi-channel",
   name: "Xiaoyi Channel",
   description: "Xiaoyi channel plugin - Xiaoyi A2A protocol integration",
@@ -232,3 +233,5 @@ export default definePluginEntry({
     }
   },
 });
+
+export default pluginEntry;
