@@ -506,15 +506,16 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
               sendText = text.slice(accumulatedText.length);
             } else {
               // 新文本不以已累积内容为前缀（如工具调用后模型重新开始生成），
-              // 更新 accumulatedText 为当前文本，后续基于此新前缀做去重
+              // 重置 accumulatedText 为当前文本，后续基于此新前缀做去重
               const wasFirstRound = accumulatedText.length === 0;
-              accumulatedText = "";
               // 新一轮输出前加换行分隔（第一轮除外）
               if (sendText.length > 0 && !wasFirstRound) {
                 sendText = "\n" + sendText;
               }
             }
-            accumulatedText += sendText;
+            // 始终追踪模型的原始输出文本，避免注入的 "\n" 前缀污染 accumulatedText
+            // 导致下一轮 startsWith 永久匹配失败
+            accumulatedText = text;
             hasSentResponse = true;
 
             if (sendText.length > 0) {
