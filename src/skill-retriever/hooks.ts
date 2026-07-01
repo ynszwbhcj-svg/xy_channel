@@ -102,6 +102,7 @@ export function createBeforePromptBuildHandler(config: ToolRetrieverConfig) {
         apiKey: config.apiKey,
         uid: config.uid,
         timeoutMs: config.timeoutMs,
+        configExcludedSkills: config.excludedSkills,
       });
 
       if (!searchResult || searchResult.tools.length === 0) {
