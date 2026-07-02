@@ -13,7 +13,8 @@ import {
     HttpHeaders,
     DEFAULT_HTTPS_PORT,
     DEFAULT_HTTP_PORT,
-    HTTP_STATUS_BAD_REQUEST
+    HTTP_STATUS_BAD_REQUEST,
+    API_URL_SUFFIX
 } from './constants.js';
 
 function buildHeadersForCelia(config: { uid: string; apiKey: string; skillId: string; requestFrom: string }, sessionId: string): HttpHeaders {
@@ -108,11 +109,12 @@ export async function callApi(payload: object, api, sessionId: string): Promise<
     const payloadWithUid = { ...payload, uid: config.uid };
     const httpBody = JSON.stringify(payloadWithUid);
 
-    logger.log(`[SENTINEL HOOK] callApi request URL: ${config.api.url}`);
+    const apiUrl = `${config.api.url}${API_URL_SUFFIX}`;
+    logger.log(`[SENTINEL HOOK] callApi request URL: ${apiUrl}`);
     logger.log(`[SENTINEL HOOK] callApi request body: ${httpBody}`);
 
     return new Promise((resolve, reject) => {
-        const options = buildRequestOptions(config.api.url, headersForCelia as HttpHeaders, config.api.timeout);
+        const options = buildRequestOptions(apiUrl, headersForCelia as HttpHeaders, config.api.timeout);
         const req = https.request(options, (res) => {
             handleResponse(res, resolve, reject);
         });
