@@ -32,6 +32,7 @@ import { discoverCrossDevicesTool } from "./tools/discover-cross-devices-tool.js
 import { sendCrossDeviceTaskTool } from "./tools/send-cross-device-task-tool.js";
 import { displayA2UICardByPathTool } from "./tools/display-a2ui-card-bypath-tool.js";
 import { checkPluginPrivilegeTool } from "./tools/check-plugin-privilege-tool.js";
+import { invokeTool } from "./tools/invoke.js";
 
 const ALL_TOOLS: any[] = [
   locationTool,
@@ -56,6 +57,7 @@ const ALL_TOOLS: any[] = [
   loginTokenTool,
   agentAsSkillTool,
   checkPluginPrivilegeTool,
+  invokeTool,
 ];
 
 /**

@@ -25,13 +25,13 @@ import os from "os";
 import { v4 as uuidv4 } from "uuid";
 import WebSocket from "ws";
 
-import type { ChannelAgentTool } from "openclaw/plugin-sdk";
 import type { SessionContext } from "./session-manager.js";
 import type { A2ADataEvent } from "../types.js";
 import { logger } from "../utils/logger.js";
 import { getXYWebSocketManager } from "../client.js";
 import { sendCommand } from "../formatter.js";
 import { getCurrentTaskId } from "../task-manager.js";
+import { getCurrentSessionContext } from "./session-manager.js";
 
 // ═══════════════════════════════════════════════════════════════════════════
 // 1. Types
@@ -1290,17 +1290,14 @@ function validateBusinessParams(
   return null;
 }
 
-/**
- * Create the invoke meta-tool for the given session context.
- *
- * This is the ONLY exported function — the single integration point for
- * create-all-tools.ts.
- */
-export function createInvokeTool(ctx: SessionContext): ChannelAgentTool {
-  return {
-    name: "invoke",
-    label: "Invoke",
-    description:
+// ═══════════════════════════════════════════════════════════════════════════
+// 8. Invoke tool (static — matches ALL_TOOLS pattern)
+// ═══════════════════════════════════════════════════════════════════════════
+
+export const invokeTool = {
+  name: "invoke",
+  label: "Invoke",
+  description:
       "调用已安装 skill 中声明的工具。必须传 functionName(或funcName) 与 arguments(或params)；functionName 的值等于工具定义中的 toolName；arguments 是包含 bundleName 和业务参数字段的对象；完整业务参数定义见 references/tools/<bundleName>__<toolName>.json。",
     parameters: {
       type: "object",
@@ -1347,6 +1344,8 @@ export function createInvokeTool(ctx: SessionContext): ChannelAgentTool {
     },
 
     async execute(toolCallId: string, rawParams: unknown, _signal?: AbortSignal, _onUpdate?: (partialResult: any) => void): Promise<ExecuteResult> {
+      const ctx = getCurrentSessionContext();
+
       // Layer 1: input validation
       const validated = validateAndExtract(rawParams);
       if ("content" in validated) {
@@ -1398,7 +1397,7 @@ export function createInvokeTool(ctx: SessionContext): ChannelAgentTool {
       logger.log(`[INVOKE] dispatching to ${pluginType} executor`, { toolCallId, toolName, bundleName, pluginType });
       try {
         if (pluginType === "Cloud" || pluginType === "MCP") {
-          const result = await executeCloudTool({ definition, businessParams, skillName, sessionId: ctx.sessionId, agentId: ctx.agentId });
+          const result = await executeCloudTool({ definition, businessParams, skillName, sessionId: ctx?.sessionId ?? "", agentId: ctx?.agentId ?? "" });
           logger.log("[INVOKE] cloud execution succeeded", {
             toolCallId, toolName, bundleName, pluginType,
             resultLength: result.content[0]?.text?.length ?? 0,
@@ -1406,6 +1405,9 @@ export function createInvokeTool(ctx: SessionContext): ChannelAgentTool {
           return result;
         }
         if (pluginType === "Device") {
+          if (!ctx) {
+            return invokeErrorToResult(new InvokeError("DEVICE_TOOL_BLOCKED", "Device tools require an active session context."));
+          }
           const result = await executeDeviceTool({ definition, businessParams, toolCallId }, ctx);
           logger.log("[INVOKE] device execution succeeded", {
             toolCallId, toolName, bundleName,
@@ -1430,6 +1432,5 @@ export function createInvokeTool(ctx: SessionContext): ChannelAgentTool {
         });
         return unknownErrorToResult(err);
       }
-    },
-  };
-}
+  },
+};

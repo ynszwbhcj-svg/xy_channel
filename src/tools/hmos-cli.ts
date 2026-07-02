@@ -18,6 +18,7 @@ import { logger } from "../utils/logger.js";
 import { InvokeError, invokeErrorToResult } from "./invoke.js";
 import type { XYChannelConfig, A2ACommand } from "../types.js";
 import type { SessionContext } from "./session-manager.js";
+import { getCurrentSessionContext } from "./session-manager.js";
 import { getXYWebSocketManager } from "../client.js";
 import { sendCommand } from "../formatter.js";
 import { getCurrentTaskId } from "../task-manager.js";
@@ -644,8 +645,8 @@ export async function cliBeforeToolCallHandler(
     };
   }
 
-  // Get session context and execute
-  const sessionCtx = (await import("./session-manager.js")).getCurrentSessionContext();
+  // Get session context via ALS (propagated through the async call chain)
+  const sessionCtx = getCurrentSessionContext();
 
   if (!sessionCtx) {
     logger.warn(`[CLI-HOOK] No session context, blocking (${(performance.now() - t0).toFixed(1)}ms)`);
