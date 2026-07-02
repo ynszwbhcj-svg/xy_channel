@@ -174,8 +174,17 @@ interface CloudExecuteParams {
   definition: ToolDefinition;
   businessParams: Record<string, unknown>;
   skillName: string;
-  sessionId: string;
+  sessionId: string;        // ctx.sessionId — used for conversationId
   agentId: string;
+  taskId: string;           // raw taskId with & separators (e.g. "uuid&27&b18d&0")
+}
+
+/** Parse the &-separated taskId into sessionId (part 0) and interactionId (part 1). */
+function parseTaskId(taskId: string): { taskSessionId: string; interactionId: number } {
+  const parts = taskId.split("&");
+  const taskSessionId = parts[0] ?? taskId;
+  const interactionId = parseInt(parts[1] ?? "1", 10) || 1;
+  return { taskSessionId, interactionId };
 }
 
 interface DeviceExecuteParams {
@@ -699,13 +708,14 @@ function loadCloudConfig(): CloudConfig {
 }
 
 function buildCloudRequest(p: CloudExecuteParams): CloudRequestBody {
+  const { taskSessionId, interactionId } = parseTaskId(p.taskId);
   return {
     version: "1.0",
     session: {
       isNew: "true",
-      sessionId: p.sessionId,
-      interactionId: 1,
-      conversationId: uuidv4(),
+      sessionId: taskSessionId,
+      interactionId,
+      conversationId: p.sessionId,  // ctx.sessionId
       agentLoginSessionId1: p.agentId,
     },
     endpoint: {
@@ -738,11 +748,11 @@ function buildCloudRequest(p: CloudExecuteParams): CloudRequestBody {
   };
 }
 
-function buildHeaders(config: CloudConfig, skillName: string, protocol: Protocol): Record<string, string> {
+function buildHeaders(config: CloudConfig, skillName: string, protocol: Protocol, taskId: string): Record<string, string> {
   return {
     "content-type": "application/json",
     accept: protocol === "REST" ? "application/json" : "text/event-stream",
-    "x-hag-trace-id": uuidv4(),
+    "x-hag-trace-id": taskId,
     "x-uid": config.uid,
     "x-api-key": config.apiKey,
     "x-request-from": "openclaw",
@@ -760,8 +770,8 @@ async function executePluginExecutor(
   config: CloudConfig, requestBody: CloudRequestBody, headers: Record<string, string>,
   toolName: string, bundleName: string, protocol: Protocol,
 ): Promise<ExecuteResult> {
-  // Convert serviceUrl to wss:// regardless of original protocol (http, https, etc.)
-  const wsBaseUrl = config.serviceUrl.replace(/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//i, "wss://");
+  // Map http→ws, https→wss
+  const wsBaseUrl = config.serviceUrl.replace(/^http(s)?:\/\//i, "ws$1://");
   const url = `${wsBaseUrl}${UNIFIED_API_SUFFIX}`;
   const isStreaming = protocol === "SSE" || protocol === "Websocket";
 
@@ -1042,7 +1052,7 @@ async function executeCloudTool(params: CloudExecuteParams): Promise<ExecuteResu
   return executePluginExecutor(
     config,
     buildCloudRequest(params),
-    buildHeaders(config, skillName, protocol),
+    buildHeaders(config, skillName, protocol, params.taskId),
     toolName,
     bundleName,
     protocol,
@@ -1397,7 +1407,7 @@ export const invokeTool = {
       logger.log(`[INVOKE] dispatching to ${pluginType} executor`, { toolCallId, toolName, bundleName, pluginType });
       try {
         if (pluginType === "Cloud" || pluginType === "MCP") {
-          const result = await executeCloudTool({ definition, businessParams, skillName, sessionId: ctx?.sessionId ?? "", agentId: ctx?.agentId ?? "" });
+          const result = await executeCloudTool({ definition, businessParams, skillName, sessionId: ctx?.sessionId ?? "", agentId: ctx?.agentId ?? "", taskId: ctx?.taskId ?? toolCallId });
           logger.log("[INVOKE] cloud execution succeeded", {
             toolCallId, toolName, bundleName, pluginType,
             resultLength: result.content[0]?.text?.length ?? 0,
