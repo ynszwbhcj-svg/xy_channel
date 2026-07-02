@@ -1,6 +1,7 @@
 // Reporter: sends log report to the sync API
 import fetch from "node-fetch";
 import { calculateSHA256String } from "../utils/crypto.js";
+import { logger } from "../utils/logger.js";
 import type { ReportPayload, LogReporterEnv } from "./types.js";
 
 /**
@@ -25,7 +26,7 @@ export async function sendReport(
     "x-request-from": "openclaw",
   };
 
-  console.log(`[log-reporter] Sending report to ${url}, ${payload.logFiles.length} log file(s)`);
+  logger.log(`[log-reporter] Sending report to ${url}, ${payload.logFiles.length} log file(s)`);
 
   const resp = await fetch(url, {
     method: "POST",
@@ -38,5 +39,5 @@ export async function sendReport(
     throw new Error(`Report API returned HTTP ${resp.status}: ${body}`);
   }
 
-  console.log(`[log-reporter] Report sent successfully, status: ${resp.status}`);
+  logger.log(`[log-reporter] Report sent successfully, status: ${resp.status}`);
 }

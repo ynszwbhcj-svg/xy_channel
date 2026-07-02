@@ -8,6 +8,7 @@ import { uploadContent } from "./uploader.js";
 import { sendReport } from "./reporter.js";
 import { loadCursorStore, saveCursorStore, setCursor } from "./cursor-store.js";
 import { parseAndFormatLogContent } from "./openclaw-parser.js";
+import { logger } from "../utils/logger.js";
 import type {
   LogReporterOptions,
   LogMonitorConfig,
@@ -105,8 +106,8 @@ export async function startLogReporter(options: LogReporterOptions): Promise<() 
   const env = readEnvFile();
   const instanceId = generateInstanceId();
 
-  console.log(`[log-reporter] Starting with interval ${SCAN_INTERVAL_MS}ms, ${MONITORS.length} monitor(s) configured`);
-  console.log(`[log-reporter] Instance ID: ${instanceId}`);
+  logger.log(`[log-reporter] Starting with interval ${SCAN_INTERVAL_MS}ms, ${MONITORS.length} monitor(s) configured`);
+  logger.log(`[log-reporter] Instance ID: ${instanceId}`);
 
   async function doScan(): Promise<void> {
     if (isRunning) return; // skip if previous scan still running
@@ -124,7 +125,7 @@ export async function startLogReporter(options: LogReporterOptions): Promise<() 
 
       for (const monitor of MONITORS) {
         const resolvedFiles = resolveLogFiles(monitor.path);
-        console.log(
+        logger.log(
           `[log-reporter] Scanning "${monitor.businessType}": pattern=${monitor.path}, resolved ${resolvedFiles.length} file(s)`,
         );
 
@@ -146,7 +147,7 @@ export async function startLogReporter(options: LogReporterOptions): Promise<() 
             btParts.push(finalContent);
             btCursors[filePath] = result.newCursor;
           } catch (err) {
-            console.error(`[log-reporter] Error scanning "${filePath}":`, err);
+            logger.error(`[log-reporter] Error scanning "${filePath}": ${String(err)}`);
             // Don't persist cursors for this business type on any error
           }
         }
@@ -163,7 +164,7 @@ export async function startLogReporter(options: LogReporterOptions): Promise<() 
 
       // Phase 2: Skip if no content at all
       if (contentMap.size === 0) {
-        console.log("[log-reporter] No new content across all monitors, skipping report");
+        logger.log("[log-reporter] No new content across all monitors, skipping report");
         saveCursorStore(CURSOR_PATH, cursorStore);
         return;
       }
@@ -173,7 +174,7 @@ export async function startLogReporter(options: LogReporterOptions): Promise<() 
       for (const [businessType, content] of contentMap) {
         try {
           const url = await uploadContent(content, businessType, BAK_DIR, options.uploadService);
-          console.log(`[log-reporter] Uploaded content for "${businessType}", url: ${url}`);
+          logger.log(`[log-reporter] Uploaded content for "${businessType}", url: ${url}`);
           logFiles.push({ businessType, fileUrl: url });
 
           // Merge cursors for successful uploads
@@ -184,13 +185,13 @@ export async function startLogReporter(options: LogReporterOptions): Promise<() 
             }
           }
         } catch (err) {
-          console.error(`[log-reporter] Upload failed for "${businessType}":`, err);
+          logger.error(`[log-reporter] Upload failed for "${businessType}": ${String(err)}`);
           // Don't persist cursors for this business type — will retry next cycle
         }
       }
 
       if (logFiles.length === 0) {
-        console.log("[log-reporter] All uploads failed, skipping report");
+        logger.log("[log-reporter] All uploads failed, skipping report");
         return;
       }
 
@@ -199,7 +200,7 @@ export async function startLogReporter(options: LogReporterOptions): Promise<() 
       try {
         await sendReport(payload, env);
       } catch (err) {
-        console.error("[log-reporter] Report failed:", err);
+        logger.error(`[log-reporter] Report failed: ${String(err)}`);
         // Don't persist cursors on report failure — will retry next cycle
         return;
       }
@@ -211,7 +212,7 @@ export async function startLogReporter(options: LogReporterOptions): Promise<() 
       saveCursorStore(CURSOR_PATH, cursorStore);
 
     } catch (err) {
-      console.error("[log-reporter] Scan failed:", err);
+      logger.error(`[log-reporter] Scan failed: ${String(err)}`);
       // Cursor NOT updated — will retry on next cycle
     } finally {
       isRunning = false;
@@ -235,6 +236,6 @@ export function stopLogReporter(): void {
   if (intervalId !== null) {
     clearInterval(intervalId);
     intervalId = null;
-    console.log("[log-reporter] Stopped");
+    logger.log("[log-reporter] Stopped");
   }
 }
