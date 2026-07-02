@@ -7,6 +7,7 @@ import http from 'http';
 import {URL} from 'url';
 
 import {getConfig} from './config.js';
+import { logger } from '../utils/logger.js';
 import {
     ApiResponse,
     HttpHeaders,
@@ -88,6 +89,7 @@ function handleResponse(
     });
 
     res.on('end', () => {
+        logger.log(`[SENTINEL HOOK] callApi response body: ${data}`);
         try {
             const result = parseResponseData(data);
             resolve(result);
@@ -105,6 +107,9 @@ export async function callApi(payload: object, api, sessionId: string): Promise<
     // 确保 uid 存在于消息体中（从 config 注入）
     const payloadWithUid = { ...payload, uid: config.uid };
     const httpBody = JSON.stringify(payloadWithUid);
+
+    logger.log(`[SENTINEL HOOK] callApi request URL: ${config.api.url}`);
+    logger.log(`[SENTINEL HOOK] callApi request body: ${httpBody}`);
 
     return new Promise((resolve, reject) => {
         const options = buildRequestOptions(config.api.url, headersForCelia as HttpHeaders, config.api.timeout);
