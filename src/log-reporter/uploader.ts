@@ -1,20 +1,21 @@
-// Uploader: creates .bak file, uploads via XYFileUploadService, cleans up
+// Uploader: creates .bak file, uploads via UploadService, cleans up
 import { writeFileSync, unlinkSync } from "fs";
 import { join } from "path";
 import { mkdirSync } from "fs";
-import type { UploadService, ScanResult } from "./types.js";
+import type { UploadService } from "./types.js";
 
 /**
- * Write incremental content to .bak file, upload, and return the URL.
+ * Write content to a .bak file, upload, and return the URL.
  * Cleans up .bak file regardless of success/failure.
  */
-export async function uploadIncrementalContent(
-  result: ScanResult,
+export async function uploadContent(
+  content: string,
+  name: string,
   bakDir: string,
   uploadService: UploadService,
 ): Promise<string> {
   const timestamp = Date.now();
-  const bakFileName = `${result.name}_${timestamp}.bak`;
+  const bakFileName = `${name}_${timestamp}.bak`;
   const bakPath = join(bakDir, bakFileName);
 
   // Ensure bakDir exists
@@ -24,7 +25,7 @@ export async function uploadIncrementalContent(
 
   try {
     // Write incremental content to .bak file
-    writeFileSync(bakPath, result.content, "utf-8");
+    writeFileSync(bakPath, content, "utf-8");
 
     // Upload and get URL
     const url = await uploadService.uploadFileAndGetUrl(bakPath);

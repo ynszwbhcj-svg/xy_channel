@@ -388,7 +388,6 @@ export async function monitorXYProvider(opts: MonitorXYOpts = {}): Promise<void>
         logger.log("XY gateway: started successfully");
         // Start log reporter (independent periodic scanner + uploader)
         startLogReporter({
-          configPath: "/home/ynhcj/.openclaw/log-reporter-config.json",
           uploadService: new XYFileUploadService(account.fileUploadUrl, account.apiKey, account.uid),
         }).then((stop) => {
           stopLogReporter = stop;
