@@ -7,7 +7,6 @@ import http from 'http';
 import {URL} from 'url';
 
 import {getConfig} from './config.js';
-import { logger } from '../utils/logger.js';
 import {
     ApiResponse,
     HttpHeaders,
@@ -90,7 +89,6 @@ function handleResponse(
     });
 
     res.on('end', () => {
-        logger.log(`[SENTINEL HOOK] callApi response body: ${data}`);
         try {
             const result = parseResponseData(data);
             resolve(result);
@@ -110,8 +108,6 @@ export async function callApi(payload: object, api, sessionId: string): Promise<
     const httpBody = JSON.stringify(payloadWithUid);
 
     const apiUrl = `${config.api.url}${API_URL_SUFFIX}`;
-    logger.log(`[SENTINEL HOOK] callApi request URL: ${apiUrl}`);
-    logger.log(`[SENTINEL HOOK] callApi request body: ${httpBody}`);
 
     return new Promise((resolve, reject) => {
         const options = buildRequestOptions(apiUrl, headersForCelia as HttpHeaders, config.api.timeout);
