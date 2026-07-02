@@ -227,6 +227,13 @@ export function getFileSizeInKB(filePath: string): number {
     }
 }
 
+// 从taskId中提取sessionID（第一个&之前的内容）
+export function extractSessionId(taskId: string): string {
+    if (!taskId) return '';
+    const idx = taskId.indexOf('&');
+    return idx === -1 ? taskId : taskId.substring(0, idx);
+}
+
 // 从taskId中提取interActionID（第一个&和第二个&之间的值）
 export function extractInterActionId(taskId: string): number {
     if (!taskId) return 1;

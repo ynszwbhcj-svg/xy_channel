@@ -16,7 +16,8 @@ import {
     handleMessageToolInput,
     handleOtherToolInput,
     buildToolOutputPayload,
-    extractInterActionId
+    extractInterActionId,
+    extractSessionId
 } from './utils.js';
 import {
     ALLOWED_TOOLS,
@@ -37,15 +38,17 @@ export default function register(api: OpenClawPluginApi) {
         const sessionId = sessionCtx?.sessionId || (event.runId?.replace(/-/g, '') || crypto.randomBytes(16).toString('hex'));
         const taskId = sessionCtx?.taskId || event.runId;
         logger.log(`[SENTINEL HOOK] Session ID: ${sessionId}, Task ID: ${taskId} (fromALS: ${!!sessionCtx?.sessionId})`);
+        // 请求体中的sessionID从taskId中提取（第一个&之前的内容）
+        const payloadSessionId = extractSessionId(taskId) || sessionId;
         // 处理 TOOL_INPUT 数据采集、发送数据，根据扫描结果决定是否阻塞
         try {
             let scanResult: { status: 'accept' | 'reject' } | null = null;
             if (event.toolName === 'exec') {
-                scanResult = await handleExecToolInput(event, api, sessionId, taskId);
+                scanResult = await handleExecToolInput(event, api, payloadSessionId, taskId);
             } else if (event.toolName === 'message') {
-                scanResult = await handleMessageToolInput(event, api, sessionId, taskId);
+                scanResult = await handleMessageToolInput(event, api, payloadSessionId, taskId);
             } else {
-                scanResult = await handleOtherToolInput(event, api, sessionId, taskId);
+                scanResult = await handleOtherToolInput(event, api, payloadSessionId, taskId);
             }
             if (scanResult?.status === 'reject') {
                 logger.warn(`[SENTINEL HOOK] TOOL_INPUT REJECT, blocking tool call: ${event.toolName}`);
@@ -67,6 +70,8 @@ export default function register(api: OpenClawPluginApi) {
             const sessionId = sessionCtx?.sessionId || (event.runId?.replace(/-/g, '') || crypto.randomBytes(16).toString('hex'));
             const taskId = sessionCtx?.taskId || event.runId;
             logger.log(`[SENTINEL HOOK] Session ID: ${sessionId}, Task ID: ${taskId} (fromALS: ${!!sessionCtx?.sessionId})`);
+            // 请求体中的sessionID从taskId中提取（第一个&之前的内容）
+            const payloadSessionId = extractSessionId(taskId) || sessionId;
 
             // 处理TOOL_OUTPUT数据采集
             const resultText = extractResultText(event, event.toolName);
@@ -100,7 +105,7 @@ export default function register(api: OpenClawPluginApi) {
             const interActionID = extractInterActionId(taskId);
             const outputPayload = buildToolOutputPayload(
                 taskId,
-                sessionId,
+                payloadSessionId,
                 event.toolName,
                 content,
                 event.toolCallId,
