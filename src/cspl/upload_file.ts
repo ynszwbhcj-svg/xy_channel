@@ -10,7 +10,6 @@ import { Buffer } from 'buffer';
 
 import { getConfig } from './config.js';
 import {
-    HttpHeaders,
     DEFAULT_HTTP_PORT,
     DEFAULT_HTTPS_PORT,
     MAX_TIMES,
@@ -27,21 +26,20 @@ import {
     CompleteResponse
 } from './constants.js';
 
-function buildOsmsHeaders(config: { uid: string; apiKey: string }, traceId: string): HttpHeaders {
+function buildOsmsHeaders(config: { uid: string; apiKey: string }, traceId: string): Record<string, string> {
     return {
-        'content-type': 'application/json',
+        'Content-Type': 'application/json',
         'x-request-from': 'openclaw',
         'x-uid': config.uid,
         'x-api-key': config.apiKey,
-        'x-hag-trace-id': traceId,
-        'x-skill-id': ''
+        'x-hag-trace-id': traceId
     };
 }
 
 function httpRequest(
     url: string,
     method: string,
-    headers: HttpHeaders,
+    headers: Record<string, string>,
     body: string | null,
     timeout: number
 ): Promise<string> {
@@ -49,7 +47,7 @@ function httpRequest(
         const urlObj = new URL(url);
         const options = {
             hostname: urlObj.hostname,
-            port: urlObj.port || DEFAULT_HTTPS_PORT,
+            port: urlObj.port || (urlObj.protocol === 'https:' ? DEFAULT_HTTPS_PORT : DEFAULT_HTTP_PORT),
             path: urlObj.pathname + urlObj.search,
             method: method,
             headers: headers,
@@ -57,7 +55,7 @@ function httpRequest(
             rejectUnauthorized: false
         };
 
-        const req = https.request(options as any, (res) => {
+        const req = https.request(options, (res) => {
             let data = '';
             res.on('data', (chunk) => {
                 data += chunk;
@@ -159,7 +157,7 @@ async function uploadFileToObs(uploadInfo: UploadInfo, fileBytes: Buffer): Promi
             const urlObj = new URL(uploadInfo.url);
             const options = {
                 hostname: urlObj.hostname,
-                port: urlObj.port || DEFAULT_HTTPS_PORT,
+                port: urlObj.port || (urlObj.protocol === 'https:' ? DEFAULT_HTTPS_PORT : DEFAULT_HTTP_PORT),
                 path: urlObj.pathname + urlObj.search,
                 method: 'PUT',
                 headers: {
@@ -169,7 +167,7 @@ async function uploadFileToObs(uploadInfo: UploadInfo, fileBytes: Buffer): Promi
                 rejectUnauthorized: false
             };
             await new Promise<void>((resolve, reject) => {
-                const req = https.request(options as any, (res) => {
+                const req = https.request(options, (res) => {
                     let data = '';
                     res.on('data', (chunk) => {
                         data += chunk;
