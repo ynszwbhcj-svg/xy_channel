@@ -23,12 +23,12 @@ import type { ToolRetrieverConfig } from "./types.js";
 import { searchTools, formatToolsForContext, extractUserQuery } from "./tool-search.js";
 import { logger } from "../utils/logger.js";
 
-const TOOL_RETRIEVER_HEADER = `[系统消息，非用户发言]
-
+const TOOL_RETRIEVER_HEADER = `<system-reminder>
 `;
 
 const TOOL_RETRIEVER_FOOTER = `
-以上是检索到的、与当前用户请求相关但用户尚未安装的skill，请按照TOOLS.md中find-skills中的[隐式推荐触发规则]来判断是否要给用户推荐。
+以上是与用户请求相关但尚未安装的skill，请按照TOOLS.md中find-skills中的[隐式推荐触发规则]来判断是否要安装并使用。
+</system-reminder>
 `;
 
 const PLUGIN_LOG_PREFIX = "[skill-retriever]";
