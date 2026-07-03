@@ -13,6 +13,43 @@ import { registerSelfEvolutionToolResultNudge } from "./src/self-evolution-tool-
 import { createBeforePromptBuildHandler } from "./src/skill-retriever/hooks.js";
 import { normalizeToolRetrieverConfig } from "./src/skill-retriever/config.js";
 import { registerCLIHook } from "./src/tools/hmos-cli.js";
+import { writeSkillUsage } from "./src/utils/skills-logger.js";
+
+/**
+ * Parse a file path string to detect if it refers to a SKILL.md file within
+ * a skills directory. Returns the skill name (parent directory) if so.
+ *
+ * Matches paths like:
+ *   ~/.openclaw/workspace/skills/my-skill/SKILL.md
+ *   /home/user/core_skills/my-skill/SKILL.md
+ *   skills/my-skill/SKILL.md
+ */
+function extractSkillNameFromPath(filePath: unknown): string | null {
+  if (typeof filePath !== "string" || !filePath) return null;
+  // Normalize common path prefixes
+  const normalized = filePath.replace(/^~\//, "/home/").replace(/\\/g, "/");
+  // Match: .../skills/<skillName>/SKILL.md  or  .../skills/<skillName>/...
+  // Also match: .../core_skills/<skillName>/SKILL.md
+  const match = normalized.match(/\/(?:core_)?skills\/([^/]+)\/SKILL\.md$/i);
+  return match ? match[1] : null;
+}
+
+/**
+ * Register the skills diagnostic event listener via after_tool_call hook.
+ *
+ * When openclaw fires a `skill.used` diagnostic event, the skill's SKILL.md
+ * is typically read by the model first.  We detect SKILL.md reads through
+ * the `after_tool_call` hook and write the skill name to the skills log.
+ */
+function registerSkillsDiagnosticHook(api: OpenClawPluginApi) {
+  api.on("after_tool_call", async (event, _ctx) => {
+    if (event.toolName !== "read") return;
+    const skillName = extractSkillNameFromPath(event.params?.path);
+    if (skillName) {
+      writeSkillUsage(skillName);
+    }
+  });
+}
 
 /**
  * Register the cron detection hook.
@@ -230,6 +267,8 @@ const pluginEntry: ReturnType<typeof definePluginEntry> = definePluginEntry({
       registerCronDetectionHook(api);
       // CLI exec hook: intercepts built-in exec for HarmonyOS CLI skill tools
       registerCLIHook(api);
+      // Skills diagnostic hook: log skill usage (detected via SKILL.md reads)
+      registerSkillsDiagnosticHook(api);
     }
   },
 });

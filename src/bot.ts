@@ -378,10 +378,6 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
 
     // ── First message (non-steer) path below ──────────────────────
 
-    // 🔑 立即创建 streaming 信号——必须在文件下载等耗时操作之前，
-    // 否则 steer 消息的 dispatchSteerWhenReady 会找不到信号而跳过等待。
-    createStreamingSignal(parsed.sessionId);
-
     // File download — only for real user messages, steer injections have no files
     let mediaPayload: ReturnType<typeof buildXYMediaPayload> = {};
     if (!skipReg) {
@@ -448,7 +444,6 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
       if (cleaned) return;
       cleaned = true;
       log.log(`[BOT] Cleanup started`);
-      streamingSignals.delete(parsed.sessionId);
       decrementTaskIdRef(parsed.sessionId);
       log.log(`[BOT] Cleanup completed`);
     };
@@ -597,51 +592,18 @@ function buildXYMediaPayload(
 }
 
 // ─────────────────────────────────────────────────────────────
-// Steer 串行队列 + streaming 信号
+// Steer 串行队列
 // ─────────────────────────────────────────────────────────────
-
-/** Per-session streaming 信号 */
-interface StreamingSignal {
-  promise: Promise<void>;
-  notify: () => void;
-}
 
 // Use globalThis to survive module deduplication — provider.ts may load a
 // different copy of bot.ts, so a plain module-level Map would be two objects.
 const _g = globalThis as Record<string, unknown>;
 
-if (!_g.__xyStreamingSignals) _g.__xyStreamingSignals = new Map<string, StreamingSignal>();
 if (!_g.__xySteerQueues) _g.__xySteerQueues = new Map<string, Promise<void>>();
 if (!_g.__xyDispatcherUpdaters) _g.__xyDispatcherUpdaters = new Map<string, (taskId: string, messageId: string) => void>();
 
-const streamingSignals = _g.__xyStreamingSignals as Map<string, StreamingSignal>;
 const steerQueues = _g.__xySteerQueues as Map<string, Promise<void>>;
 const dispatcherUpdaters = _g.__xyDispatcherUpdaters as Map<string, (taskId: string, messageId: string) => void>;
-
-/**
- * 由 provider.ts 在 wrapStreamFn 调用时触发。
- * 这是模型 API 被调用的精确时刻，此时 isStreaming 一定为 true。
- */
-export function notifyModelStreaming(sessionId: string): void {
-  const log = logger.withContext(sessionId, "");
-  const signal = streamingSignals.get(sessionId);
-  if (signal) {
-    // 不删除 signal——后续 steer 需要靠它判断模型已在 streaming。
-    // 清理由第一条消息的 onSettled 兜底。
-    signal.notify();
-    log.log(`[STEER-QUEUE] Model streaming signal fired`);
-  }
-}
-
-function createStreamingSignal(sessionId: string): StreamingSignal {
-  const log = logger.withContext(sessionId, "");
-  let resolve!: () => void;
-  const promise = new Promise<void>(r => { resolve = r; });
-  const signal: StreamingSignal = { promise, notify: resolve };
-  streamingSignals.set(sessionId, signal);
-  log.log(`[STEER-QUEUE] Streaming signal created`);
-  return signal;
-}
 
 interface EnqueueSteerParams {
   sessionId: string;
@@ -657,8 +619,8 @@ interface EnqueueSteerParams {
 
 /**
  * 将 steer 消息放入 per-session 串行队列。
- * 等待第一条消息的 streaming 信号（deliver 首次触发），然后 dispatch。
- * 多个 steer 按到达顺序串行处理，无需重试。
+ * 通过指数退避轮询注入（queueAgentHarnessMessage），直到 Pi agent 接受消息或 run 结束。
+ * 多个 steer 按到达顺序串行处理。
  */
 function enqueueSteer(params: EnqueueSteerParams): Promise<void> {
   const { sessionId } = params;
@@ -681,46 +643,19 @@ function enqueueSteer(params: EnqueueSteerParams): Promise<void> {
   return next;
 }
 
+/**
+ * Poll the active embedded run with exponential backoff until the steer message
+ * is accepted or the run completes.
+ *
+ * Replaces the previous signal-based approach (notifyModelStreaming) which fired
+ * from wrapStreamFn too early — before the Pi agent had set state.isStreaming=true.
+ * queueAgentHarnessMessage internally checks isStreaming(), so we retry until the
+ * Pi agent is ready to accept messages.
+ */
 async function dispatchSteerWhenReady(params: EnqueueSteerParams): Promise<void> {
   const { sessionId, steerText } = params;
   const log = logger.withContext(sessionId, params.parsed.taskId);
 
-  // 1. 等待第一条消息开始 streaming
-  //    signal 可能尚未创建（第一条消息还在文件下载等耗时操作中），
-  //    轮询等待直到 signal 出现，最長等待 ~5 秒。
-  let signal = streamingSignals.get(sessionId);
-  if (!signal) {
-    log.log(`[STEER-QUEUE] Signal not yet created, polling`);
-    for (let i = 0; i < 50; i++) {
-      await new Promise(r => setTimeout(r, 100));
-      signal = streamingSignals.get(sessionId);
-      if (signal) break;
-      if (!hasActiveTask(sessionId)) {
-        log.log(`[STEER-QUEUE] First message completed while waiting, skip steer`);
-        return;
-      }
-    }
-  }
-  if (signal) {
-    log.log(`[STEER-QUEUE] Waiting for streaming signal`);
-    await signal.promise;
-    log.log(`[STEER-QUEUE] Streaming signal received`);
-  } else {
-    // 轮询超时且 hasActiveTask 仍为 true——说明第一条消息可能卡在异常路径，
-    // 没有创建 signal。此时放弃，避免并发碰撞。
-    log.log(`[STEER-QUEUE] Signal never appeared after polling, skip steer to avoid collision`);
-    return;
-  }
-
-  // 2. 第一条消息已结束 → 放弃
-  if (!hasActiveTask(sessionId)) {
-    log.log(`[STEER-QUEUE] First message completed, skip steer`);
-    return;
-  }
-
-  // 3. 直接注入到活跃的 Pi run 中，不创建独立 dispatcher。
-  //    模型回复通过第一条消息的 dispatcher 的 onPartialReply 流式发出，
-  //    使用 registerTaskId + updateFallbackTaskId 已同步的最新 taskId。
   const mediaPaths = params.mediaPayload?.MediaPaths;
   const fileHint =
     mediaPaths && mediaPaths.length > 0
@@ -730,23 +665,39 @@ async function dispatchSteerWhenReady(params: EnqueueSteerParams): Promise<void>
 
   log.log(`[STEER-QUEUE] Injecting steer message directly into active run`);
 
-  const STEER_RETRY_MAX = 3;
-  const STEER_RETRY_DELAY_MS = 500;
-  let injected = false;
-  for (let attempt = 0; attempt < STEER_RETRY_MAX; attempt++) {
-    injected = queueAgentHarnessMessage(sessionId, steerMessage, {
+  // Exponential backoff polling until:
+  //   1. Injection succeeds (queueAgentHarnessMessage returns true)
+  //   2. The original run has completed (hasActiveTask returns false)
+  //   3. Maximum total wait time exceeded
+  const MAX_WAIT_MS = 30_000;
+  const MAX_BACKOFF_MS = 4_000;
+  const BASE_DELAY_MS = 500;
+  const startedAt = Date.now();
+  let attempt = 0;
+
+  while (Date.now() - startedAt < MAX_WAIT_MS) {
+    // Termination: first message's run has already finished
+    if (!hasActiveTask(sessionId)) {
+      log.log(`[STEER-QUEUE] First message completed, skip steer`);
+      return;
+    }
+
+    const injected = queueAgentHarnessMessage(sessionId, steerMessage, {
       steeringMode: "all",
     });
-    if (injected) break;
-    if (attempt < STEER_RETRY_MAX - 1 && hasActiveTask(sessionId)) {
-      log.log(`[STEER-QUEUE] Retry ${attempt + 1}/${STEER_RETRY_MAX}: run not accepting, waiting ${STEER_RETRY_DELAY_MS}ms`);
-      await new Promise(r => setTimeout(r, STEER_RETRY_DELAY_MS));
+
+    if (injected) {
+      log.log(`[STEER-QUEUE] Steer injected successfully on attempt ${attempt}`);
+      return;
     }
+
+    // Exponential backoff: min(BASE_DELAY_MS * 2^attempt, MAX_BACKOFF_MS)
+    const delay = Math.min(BASE_DELAY_MS * Math.pow(2, attempt), MAX_BACKOFF_MS);
+    log.log(`[STEER-QUEUE] Attempt ${attempt}: run not accepting, retrying in ${delay}ms`);
+    await new Promise(r => setTimeout(r, delay));
+    attempt++;
   }
 
-  if (injected) {
-    log.log(`[STEER-QUEUE] Steer message injected successfully`);
-  } else {
-    log.log(`[STEER-QUEUE] Steer injection failed after ${STEER_RETRY_MAX} attempts — run may not be accepting messages`);
-  }
+  // Max wait exceeded — model may still be in provider retry loop or unresponsive
+  log.log(`[STEER-QUEUE] Steer injection failed after ${MAX_WAIT_MS}ms timeout`);
 }

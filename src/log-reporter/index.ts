@@ -43,6 +43,11 @@ const MONITORS: LogMonitorConfig[] = [
     businessType: "openclaw-init",
     jsonParse: false,
   },
+  {
+    path: "/tmp/openclaw/skills-{year}{month}{day}.log",
+    businessType: "openclaw-skill",
+    jsonParse: false,
+  },
 ];
 
 // ── State ────────────────────────────────────────────────────────────────────
