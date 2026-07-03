@@ -729,13 +729,24 @@ async function dispatchSteerWhenReady(params: EnqueueSteerParams): Promise<void>
   const steerMessage = `${steerText}${fileHint}`;
 
   log.log(`[STEER-QUEUE] Injecting steer message directly into active run`);
-  const injected = queueAgentHarnessMessage(sessionId, steerMessage, {
-    steeringMode: "all",
-  });
+
+  const STEER_RETRY_MAX = 3;
+  const STEER_RETRY_DELAY_MS = 500;
+  let injected = false;
+  for (let attempt = 0; attempt < STEER_RETRY_MAX; attempt++) {
+    injected = queueAgentHarnessMessage(sessionId, steerMessage, {
+      steeringMode: "all",
+    });
+    if (injected) break;
+    if (attempt < STEER_RETRY_MAX - 1 && hasActiveTask(sessionId)) {
+      log.log(`[STEER-QUEUE] Retry ${attempt + 1}/${STEER_RETRY_MAX}: run not accepting, waiting ${STEER_RETRY_DELAY_MS}ms`);
+      await new Promise(r => setTimeout(r, STEER_RETRY_DELAY_MS));
+    }
+  }
 
   if (injected) {
     log.log(`[STEER-QUEUE] Steer message injected successfully`);
   } else {
-    log.log(`[STEER-QUEUE] Steer injection failed — run may not be accepting messages`);
+    log.log(`[STEER-QUEUE] Steer injection failed after ${STEER_RETRY_MAX} attempts — run may not be accepting messages`);
   }
 }
