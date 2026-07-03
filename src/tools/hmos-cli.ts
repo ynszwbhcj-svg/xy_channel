@@ -251,6 +251,8 @@ export interface CLICache {
   getCLIs(skillName: string): CLICacheEntry[] | null;
   getCLI(skillName: string, cliName: string): CLICacheEntry | null;
   hasCLI(skillName: string, cliName: string): boolean;
+  /** Search all cached skills for a CLI whose name matches the command prefix. */
+  findCLIByCommand(command: string): { entry: CLICacheEntry; skillName: string } | null;
   refresh(): Promise<void>;
   getRootDir(): string;
 }
@@ -265,6 +267,23 @@ function wrapState(state: InternalCLICacheState): CLICache {
       return entries.find(e => e.cliName === cliName) ?? null;
     },
     hasCLI(skillName: string, cliName: string) { return this.getCLI(skillName, cliName) !== null; },
+    findCLIByCommand(command: string) {
+      maybeRefresh(state);
+      const all: Array<{ entry: CLICacheEntry; skillName: string }> = [];
+      for (const [skillName, entries] of state.skillClis) {
+        for (const entry of entries) {
+          all.push({ entry, skillName });
+        }
+      }
+      // Longest CLI name first so "foo bar" matches before "foo"
+      all.sort((a, b) => b.entry.cliName.length - a.entry.cliName.length);
+      for (const item of all) {
+        if (command === item.entry.cliName || command.startsWith(item.entry.cliName + " ")) {
+          return item;
+        }
+      }
+      return null;
+    },
     async refresh() {
       state.skillClis = scanCLIDirectories(state.rootDir);
       state.lastScanMs = Date.now();
@@ -569,7 +588,8 @@ interface HookResult {
  * before_tool_call hook for CLI exec interception.
  *
  * Only handles built-in `exec` calls whose command prefix matches a CLI
- * declared in the current skill's metadata.clis + available_clis.json.
+ * from any skill's metadata.clis + available_clis.json (searched across
+ * all cached skills, not just the current session's skill).
  * Non-matching commands return undefined (noop) so native exec handles them.
  */
 export async function cliBeforeToolCallHandler(
@@ -584,42 +604,16 @@ export async function cliBeforeToolCallHandler(
   const t0 = performance.now();
   const command = rawCommand.trim();
 
-  // Need a current skill context
-  const workspaceDir = ctx.workspaceDir;
-  if (!workspaceDir) {
-    logger.log(`[CLI-HOOK] no workspaceDir, noop (${(performance.now() - t0).toFixed(1)}ms)`);
-    return undefined;
-  }
-
-  const skillName = parseSkillName(workspaceDir);
-  if (!skillName) {
-    logger.log(`[CLI-HOOK] no skill name in ${workspaceDir}, noop (${(performance.now() - t0).toFixed(1)}ms)`);
-    return undefined;
-  }
-
+  // Search all cached skills for a CLI matching the command prefix
   const cache = getCLICache();
-  const skillCLIs = cache.getCLIs(skillName);
-  if (!skillCLIs || skillCLIs.length === 0) {
-    logger.log(`[CLI-HOOK] Skill '${skillName}' has no CLIs, noop (${(performance.now() - t0).toFixed(1)}ms)`);
+  const match = cache.findCLIByCommand(command);
+  if (!match) {
+    logger.log(`[CLI-HOOK] No CLI match for '${command}', noop (${(performance.now() - t0).toFixed(1)}ms)`);
     return undefined;
   }
 
-  // Match longest CLI name first
-  const sorted = [...skillCLIs].sort((a, b) => b.cliName.length - a.cliName.length);
-  let matchedCLI: CLICacheEntry | null = null;
-  for (const entry of sorted) {
-    if (command === entry.cliName || command.startsWith(entry.cliName + " ")) {
-      matchedCLI = entry;
-      break;
-    }
-  }
-
-  if (!matchedCLI) {
-    logger.log(`[CLI-HOOK] No CLI match for command prefix, noop (${(performance.now() - t0).toFixed(1)}ms)`);
-    return undefined;
-  }
-
-  logger.log(`[CLI-HOOK] Matched CLI '${matchedCLI.cliName}' (${(performance.now() - t0).toFixed(1)}ms)`);
+  const { entry: matchedCLI, skillName } = match;
+  logger.log(`[CLI-HOOK] Matched CLI '${matchedCLI.cliName}' in skill '${skillName}' (${(performance.now() - t0).toFixed(1)}ms)`);
 
   // Parse and validate
   let parsed: ParsedCLIArgs;

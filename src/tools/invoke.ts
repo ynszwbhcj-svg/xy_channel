@@ -77,7 +77,7 @@ const CLIENT_ERROR_CODES: ReadonlySet<InvokeErrorCode> = new Set([
 ]);
 
 type PluginType = "Cloud" | "Device" | "MCP";
-type Protocol = "REST" | "SSE" | "Websocket";
+type Protocol = "REST" | "SSE" | "Websocket" | "WebSocket";
 
 interface ToolArguments {
   type: "object";
@@ -174,8 +174,17 @@ interface CloudExecuteParams {
   definition: ToolDefinition;
   businessParams: Record<string, unknown>;
   skillName: string;
-  sessionId: string;
+  sessionId: string;        // ctx.sessionId — used for conversationId
   agentId: string;
+  taskId: string;           // raw taskId with & separators (e.g. "uuid&27&b18d&0")
+}
+
+/** Parse the &-separated taskId into sessionId (part 0) and interactionId (part 1). */
+function parseTaskId(taskId: string): { taskSessionId: string; interactionId: number } {
+  const parts = taskId.split("&");
+  const taskSessionId = parts[0] ?? taskId;
+  const interactionId = parseInt(parts[1] ?? "1", 10) || 1;
+  return { taskSessionId, interactionId };
 }
 
 interface DeviceExecuteParams {
@@ -275,7 +284,7 @@ const REFRESH_INTERVAL_MS = 30_000;
 const REQUIRED_FIELDS = ["schemaVersion","bundleName","toolName","pluginType","description","arguments"] as const;
 const CORE_FIELDS = ["bundleName","toolName","toolType","pluginType","protocol","description","arguments","deviceCommand"] as const;
 const VALID_PLUGIN_TYPES: ReadonlySet<string> = new Set(["Cloud", "Device", "MCP"]);
-const VALID_PROTOCOLS: ReadonlySet<string> = new Set(["REST", "SSE", "Websocket"]);
+const VALID_PROTOCOLS: ReadonlySet<string> = new Set(["REST", "SSE", "Websocket", "WebSocket"]);
 const FILENAME_PATTERN = /^(.+)__(.+)\.json$/;
 
 const _g = globalThis as Record<string, unknown>;
@@ -699,13 +708,14 @@ function loadCloudConfig(): CloudConfig {
 }
 
 function buildCloudRequest(p: CloudExecuteParams): CloudRequestBody {
+  const { taskSessionId, interactionId } = parseTaskId(p.taskId);
   return {
     version: "1.0",
     session: {
       isNew: "true",
-      sessionId: p.sessionId,
-      interactionId: 1,
-      conversationId: uuidv4(),
+      sessionId: taskSessionId,
+      interactionId,
+      conversationId: p.sessionId,  // ctx.sessionId
       agentLoginSessionId1: p.agentId,
     },
     endpoint: {
@@ -738,11 +748,11 @@ function buildCloudRequest(p: CloudExecuteParams): CloudRequestBody {
   };
 }
 
-function buildHeaders(config: CloudConfig, skillName: string, protocol: Protocol): Record<string, string> {
+function buildHeaders(config: CloudConfig, skillName: string, protocol: Protocol, taskId: string): Record<string, string> {
   return {
     "content-type": "application/json",
     accept: protocol === "REST" ? "application/json" : "text/event-stream",
-    "x-hag-trace-id": uuidv4(),
+    "x-hag-trace-id": taskId,
     "x-uid": config.uid,
     "x-api-key": config.apiKey,
     "x-request-from": "openclaw",
@@ -760,10 +770,10 @@ async function executePluginExecutor(
   config: CloudConfig, requestBody: CloudRequestBody, headers: Record<string, string>,
   toolName: string, bundleName: string, protocol: Protocol,
 ): Promise<ExecuteResult> {
-  // Convert serviceUrl to wss:// regardless of original protocol (http, https, etc.)
-  const wsBaseUrl = config.serviceUrl.replace(/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//i, "wss://");
+  // Map http→ws, https→wss
+  const wsBaseUrl = config.serviceUrl.replace(/^http(s)?:\/\//i, "ws$1://");
   const url = `${wsBaseUrl}${UNIFIED_API_SUFFIX}`;
-  const isStreaming = protocol === "SSE" || protocol === "Websocket";
+  const isStreaming = protocol === "SSE" || protocol === "Websocket" || protocol === "WebSocket";
 
   logger.log(`[INVOKE-CLOUD] calling PluginExecutor via WebSocket`, { url, toolName, bundleName, protocol });
 
@@ -1031,7 +1041,7 @@ async function executeCloudTool(params: CloudExecuteParams): Promise<ExecuteResu
     businessKeysCount: Object.keys(businessParams).length,
   });
 
-  if (protocol !== "REST" && protocol !== "SSE" && protocol !== "Websocket") {
+  if (protocol !== "REST" && protocol !== "SSE" && protocol !== "Websocket" && protocol !== "WebSocket") {
     logger.warn("[INVOKE-CLOUD] unknown protocol", { toolName, bundleName, protocol });
     throw new InvokeError("UNSUPPORTED_PROTOCOL", `Unknown protocol: ${protocol}`);
   }
@@ -1042,7 +1052,7 @@ async function executeCloudTool(params: CloudExecuteParams): Promise<ExecuteResu
   return executePluginExecutor(
     config,
     buildCloudRequest(params),
-    buildHeaders(config, skillName, protocol),
+    buildHeaders(config, skillName, protocol, params.taskId),
     toolName,
     bundleName,
     protocol,
@@ -1397,7 +1407,7 @@ export const invokeTool = {
       logger.log(`[INVOKE] dispatching to ${pluginType} executor`, { toolCallId, toolName, bundleName, pluginType });
       try {
         if (pluginType === "Cloud" || pluginType === "MCP") {
-          const result = await executeCloudTool({ definition, businessParams, skillName, sessionId: ctx?.sessionId ?? "", agentId: ctx?.agentId ?? "" });
+          const result = await executeCloudTool({ definition, businessParams, skillName, sessionId: ctx?.sessionId ?? "", agentId: ctx?.agentId ?? "", taskId: ctx?.taskId ?? toolCallId });
           logger.log("[INVOKE] cloud execution succeeded", {
             toolCallId, toolName, bundleName, pluginType,
             resultLength: result.content[0]?.text?.length ?? 0,
