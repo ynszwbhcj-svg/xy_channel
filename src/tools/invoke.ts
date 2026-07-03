@@ -77,7 +77,7 @@ const CLIENT_ERROR_CODES: ReadonlySet<InvokeErrorCode> = new Set([
 ]);
 
 type PluginType = "Cloud" | "Device" | "MCP";
-type Protocol = "REST" | "SSE" | "Websocket";
+type Protocol = "REST" | "SSE" | "Websocket" | "WebSocket";
 
 interface ToolArguments {
   type: "object";
@@ -284,7 +284,7 @@ const REFRESH_INTERVAL_MS = 30_000;
 const REQUIRED_FIELDS = ["schemaVersion","bundleName","toolName","pluginType","description","arguments"] as const;
 const CORE_FIELDS = ["bundleName","toolName","toolType","pluginType","protocol","description","arguments","deviceCommand"] as const;
 const VALID_PLUGIN_TYPES: ReadonlySet<string> = new Set(["Cloud", "Device", "MCP"]);
-const VALID_PROTOCOLS: ReadonlySet<string> = new Set(["REST", "SSE", "Websocket"]);
+const VALID_PROTOCOLS: ReadonlySet<string> = new Set(["REST", "SSE", "Websocket", "WebSocket"]);
 const FILENAME_PATTERN = /^(.+)__(.+)\.json$/;
 
 const _g = globalThis as Record<string, unknown>;
@@ -773,7 +773,7 @@ async function executePluginExecutor(
   // Map http→ws, https→wss
   const wsBaseUrl = config.serviceUrl.replace(/^http(s)?:\/\//i, "ws$1://");
   const url = `${wsBaseUrl}${UNIFIED_API_SUFFIX}`;
-  const isStreaming = protocol === "SSE" || protocol === "Websocket";
+  const isStreaming = protocol === "SSE" || protocol === "Websocket" || protocol === "WebSocket";
 
   logger.log(`[INVOKE-CLOUD] calling PluginExecutor via WebSocket`, { url, toolName, bundleName, protocol });
 
@@ -1041,7 +1041,7 @@ async function executeCloudTool(params: CloudExecuteParams): Promise<ExecuteResu
     businessKeysCount: Object.keys(businessParams).length,
   });
 
-  if (protocol !== "REST" && protocol !== "SSE" && protocol !== "Websocket") {
+  if (protocol !== "REST" && protocol !== "SSE" && protocol !== "Websocket" && protocol !== "WebSocket") {
     logger.warn("[INVOKE-CLOUD] unknown protocol", { toolName, bundleName, protocol });
     throw new InvokeError("UNSUPPORTED_PROTOCOL", `Unknown protocol: ${protocol}`);
   }
