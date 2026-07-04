@@ -387,12 +387,18 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
       body: messageBody,
     });
 
+    // 🔑 Steer messages use /steer prefix to trigger the native slash command
+    // fast path in get-reply, which calls handleSteerCommand → queueEmbedded-
+    // AgentMessageWithOutcomeAsync without going through admitReplyTurn or
+    // the isStreaming guard in runReplyAgent.
+    const steerCommandBody = isUpdate ? `/steer ${textForAgent}` : textForAgent;
+
     // ✅ Finalize inbound context (following feishu pattern)
     // Use route.accountId and route.sessionKey instead of parsed fields
     const ctxPayload = core.channel.reply.finalizeInboundContext({
       Body: body,
-      RawBody: textForAgent,
-      CommandBody: textForAgent,
+      RawBody: steerCommandBody,
+      CommandBody: steerCommandBody,
       From: parsed.sessionId,
       To: parsed.sessionId,  // ✅ Simplified: use sessionId as target (context is managed by SessionKey)
       SessionKey: route.sessionKey,  // ✅ Use route.sessionKey
