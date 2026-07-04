@@ -387,12 +387,22 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
       body: messageBody,
     });
 
+    // 🔑 Steer messages use /steer prefix + CommandSource "native" to trigger
+    // the native slash command fast path, which calls handleSteerCommand →
+    // queueEmbeddedAgentMessageWithOutcomeAsync before admitReplyTurn blocks.
+    const steerCommandBody = isUpdate ? `/steer ${textForAgent}` : textForAgent;
+
+    if (isUpdate) {
+      log.log(`[BOT-STEER] Dispatching via /steer fast path, sessionKey=${route.sessionKey}, cmdLen=${steerCommandBody.length}`);
+    }
+
     // ✅ Finalize inbound context (following feishu pattern)
     // Use route.accountId and route.sessionKey instead of parsed fields
     const ctxPayload = core.channel.reply.finalizeInboundContext({
       Body: body,
-      RawBody: textForAgent,
-      CommandBody: textForAgent,
+      RawBody: steerCommandBody,
+      CommandBody: steerCommandBody,
+      ...(isUpdate ? { CommandSource: "native" as const } : {}),
       From: parsed.sessionId,
       To: parsed.sessionId,  // ✅ Simplified: use sessionId as target (context is managed by SessionKey)
       SessionKey: route.sessionKey,  // ✅ Use route.sessionKey
