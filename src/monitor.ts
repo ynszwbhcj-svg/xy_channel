@@ -4,7 +4,8 @@ import type { RuntimeEnv } from "openclaw/plugin-sdk";
 import { resolveXYConfig } from "./config.js";
 import { getXYWebSocketManager, diagnoseAllManagers, cleanupOrphanConnections, removeXYWebSocketManager } from "./client.js";
 import { handleXYMessage } from "./bot.js";
-import { getAllActiveTaskBindings } from "./task-manager.js";
+import { parseA2AMessage } from "./parser.js";
+import { hasActiveTask, getAllActiveTaskBindings } from "./task-manager.js";
 import { sendA2AResponse } from "./formatter.js";
 import { handleTriggerEvent } from "./trigger-handler.js";
 import { handleSelfEvolutionEvent, handleSelfEvolutionStateGetEvent } from "./self-evolution-handler.js";
@@ -150,13 +151,43 @@ export async function monitorXYProvider(opts: MonitorXYOpts = {}): Promise<void>
         }
       };
 
-      // All messages go through the per-session serial queue.
-      // Steer detection and injection is handled by OpenClaw's auto-reply pipeline
-      // (src/auto-reply/reply/agent-runner.ts), not by the channel itself.
-      void enqueue(sessionId, task).catch((err) => {
-        logger.error(`XY gateway: queue processing failed: ${String(err)}`);
-        activeMessages.delete(messageKey);
-      });
+      // Steer detection: when queue mode is "steer" and the session has an active
+      // run, process the message concurrently (skip the per-session serial queue).
+      // This prevents the steer message from waiting behind the first message's
+      // completion. The actual steer injection is handled by OpenClaw's auto-reply
+      // pipeline (agent-runner.ts), not by the channel itself.
+      const messageMethod = message.method;
+      if (messageMethod === "clearContext" || messageMethod === "clear_context"
+        || messageMethod === "tasks/cancel" || messageMethod === "tasks_cancel") {
+        void enqueue(sessionId, task).catch((err) => {
+          logger.error(`XY gateway: queue processing failed: ${String(err)}`);
+          activeMessages.delete(messageKey);
+        });
+      } else {
+        try {
+          const parsed = parseA2AMessage(message);
+          const steerMode = cfg.messages?.queue?.mode === "steer";
+          const hasActiveRun = hasActiveTask(parsed.sessionId);
+
+          if (steerMode && hasActiveRun) {
+            logger.log(`[MONITOR-HANDLER] STEER MODE: Concurrent execution for ${messageKey}`);
+            void task().catch((err) => {
+              logger.error(`XY gateway: concurrent steer task failed for ${messageKey}: ${String(err)}`);
+              activeMessages.delete(messageKey);
+            });
+          } else {
+            void enqueue(sessionId, task).catch((err) => {
+              logger.error(`XY gateway: queue processing failed: ${String(err)}`);
+              activeMessages.delete(messageKey);
+            });
+          }
+        } catch {
+          void enqueue(sessionId, task).catch((err) => {
+            logger.error(`XY gateway: queue processing failed: ${String(err)}`);
+            activeMessages.delete(messageKey);
+          });
+        }
+      }
     };
 
     const connectedHandler = (serverId: string) => {
