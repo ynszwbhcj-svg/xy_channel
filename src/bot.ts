@@ -12,7 +12,6 @@ import {
   appendSelfEvolutionKeywordNudge,
   shouldNudgeForSelfEvolutionKeyword,
 } from "./self-evolution-keyword.js";
-import { queueAgentHarnessMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { runWithSessionContext } from "./tools/session-manager.js";
 import { configManager } from "./utils/config-manager.js";
 import { addPushId } from "./utils/pushid-manager.js";
@@ -302,18 +301,20 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
         }
       }
 
-      // 🔑 发送初始状态更新
-      log.log(`[BOT] Sending initial status update`);
-      void sendStatusUpdate({
-        config,
-        sessionId: parsed.sessionId,
-        taskId: parsed.taskId,
-        messageId: parsed.messageId,
-        text: "任务正在处理中，请稍候~",
-        state: "working",
-      }).catch((err) => {
-        log.error(`Failed to send initial status update:`, err);
-      });
+      // 🔑 发送初始状态更新（仅首条消息，steer 不重复发送）
+      if (!isUpdate) {
+        log.log(`[BOT] Sending initial status update`);
+        void sendStatusUpdate({
+          config,
+          sessionId: parsed.sessionId,
+          taskId: parsed.taskId,
+          messageId: parsed.messageId,
+          text: "任务正在处理中，请稍候~",
+          state: "working",
+        }).catch((err) => {
+          log.error(`Failed to send initial status update:`, err);
+        });
+      }
     }
 
     // Extract text and files from parts
@@ -344,43 +345,14 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
         );
       }
     }
-    // 🔑 Steer消息: 跳过旧路径直接进入 streaming-signal 队列
-    // /steer 前缀由 dispatchSteerWhenReady 内部添加
-    if (isUpdate) {
-      // 立即释放 init gate——steer 不走 withReplyDispatcher 的 run()
-      // 回调，onInitComplete 永远不会被触发。如果不释放，后续消息
-      // 会被 globalDispatchInitGate 永久阻塞。
-      params.onInitComplete?.();
+    // ── Build message and dispatch via auto-reply pipeline ──────────
+    // OpenClaw's auto-reply pipeline (src/auto-reply/reply/agent-runner.ts)
+    // detects active runs and handles steer injection natively — the channel
+    // does not need its own steer detection or polling logic.
 
-      // Steer 也支持文件 —— 提取并下载，附带到 mediaPayload
-      const steerFileParts = extractFileParts(parsed.parts);
-      const steerDownloadedFiles = await downloadFilesFromParts(steerFileParts);
-      const steerMediaPayload = buildXYMediaPayload(steerDownloadedFiles);
-      if (steerFileParts.length > 0) {
-        log.log(`[BOT] Steer message with ${steerFileParts.length} file(s), enqueuing to streaming-signal queue`);
-      } else {
-        log.log(`[BOT] Steer message — enqueuing to streaming-signal queue`);
-      }
-      await enqueueSteer({
-        sessionId: parsed.sessionId,
-        sessionKey: route.sessionKey,
-        steerText: textForAgent,        // 原始文本，不带 /steer 前缀
-        mediaPayload: steerMediaPayload,
-        cfg,
-        runtime,
-        parsed,
-        route,
-        deviceType,
-      });
-      log.log(`[BOT] Steer queue completed`);
-      return;
-    }
-
-    // ── First message (non-steer) path below ──────────────────────
-
-    // File download — only for real user messages, steer injections have no files
+    // File download
     let mediaPayload: ReturnType<typeof buildXYMediaPayload> = {};
-    if (!skipReg) {
+    if (!skipReg || isUpdate) {
       const fileParts = extractFileParts(parsed.parts);
       const downloadedFiles = await downloadFilesFromParts(fileParts);
       log.log(`[BOT] Downloaded ${downloadedFiles.length} file(s)`);
@@ -432,8 +404,9 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
       ...mediaPayload,
     });
 
-    // 🔑 Streaming 信号已在上方创建（在文件下载之前）
-    const steerState = { steered: false };
+    // 🔑 For steer messages, pre-set steered=true so the dispatcher skips final
+    // response and cleanup — the first message's dispatcher handles those.
+    const steerState = { steered: isUpdate };
 
     // 🔑 创建dispatcher
     log.log(`[BOT-DISPATCHER] Creating reply dispatcher`);
@@ -462,8 +435,9 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
     // 🔑 注册 dispatcher 的 fallback taskId 更新函数，供 steer 路径调用
     dispatcherUpdaters.set(parsed.sessionId, updateFallbackTaskId);
 
-    // Steer injections don't need status intervals
-    if (!skipReg) {
+    // Steer messages don't need a status interval — the first message's
+    // dispatcher already has one running.
+    if (!isUpdate) {
       startStatusInterval();
     }
 
@@ -592,112 +566,13 @@ function buildXYMediaPayload(
 }
 
 // ─────────────────────────────────────────────────────────────
-// Steer 串行队列
+// Dispatcher updaters (cross-chain taskId bridging)
 // ─────────────────────────────────────────────────────────────
 
 // Use globalThis to survive module deduplication — provider.ts may load a
 // different copy of bot.ts, so a plain module-level Map would be two objects.
 const _g = globalThis as Record<string, unknown>;
 
-if (!_g.__xySteerQueues) _g.__xySteerQueues = new Map<string, Promise<void>>();
 if (!_g.__xyDispatcherUpdaters) _g.__xyDispatcherUpdaters = new Map<string, (taskId: string, messageId: string) => void>();
 
-const steerQueues = _g.__xySteerQueues as Map<string, Promise<void>>;
 const dispatcherUpdaters = _g.__xyDispatcherUpdaters as Map<string, (taskId: string, messageId: string) => void>;
-
-interface EnqueueSteerParams {
-  sessionId: string;
-  sessionKey: string;
-  steerText: string;
-  mediaPayload: ReturnType<typeof buildXYMediaPayload>;
-  cfg: ClawdbotConfig;
-  runtime: RuntimeEnv;
-  parsed: ReturnType<typeof parseA2AMessage>;
-  route: { accountId: string; sessionKey: string };
-  deviceType: string;
-}
-
-/**
- * 将 steer 消息放入 per-session 串行队列。
- * 通过指数退避轮询注入（queueAgentHarnessMessage），直到 Pi agent 接受消息或 run 结束。
- * 多个 steer 按到达顺序串行处理。
- */
-function enqueueSteer(params: EnqueueSteerParams): Promise<void> {
-  const { sessionId } = params;
-  const log = logger.withContext(sessionId, params.parsed.taskId);
-
-  // 取出当前队列尾部（或 undefined），然后链上新的 Promise
-  const prev = steerQueues.get(sessionId);
-  const next = (prev ?? Promise.resolve()).then(() => dispatchSteerWhenReady(params));
-  steerQueues.set(sessionId, next);
-
-  // 链条结束后清理
-  next.catch((err) => {
-    log.error(`[STEER-QUEUE] Steer chain failed: ${String(err)}`);
-  }).finally(() => {
-    if (steerQueues.get(sessionId) === next) {
-      steerQueues.delete(sessionId);
-    }
-  });
-
-  return next;
-}
-
-/**
- * Poll the active embedded run with exponential backoff until the steer message
- * is accepted or the run completes.
- *
- * Replaces the previous signal-based approach (notifyModelStreaming) which fired
- * from wrapStreamFn too early — before the Pi agent had set state.isStreaming=true.
- * queueAgentHarnessMessage internally checks isStreaming(), so we retry until the
- * Pi agent is ready to accept messages.
- */
-async function dispatchSteerWhenReady(params: EnqueueSteerParams): Promise<void> {
-  const { sessionId, steerText } = params;
-  const log = logger.withContext(sessionId, params.parsed.taskId);
-
-  const mediaPaths = params.mediaPayload?.MediaPaths;
-  const fileHint =
-    mediaPaths && mediaPaths.length > 0
-      ? `\n【用户上传附件】：${JSON.stringify(mediaPaths)}`
-      : "";
-  const steerMessage = `${steerText}${fileHint}`;
-
-  log.log(`[STEER-QUEUE] Injecting steer message directly into active run`);
-
-  // Exponential backoff polling until:
-  //   1. Injection succeeds (queueAgentHarnessMessage returns true)
-  //   2. The original run has completed (hasActiveTask returns false)
-  //   3. Maximum total wait time exceeded
-  const MAX_WAIT_MS = 30_000;
-  const MAX_BACKOFF_MS = 4_000;
-  const BASE_DELAY_MS = 500;
-  const startedAt = Date.now();
-  let attempt = 0;
-
-  while (Date.now() - startedAt < MAX_WAIT_MS) {
-    // Termination: first message's run has already finished
-    if (!hasActiveTask(sessionId)) {
-      log.log(`[STEER-QUEUE] First message completed, skip steer`);
-      return;
-    }
-
-    const injected = queueAgentHarnessMessage(sessionId, steerMessage, {
-      steeringMode: "all",
-    });
-
-    if (injected) {
-      log.log(`[STEER-QUEUE] Steer injected successfully on attempt ${attempt}`);
-      return;
-    }
-
-    // Exponential backoff: min(BASE_DELAY_MS * 2^attempt, MAX_BACKOFF_MS)
-    const delay = Math.min(BASE_DELAY_MS * Math.pow(2, attempt), MAX_BACKOFF_MS);
-    log.log(`[STEER-QUEUE] Attempt ${attempt}: run not accepting, retrying in ${delay}ms`);
-    await new Promise(r => setTimeout(r, delay));
-    attempt++;
-  }
-
-  // Max wait exceeded — model may still be in provider retry loop or unresponsive
-  log.log(`[STEER-QUEUE] Steer injection failed after ${MAX_WAIT_MS}ms timeout`);
-}
