@@ -251,6 +251,7 @@ function registerFullHooks(api: OpenClawPluginApi) {
   // picked up by the global hook runner.
   touchHookMarker("register_hook");
   api.on("before_prompt_build", async (event, ctx) => {
+    logger.log(`[BEFORE_PROMPT_BUILD] hook fired, sessionKey=${ctx.sessionKey || "undefined"}, sessionId=${ctx.sessionId || "undefined"}`);
     // Run skill-retriever first
     const baseResult = await baseBeforePromptBuildHandler(event, ctx);
 
