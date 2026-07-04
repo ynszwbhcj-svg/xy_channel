@@ -251,27 +251,31 @@ function registerFullHooks(api: OpenClawPluginApi) {
   // picked up by the global hook runner.
   touchHookMarker("register_hook");
   api.on("before_prompt_build", async (event, ctx) => {
-    touchHookMarker(`hook_fired_sessionKey=${ctx.sessionKey || "undefined"}`);
-
     // Run skill-retriever first
     const baseResult = await baseBeforePromptBuildHandler(event, ctx);
 
     // Check for pending steer messages queued by bot.ts.
-    // Use ctx.sessionKey (NOT ctx.sessionId) because sessionId is
-    // OpenClaw's internal random UUID, while sessionKey contains the
-    // A2A conversationId and matches route.sessionKey from bot.ts.
     const sessionKey = ctx.sessionKey;
-    if (!sessionKey) return baseResult;
     const queue = getSteerQueue();
-    const pending = queue.get(sessionKey);
-    if (!pending || pending.length === 0) return baseResult;
+    const pending = sessionKey ? queue.get(sessionKey) : undefined;
+    const allKeys = Array.from(queue.keys());
+
+    // Diagnostic: write state to marker file for each hook fire
+    touchHookMarker(
+      `hook_sessionKey=${sessionKey || "undefined"}_` +
+      `pendingLen=${pending?.length ?? 0}_` +
+      `queueSize=${queue.size}_` +
+      `queueKeys=${allKeys.join(",") || "empty"}`,
+    );
+
+    if (!sessionKey || !pending || pending.length === 0) return baseResult;
 
     // Drain pending steer messages
     queue.delete(sessionKey);
     const steerText = pending.splice(0).join("\n\n");
     const steerAppend = `\n用户追加诉求：${steerText}`;
     logger.log(`[STEER-HOOK] Injecting steer: sessionKey=${sessionKey} textLen=${steerText.length}`);
-    touchHookMarker(`steer_injected_sessionKey=${sessionKey}_len=${steerText.length}`);
+    touchHookMarker(`steer_ok_${sessionKey}`);
 
     // Merge steer appendContext with skill-retriever's result
     const merged: Record<string, unknown> = { ...(baseResult ?? {}) };
