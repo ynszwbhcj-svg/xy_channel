@@ -12,8 +12,6 @@ import { logger } from "./utils/logger.js";
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 import { getCurrentSessionContext, setCurrentCronJobId } from "./tools/session-manager.js";
 import { selfEvolutionManager } from "./utils/self-evolution-manager.js";
-import { getSteerQueue } from "./steer-queue.js";
-
 // ── Retry config ──────────────────────────────────────────────
 const RETRY_DELAYS_MS = [10_000, 20_000, 40_000, 60_000, 60_000];
 const MAX_RETRY_ATTEMPTS = 5;
@@ -623,27 +621,6 @@ export const xiaoyiProvider: ProviderPlugin = {
       }
       // deviceType: prefer text-extracted value, ALS as fallback.
       const sessionCtx = getCurrentSessionContext();
-
-      // 🔑 Provider-level steer injection: drain pending steer messages from the
-      // shared queue and inject them as user messages before each model call.
-      // This runs on EVERY model call including tool-loop model calls, so steer
-      // messages injected mid-turn take effect immediately (unlike the hook-based
-      // approach which only fires at turn boundaries).
-      if (sessionCtx?.sessionId && context.messages) {
-        const steerQueue = getSteerQueue();
-        const pending = steerQueue.get(sessionCtx.sessionId);
-        if (pending && pending.length > 0) {
-          steerQueue.delete(sessionCtx.sessionId); // drain before injection
-          const steerText = pending.splice(0).join("\n\n");
-          const steerMessage = {
-            role: "user" as const,
-            content: [{ type: "text" as const, text: `用户追加诉求：${steerText}` }],
-            timestamp: Date.now(),
-          };
-          context.messages.push(steerMessage);
-          logger.log(`[PROVIDER-STEER] Injected steer into context.messages, sessionId=${sessionCtx.sessionId}, textLen=${steerText.length}, msgCount=${context.messages.length}`);
-        }
-      }
       const deviceType = extractedDeviceType
         ?? sessionCtx?.deviceType;
 
