@@ -431,12 +431,18 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
     // the model on the next turn without blocking.
     if (isUpdate) {
       const steerQueue = getSteerQueue();
-      const pending = steerQueue.get(route.sessionKey) ?? [];
+      // Use parsed.sessionId (A2A session UUID) as the queue key instead of
+      // route.sessionKey. The agent_turn_prepare hook looks up by ctx.sessionId
+      // which is the same A2A session UUID stored in the OpenClaw session entry.
+      // Using sessionId avoids format mismatches between the channel's route-based
+      // sessionKey and the agent runner's sessionKey.
+      const queueKey = parsed.sessionId;
+      const pending = steerQueue.get(queueKey) ?? [];
       pending.push(textForAgent);
-      steerQueue.set(route.sessionKey, pending);
+      steerQueue.set(queueKey, pending);
 
       log.log(
-        `[BOT] Steer bypass: queued for agent_turn_prepare hook, sessionKey=${route.sessionKey}, queueDepth=${pending.length}, skipReg=${skipReg}`,
+        `[BOT] Steer bypass: queued for agent_turn_prepare hook, queueKey=${queueKey}, sessionKey=${route.sessionKey}, queueDepth=${pending.length}, skipReg=${skipReg}`,
       );
 
       // Only decrement refCount when registerTaskId was called (non-skipReg).
