@@ -9,9 +9,8 @@ import {
     MAX_FILE_COUNT,
     MAX_COMMAND_LENGTH,
     CODE_FILE_EXTENSIONS,
-    TOOL_INPUT_DEFAULT,
     FILE_EXTENSION_REGEX,
-    TOOL_INPUT_ACTION
+    RESULT_CODE_MAP
 } from './constants.js';
 import crypto from 'crypto';
 import fs from 'fs';
@@ -66,8 +65,7 @@ export function extractResultText(event: any, toolName: string): string {
 }
 
 export function processText(
-    resultText: string,
-    api: OpenClawPluginApi
+    resultText: string
 ): string {
 
     const questionText = filterText(resultText);
@@ -81,7 +79,7 @@ export function processText(
     return finalText;
 }
 
-export function parseSecurityResult(response: any): { status: 'ACCEPT' | 'REJECT' } {
+export function parseSecurityResult(response: any): { status: 'accept' | 'reject' } {
     if (response === null || response === undefined) {
         throw new Error('Response is null or undefined');
     }
@@ -101,8 +99,15 @@ export function parseSecurityResult(response: any): { status: 'ACCEPT' | 'REJECT
         throw new Error('Response.data.securityResult contains leading or trailing spaces');
     }
 
-    if (securityResult !== 'ACCEPT' && securityResult !== 'REJECT') {
-        throw new Error(`Response.data.securityResult must be "ACCEPT" or "REJECT". Actual value: "${securityResult}"`);
+    if (securityResult !== 'accept' && securityResult !== 'reject') {
+        throw new Error(`Response.data.securityResult must be "accept" or "reject". Actual value: "${securityResult}"`);
+    }
+
+    // 解析 resultCode 并打印错误日志
+    const resultCode = response.data?.resultCode;
+    if (resultCode !== undefined && resultCode !== null && resultCode !== 0) {
+        const errorMsg = RESULT_CODE_MAP[resultCode] || `Unknown error code: ${resultCode}`;
+        logger.error(`[SENTINEL HOOK] API returned resultCode=${resultCode}: ${errorMsg}`);
     }
 
     return {status: securityResult};
@@ -222,59 +227,122 @@ export function getFileSizeInKB(filePath: string): number {
     }
 }
 
-// 动态计算content字段长度，确保body总长度<=4096
-export function adjustContentLength(data: any, api: OpenClawPluginApi, fields: string[]): any {
-    const adjusted = {...data};
-    let bodyStr = JSON.stringify(adjusted);
-    if (bodyStr.length <= MAX_TEXT_LENGTH) {
-        return adjusted;
-    }
-    // 需要截断指定字段
-    let lastFieldName = '';
-    for (const fieldName of fields) {
-        lastFieldName = fieldName;
-
-        bodyStr = JSON.stringify(adjusted);
-        const overSize = bodyStr.length - MAX_TEXT_LENGTH;
-        const currentFieldValue = adjusted[fieldName];
-        if (currentFieldValue && typeof currentFieldValue === 'string' && currentFieldValue.length > overSize) {
-            // 从字段头部开始截断
-            adjusted[fieldName] = currentFieldValue.substring(0, currentFieldValue.length - overSize);
-            logger.warn(`[SENTINEL HOOK] Field "${fieldName}" truncated by ${overSize} characters to fit ${MAX_TEXT_LENGTH} limit`);
-        } else {
-            // 字段太短，清空字段
-            adjusted[fieldName] = '';
-            logger.warn(`[SENTINEL HOOK] Field "${fieldName}" cleared as it cannot fit within size limit`);
-        }
-        // 检查是否满足要求
-        bodyStr = JSON.stringify(adjusted);
-        if (bodyStr.length <= MAX_TEXT_LENGTH) {
-            break;
-        }
-    }
-    bodyStr = JSON.stringify(adjusted);
-    if (bodyStr.length > MAX_TEXT_LENGTH) {
-        throw new Error(`Field ${lastFieldName} exceeds length limit, unable to send data.`);
-    }
-
-    return adjusted;
+// 从taskId中提取sessionID（第一个&之前的内容）
+export function extractSessionId(taskId: string): string {
+    if (!taskId) return '';
+    const idx = taskId.indexOf('&');
+    return idx === -1 ? taskId : taskId.substring(0, idx);
 }
 
-// 发送TOOL_INPUT请求并处理响应，返回扫描结果
-async function sendToolInputRequest(postText: string, api: OpenClawPluginApi, sessionId: string): Promise<{ status: 'ACCEPT' | 'REJECT' }> {
-    const response = await callApi(postText, api, sessionId, TOOL_INPUT_ACTION);
+// 从taskId中提取interActionID（第一个&和第二个&之间的值）
+export function extractInterActionId(taskId: string): number {
+    if (!taskId) return 1;
+    const parts = taskId.split('&');
+    if (parts.length >= 2) {
+        const id = parseInt(parts[1], 10);
+        if (!isNaN(id) && id > 0) return id;
+    }
+    return 1;
+}
+
+// reqTime 生成工具函数
+function formatReqTime(): string {
+    const now = new Date();
+    const pad = (n: number, len = 2) => String(n).padStart(len, '0');
+    const ms = String(now.getMilliseconds()).padStart(3, '0');
+    return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ` +
+           `${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}.${ms}+0800`;
+}
+
+// 构建工具输入新消息体（新接口格式）
+export function buildToolInputPayload(
+    taskID: string,
+    sessionID: string,
+    toolName: string,
+    toolArguments: string,
+    toolCallId: string,
+    interActionID: number,
+    options?: { file?: { type: string; url: string; hash: string; size: number; body: string } }
+): object {
+    const callObj: Record<string, any> = {
+        type: 'function',
+        name: toolName,
+        arguments: toolArguments,
+        index: 0,
+        id: toolCallId
+    };
+    if (options?.file) {
+        callObj.file = [options.file];
+    }
+    return {
+        taskID,
+        sessionID,
+        businessID: 'xiaoyi_claw',
+        sceneID: 'ACTION_DETECT',
+        checkPoint: 4,
+        interActionID,
+        loginType: 'APP',
+        reqTime: formatReqTime(),
+        message: {
+            input: {
+                toolIn: [{
+                    toolCalls: [callObj]
+                }]
+            }
+        }
+    };
+}
+
+// 构建工具输出新消息体（新接口格式）
+export function buildToolOutputPayload(
+    taskID: string,
+    sessionID: string,
+    funcName: string,
+    content: string,
+    toolCallId: string,
+    interActionID: number
+): object {
+    return {
+        taskID,
+        sessionID,
+        businessID: 'xiaoyi_claw',
+        sceneID: 'PROMPT_DETECT',
+        checkPoint: 6,
+        interActionID,
+        loginType: 'APP',
+        reqTime: formatReqTime(),
+        message: {
+            output: {
+                toolOut: [{
+                    funcName,
+                    content: [{
+                        type: 'text',
+                        rawText: content
+                    }],
+                    toolCallId
+                }]
+            }
+        }
+    };
+}
+
+// 发送新接口请求并处理响应，返回扫描结果（保留block/steer能力）
+async function sendToolInputRequest(payload: object, api: OpenClawPluginApi, sessionId: string): Promise<{ status: 'accept' | 'reject' }> {
+    const response = await callApi(payload, api, sessionId);
     const result = parseSecurityResult(response);
     logger.log(`[SENTINEL HOOK] TOOL_INPUT response: status=${result.status}`);
     return result;
 }
 
-// 处理exec工具的TOOL_INPUT数据采集，返回最终扫描结果
-export async function handleExecToolInput(event: any, api: OpenClawPluginApi, sessionId: string): Promise<{ status: 'ACCEPT' | 'REJECT' } | null> {
+// 处理exec工具的TOOL_INPUT数据采集，返回扫描结果（保留block/steer能力）
+export async function handleExecToolInput(event: any, api: OpenClawPluginApi, sessionId: string, taskId: string): Promise<{ status: 'accept' | 'reject' } | null> {
     const command = extractInputParams(event, 'exec');
     if (!command) {
         logger.log('[SENTINEL HOOK] No command found for exec tool');
         return null;
     }
+
+    const interActionID = extractInterActionId(taskId);
 
     // 解析命令提取文件路径
     const filePaths = extractFilePathsFromCommand(command);
@@ -284,7 +352,7 @@ export async function handleExecToolInput(event: any, api: OpenClawPluginApi, se
         logger.log(`[SENTINEL HOOK] Found ${filePaths.length} file(s) in command`);
 
         const nonExistingFiles: string[] = [];
-        let lastResult: { status: 'ACCEPT' | 'REJECT' } | null = null;
+        let lastResult: { status: 'accept' | 'reject' } | null = null;
 
         for (const filePath of filePaths) {
             if (!fs.existsSync(filePath)) {
@@ -296,22 +364,33 @@ export async function handleExecToolInput(event: any, api: OpenClawPluginApi, se
             const fileSize = getFileSizeInKB(filePath);
 
             const obsUrl = await uploadFileToObsMain(filePath, api, fileHash, sessionId);
-            const toolInputData = {...TOOL_INPUT_DEFAULT, tool: 'exec', hash: fileHash, url: obsUrl, size: fileSize,
-                source: command, content: fileContent};
 
-            const adjustedData = adjustContentLength(toolInputData, api, ['content', 'source']);
-            const postText = JSON.stringify(adjustedData);
-
-            logger.log(`[SENTINEL HOOK] Sending TOOL_INPUT for file: ${path.basename(filePath)}, body length: ${postText.length}`);
-            try {
-                lastResult = await sendToolInputRequest(postText, api, sessionId);
-                if (lastResult.status === 'REJECT') {
-                    return lastResult;
-                }
-            }catch (e) {
-                logger.error(`[SENTINEL HOOK] Sending TOOL_INPUT Failed: ${e}`);
+            // 截断 body 到 MAX_TEXT_LENGTH
+            let bodyContent = fileContent;
+            if (Buffer.byteLength(bodyContent, 'utf8') > MAX_TEXT_LENGTH) {
+                bodyContent = bodyContent.substring(0, MAX_TEXT_LENGTH);
+                logger.warn(`[SENTINEL HOOK] File content truncated to ${MAX_TEXT_LENGTH} characters`);
             }
 
+            const toolInputPayload = buildToolInputPayload(
+                taskId,
+                sessionId,
+                'exec',
+                command,
+                event.toolCallId,
+                interActionID,
+                { file: { type: 'doc', url: obsUrl, hash: fileHash, size: fileSize, body: bodyContent } }
+            );
+
+            logger.log(`[SENTINEL HOOK] Sending TOOL_INPUT for file: ${path.basename(filePath)}, body length: ${JSON.stringify(toolInputPayload).length}`);
+            try {
+                lastResult = await sendToolInputRequest(toolInputPayload, api, sessionId);
+                if (lastResult.status === 'reject') {
+                    return lastResult;
+                }
+            } catch (e) {
+                logger.error(`[SENTINEL HOOK] Sending TOOL_INPUT Failed: ${e}`);
+            }
         }
 
         // 输出不存在的文件列表
@@ -325,21 +404,22 @@ export async function handleExecToolInput(event: any, api: OpenClawPluginApi, se
         // 场景2：直接执行代码（heredoc场景）
         logger.log('[SENTINEL HOOK] No code files found in command, treating as direct code execution');
 
-        const commandHash = calculateContentHash(command);
-        const commandSizeKB = Math.ceil(Buffer.byteLength(command, 'utf8') / 1024);
+        const toolInputPayload = buildToolInputPayload(
+            taskId,
+            sessionId,
+            'exec',
+            command,
+            event.toolCallId,
+            interActionID
+        );
+        logger.log(`[SENTINEL HOOK] Sending TOOL_INPUT for direct code execution, body length: ${JSON.stringify(toolInputPayload).length}`);
 
-        const toolInputData = {...TOOL_INPUT_DEFAULT, tool: 'exec', hash: commandHash, size: commandSizeKB, source: command};
-        const adjustedData = adjustContentLength(toolInputData, api, ['source']);
-
-        const postText = JSON.stringify(adjustedData);
-        logger.log(`[SENTINEL HOOK] Sending TOOL_INPUT for direct code execution, body length: ${postText.length}`);
-
-        return await sendToolInputRequest(postText, api, sessionId);
+        return await sendToolInputRequest(toolInputPayload, api, sessionId);
     }
 }
 
-// 处理message工具的TOOL_INPUT数据采集，返回扫描结果
-export async function handleMessageToolInput(event: any, api: OpenClawPluginApi, sessionId: string): Promise<{ status: 'ACCEPT' | 'REJECT' } | null> {
+// 处理message工具的TOOL_INPUT数据采集，返回扫描结果（保留block/steer能力）
+export async function handleMessageToolInput(event: any, api: OpenClawPluginApi, sessionId: string, taskId: string): Promise<{ status: 'accept' | 'reject' } | null> {
     const message = extractInputParams(event, 'message');
     if (!message) {
         logger.log('[SENTINEL HOOK] No message found for message tool');
@@ -348,21 +428,24 @@ export async function handleMessageToolInput(event: any, api: OpenClawPluginApi,
 
     logger.log(`[SENTINEL HOOK] Processing message tool input, message length: ${message.length}`);
 
-    const messageHash = calculateContentHash(message);
-    const messageSizeKB = Math.ceil(Buffer.byteLength(message, 'utf8') / 1024);
+    const interActionID = extractInterActionId(taskId);
 
-    const toolInputData = {...TOOL_INPUT_DEFAULT, tool: 'message', hash: messageHash, size: messageSizeKB, content: message};
+    const toolInputPayload = buildToolInputPayload(
+        taskId,
+        sessionId,
+        'message',
+        message,
+        event.toolCallId,
+        interActionID
+    );
 
-    const adjustedData = adjustContentLength(toolInputData, api, ['content']);
-    const postText = JSON.stringify(adjustedData);
+    logger.log(`[SENTINEL HOOK] Sending TOOL_INPUT for message, body length: ${JSON.stringify(toolInputPayload).length}`);
 
-    logger.log(`[SENTINEL HOOK] Sending TOOL_INPUT for message, body length: ${postText.length}`);
-
-    return await sendToolInputRequest(postText, api, sessionId);
+    return await sendToolInputRequest(toolInputPayload, api, sessionId);
 }
 
-// 处理其他工具（非 exec 和非 message）的 TOOL_INPUT 数据采集，返回扫描结果
-export async function handleOtherToolInput(event: any, api: OpenClawPluginApi, sessionId: string): Promise<{ status: 'ACCEPT' | 'REJECT' } | null> {
+// 处理其他工具（非 exec 和非 message）的 TOOL_INPUT 数据采集，返回扫描结果（保留block/steer能力）
+export async function handleOtherToolInput(event: any, api: OpenClawPluginApi, sessionId: string, taskId: string): Promise<{ status: 'accept' | 'reject' } | null> {
     const params = event.params;
     if (!params) {
         logger.log('[SENTINEL HOOK] No params found for tool');
@@ -373,17 +456,19 @@ export async function handleOtherToolInput(event: any, api: OpenClawPluginApi, s
 
     // 将 params 序列化为 JSON 字符串
     const paramsJson = JSON.stringify(params);
-    const paramsHash = calculateContentHash(paramsJson);
-    const paramsSizeKB = Math.ceil(Buffer.byteLength(paramsJson, 'utf8') / 1024);
 
-    // 创建 toolInputData，将 params 放到 source 字段
-    const toolInputData = {...TOOL_INPUT_DEFAULT, tool: event.toolName, hash: paramsHash, size: paramsSizeKB, content: paramsJson};
+    const interActionID = extractInterActionId(taskId);
 
-    // 对 source 字段进行长度截断处理
-    const adjustedData = adjustContentLength(toolInputData, api, ['content']);
-    const postText = JSON.stringify(adjustedData);
+    const toolInputPayload = buildToolInputPayload(
+        taskId,
+        sessionId,
+        event.toolName,
+        paramsJson,
+        event.toolCallId,
+        interActionID
+    );
 
-    logger.log(`[SENTINEL HOOK] Sending TOOL_INPUT for ${event.toolName}, body length: ${postText.length}`);
+    logger.log(`[SENTINEL HOOK] Sending TOOL_INPUT for ${event.toolName}, body length: ${JSON.stringify(toolInputPayload).length}`);
 
-    return await sendToolInputRequest(postText, api, sessionId);
+    return await sendToolInputRequest(toolInputPayload, api, sessionId);
 }

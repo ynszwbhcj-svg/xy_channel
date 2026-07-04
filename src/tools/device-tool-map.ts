@@ -28,12 +28,6 @@ const DEVICE_TOOL_POLICY: Partial<Record<DeviceType, DeviceToolPolicy>> = {
       "send_html_card"
     ],
   },
-  "pad": {
-    allowlist: false,
-    tools: [
-      "xiaoyi_gui_agent"
-    ],
-  },
   "web": {
     allowlist: true,
     tools: [

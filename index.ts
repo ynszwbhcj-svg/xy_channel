@@ -15,8 +15,44 @@ import { normalizeToolRetrieverConfig } from "./src/skill-retriever/config.js";
 import { registerCLIHook } from "./src/tools/hmos-cli.js";
 import { recoverCronState } from "./src/cron-recovery.js";
 import type { CronRecoveryResult } from "./src/cron-recovery.js";
+import { writeSkillUsage } from "./src/utils/skills-logger.js";
 import { logger } from "./src/utils/logger.js";
 
+/**
+ * Parse a file path string to detect if it refers to a SKILL.md file within
+ * a skills directory. Returns the skill name (parent directory) if so.
+ *
+ * Matches paths like:
+ *   ~/.openclaw/workspace/skills/my-skill/SKILL.md
+ *   /home/user/core_skills/my-skill/SKILL.md
+ *   skills/my-skill/SKILL.md
+ */
+function extractSkillNameFromPath(filePath: unknown): string | null {
+  if (typeof filePath !== "string" || !filePath) return null;
+  // Normalize common path prefixes
+  const normalized = filePath.replace(/^~\//, "/home/").replace(/\\/g, "/");
+  // Match: .../skills/<skillName>/SKILL.md  or  .../skills/<skillName>/...
+  // Also match: .../core_skills/<skillName>/SKILL.md
+  const match = normalized.match(/\/(?:core_)?skills\/([^/]+)\/SKILL\.md$/i);
+  return match ? match[1] : null;
+}
+
+/**
+ * Register the skills diagnostic event listener via after_tool_call hook.
+ *
+ * When openclaw fires a `skill.used` diagnostic event, the skill's SKILL.md
+ * is typically read by the model first.  We detect SKILL.md reads through
+ * the `after_tool_call` hook and write the skill name to the skills log.
+ */
+function registerSkillsDiagnosticHook(api: OpenClawPluginApi) {
+  api.on("after_tool_call", async (event, _ctx) => {
+    if (event.toolName !== "read") return;
+    const skillName = extractSkillNameFromPath(event.params?.path);
+    if (skillName) {
+      writeSkillUsage(skillName);
+    }
+  });
+}
 /**
  * Register the cron detection hook.
  *
@@ -239,11 +275,15 @@ function registerFullHooks(api: OpenClawPluginApi) {
     timeoutMs: pluginConfig.skillRetrieverTimeoutMs ?? 1000,
   });
   const beforePromptBuildHandler = createBeforePromptBuildHandler(skillRetrieverConfig);
-  api.on("before_prompt_build", beforePromptBuildHandler);
+  api.on("before_prompt_build", async (event, ctx) => {
+    logger.log(`[BEFORE_PROMPT_BUILD] hook fired, sessionKey=${ctx.sessionKey || "undefined"}, sessionId=${ctx.sessionId || "undefined"}`);
+    return beforePromptBuildHandler(event, ctx);
+  });
   registerSelfEvolutionToolResultNudge(api);
 }
 
-export default definePluginEntry({
+const pluginEntry: ReturnType<typeof definePluginEntry> = definePluginEntry({
+
   id: "xiaoyi-channel",
   name: "Xiaoyi Channel",
   description: "Xiaoyi channel plugin - Xiaoyi A2A protocol integration",
@@ -279,6 +319,10 @@ export default definePluginEntry({
       registerCLIHook(api);
       // Cron recovery hook: prunes stale cron-push-map and pushData on gateway startup
       registerCronRecoveryHook(api);
+      // Skills diagnostic hook: log skill usage (detected via SKILL.md reads)
+      registerSkillsDiagnosticHook(api);
     }
   },
 });
+
+export default pluginEntry;

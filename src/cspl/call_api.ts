@@ -5,17 +5,17 @@
 import https from 'https';
 import http from 'http';
 import {URL} from 'url';
-import crypto from 'crypto';
 
+import { logger } from '../utils/logger.js';
 import {getConfig} from './config.js';
 import {
-    ApiPayload,
     ApiResponse,
     HttpHeaders,
     DEFAULT_HTTPS_PORT,
-    HTTP_STATUS_BAD_REQUEST, API_URL_SUFFIX
+    DEFAULT_HTTP_PORT,
+    HTTP_STATUS_BAD_REQUEST,
+    API_URL_SUFFIX
 } from './constants.js';
-import { logger } from '../utils/logger.js';
 
 function buildHeadersForCelia(config: { uid: string; apiKey: string; skillId: string; requestFrom: string }, sessionId: string): HttpHeaders {
     if (!config.uid || !config.apiKey || !config.skillId || !config.requestFrom) {
@@ -35,7 +35,7 @@ function buildRequestOptions(url: string, headers: HttpHeaders, timeout: number)
     const urlObj = new URL(url);
     return {
         hostname: urlObj.hostname,
-        port: urlObj.port || DEFAULT_HTTPS_PORT,
+        port: urlObj.port || (urlObj.protocol === 'https:' ? DEFAULT_HTTPS_PORT : DEFAULT_HTTP_PORT),
         path: urlObj.pathname,
         method: "POST",
         headers: headers,
@@ -90,6 +90,7 @@ function handleResponse(
     });
 
     res.on('end', () => {
+        logger.log(`[SENTINEL HOOK] callApi response body: ${data}`);
         try {
             const result = parseResponseData(data);
             resolve(result);
@@ -99,26 +100,23 @@ function handleResponse(
     });
 }
 
-export async function callApi(questionText: string, api, sessionId: string, action: string): Promise<ApiResponse> {
+export async function callApi(payload: object, api, sessionId: string): Promise<ApiResponse> {
     const config = getConfig(api);
 
     const headersForCelia = buildHeadersForCelia(config, sessionId);
 
-    const payload: ApiPayload = {
-        questionText: questionText,
-        textSource: config.textSource,
-        action: action,
-        extra: `${JSON.stringify({userId: config.uid})}`
-    };
+    // 确保 uid 存在于消息体中（从 config 注入）
+    const payloadWithUid = { ...payload, uid: config.uid };
+    const httpBody = JSON.stringify(payloadWithUid);
 
-    const httpBody = JSON.stringify(payload);
     const apiUrl = `${config.api.url}${API_URL_SUFFIX}`;
-    logger.log(`[SENTINEL HOOK] callApi: action=${action}, x-hag-trace-id=${sessionId}, url=${apiUrl}`);
+
+    logger.log(`[SENTINEL HOOK] callApi URL: ${apiUrl}`);
+    logger.log(`[SENTINEL HOOK] callApi request body: ${httpBody}`);
 
     return new Promise((resolve, reject) => {
         const options = buildRequestOptions(apiUrl, headersForCelia as HttpHeaders, config.api.timeout);
-
-        const req = https.request(options as any, (res) => {
+        const req = https.request(options, (res) => {
             handleResponse(res, resolve, reject);
         });
 
