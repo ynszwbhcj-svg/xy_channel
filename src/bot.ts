@@ -391,6 +391,8 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
     // fast path in get-reply, which calls handleSteerCommand → queueEmbedded-
     // AgentMessageWithOutcomeAsync without going through admitReplyTurn or
     // the isStreaming guard in runReplyAgent.
+    // CommandSource "native" is required so isNativeCommandTurn returns true
+    // and the fast path activates (otherwise it falls through to blocking admit).
     const steerCommandBody = isUpdate ? `/steer ${textForAgent}` : textForAgent;
 
     // ✅ Finalize inbound context (following feishu pattern)
@@ -399,6 +401,7 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
       Body: body,
       RawBody: steerCommandBody,
       CommandBody: steerCommandBody,
+      ...(isUpdate ? { CommandSource: "native" as const } : {}),
       From: parsed.sessionId,
       To: parsed.sessionId,  // ✅ Simplified: use sessionId as target (context is managed by SessionKey)
       SessionKey: route.sessionKey,  // ✅ Use route.sessionKey
