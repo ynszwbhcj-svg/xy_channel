@@ -170,7 +170,7 @@ export async function monitorXYProvider(opts: MonitorXYOpts = {}): Promise<void>
           const hasActiveRun = hasActiveTask(parsed.sessionId);
 
           if (steerMode && hasActiveRun) {
-            logger.log(`[MONITOR-HANDLER] STEER MODE: Concurrent execution for ${messageKey}`);
+            logger.log(`[MONITOR] STEER MODE: executing concurrently, sessionId=${parsed.sessionId}, messageKey=${messageKey}`);
             void task().catch((err) => {
               logger.error(`XY gateway: concurrent steer task failed for ${messageKey}: ${String(err)}`);
               activeMessages.delete(messageKey);

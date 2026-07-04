@@ -395,6 +395,10 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
     // and the fast path activates (otherwise it falls through to blocking admit).
     const steerCommandBody = isUpdate ? `/steer ${textForAgent}` : textForAgent;
 
+    if (isUpdate) {
+      log.log(`[BOT-STEER] Dispatching via /steer command, sessionKey=${route.sessionKey}, cmdLen=${steerCommandBody.length}, CommandSource=native`);
+    }
+
     // ✅ Finalize inbound context (following feishu pattern)
     // Use route.accountId and route.sessionKey instead of parsed fields
     const ctxPayload = core.channel.reply.finalizeInboundContext({
@@ -427,7 +431,7 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
     const steerState = { steered: isUpdate };
 
     // 🔑 创建dispatcher
-    log.log(`[BOT-DISPATCHER] Creating reply dispatcher`);
+    log.log(`[BOT-DISPATCHER] Creating reply dispatcher, isSteer=${isUpdate}, sessionKey=${route.sessionKey}`);
 
     // Cleanup: 必须在 onIdle 内部执行（参见 reply-dispatcher.ts 中 onIdleComplete 的注释）
     let cleaned = false;
@@ -511,7 +515,7 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
 
             // 区分 steer 成功（undefined）和 steer 失败/正常 run（有结果）
             if (result === undefined) {
-              log.log(`[BOT-DISPATCH] dispatchReplyFromConfig returned undefined — steer injected successfully`);
+              log.log(`[BOT-STEER] dispatchReplyFromConfig returned undefined — steer injected via fast path OK, sessionKey=${route.sessionKey}`);
             } else {
               log.log(`[BOT-DISPATCH] dispatchReplyFromConfig returned, resultType=${typeof result}, isSteer=${isSteerDispatch}, steered=${steerState.steered}`);
             }
