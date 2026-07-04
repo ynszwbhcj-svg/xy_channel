@@ -431,12 +431,11 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
     // the model on the next turn without blocking.
     if (isUpdate) {
       const steerQueue = getSteerQueue();
-      // Use parsed.sessionId (A2A session UUID) as the queue key instead of
-      // route.sessionKey. The agent_turn_prepare hook looks up by ctx.sessionId
-      // which is the same A2A session UUID stored in the OpenClaw session entry.
-      // Using sessionId avoids format mismatches between the channel's route-based
-      // sessionKey and the agent runner's sessionKey.
-      const queueKey = parsed.sessionId;
+      // Use route.sessionKey as the queue key. The hook looks up by
+      // ctx.sessionKey which is the same value (agent:main:direct:<peerId>).
+      // Do NOT use parsed.sessionId because ctx.sessionId in the hook
+      // context is OpenClaw's internal random UUID, not the A2A sessionId.
+      const queueKey = route.sessionKey;
       const pending = steerQueue.get(queueKey) ?? [];
       pending.push(textForAgent);
       steerQueue.set(queueKey, pending);
