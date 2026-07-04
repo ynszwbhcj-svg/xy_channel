@@ -14,6 +14,7 @@ import { createBeforePromptBuildHandler } from "./src/skill-retriever/hooks.js";
 import { normalizeToolRetrieverConfig } from "./src/skill-retriever/config.js";
 import { registerCLIHook } from "./src/tools/hmos-cli.js";
 import { writeSkillUsage } from "./src/utils/skills-logger.js";
+import { getSteerQueue } from "./src/steer-queue.js";
 
 /**
  * Parse a file path string to detect if it refers to a SKILL.md file within
@@ -230,6 +231,29 @@ function registerFullHooks(api: OpenClawPluginApi) {
   const beforePromptBuildHandler = createBeforePromptBuildHandler(skillRetrieverConfig);
   api.on("before_prompt_build", beforePromptBuildHandler);
   registerSelfEvolutionToolResultNudge(api);
+
+  // STEER INJECTION HOOK: reads pending steer messages queued by bot.ts
+  // and injects them as appendContext on the next agent turn.
+  // This bypasses dispatchReplyFromConfig's admitReplyTurn blocking.
+  //
+  // appendContext places the steer after the current prompt context (which
+  // includes the original user query + tool results), so the model sees:
+  //   [original context]\n\n用户追加诉求：<steer text>
+  //
+  // Key is deleted BEFORE splice to avoid a race: if bot.ts pushes a new
+  // message between splice and delete, it would be lost when delete removes
+  // the (now-repopulated) entry. With delete-first, bot.ts always creates a
+  // fresh entry for new messages.
+  api.on("agent_turn_prepare", async (_event, ctx) => {
+    const sessionKey = ctx.sessionKey;
+    if (!sessionKey) return;
+    const queue = getSteerQueue();
+    const pending = queue.get(sessionKey);
+    if (!pending || pending.length === 0) return;
+    queue.delete(sessionKey); // delete first to prevent race
+    const text = pending.splice(0).join("\n\n");
+    return { appendContext: `\n用户追加诉求：${text}` };
+  });
 }
 
 const pluginEntry: ReturnType<typeof definePluginEntry> = definePluginEntry({
