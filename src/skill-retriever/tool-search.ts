@@ -2,7 +2,9 @@ import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 import type { EnvConfig, FormattedSkill, RawSkill, ToolSearchResult } from "./types.js";
+import { filterDisabledSkills, parseSkillFrontmatter } from "./skill-status.js";
 import { logger } from "../utils/logger.js";
+import { getCurrentSessionContext } from "../tools/session-manager.js";
 
 const SKILL_ID = "celia_find_skills";
 const PLUGIN_LOG_PREFIX = "[skill-retriever]";
@@ -142,9 +144,6 @@ export async function searchTools(options: SearchToolsOptions): Promise<ToolSear
   } = options;
 
   const envConfig = readEnvFile(envFilePath);
-
-  const hasRequiredConfig = !!envConfig.SERVICE_URL && !!envConfig.PERSONAL_API_KEY && !!envConfig.PERSONAL_UID;
-
   const serviceUrl = configServiceUrl ?? envConfig.SERVICE_URL;
   const apiKey = configApiKey ?? envConfig.PERSONAL_API_KEY;
   const uid = configUid ?? envConfig.PERSONAL_UID;
@@ -156,7 +155,8 @@ export async function searchTools(options: SearchToolsOptions): Promise<ToolSear
     return null;
   }
 
-  const traceId = crypto.randomUUID();
+  const alsCtx = getCurrentSessionContext();
+  const traceId = alsCtx?.taskId ?? crypto.randomUUID();
   const apiUrl = `${serviceUrl}/celia-claw/v1/rest-api/skill/execute`;
 
   const headers: Record<string, string> = {
@@ -169,7 +169,10 @@ export async function searchTools(options: SearchToolsOptions): Promise<ToolSear
   };
 
 
-  const payload = { query };
+  const payload = {
+    query,
+    caller: "SkillRecommend"
+  };
 
   try {
     const response = await fetch(apiUrl, {
@@ -203,10 +206,9 @@ export async function searchTools(options: SearchToolsOptions): Promise<ToolSear
 
       const excludedSKills = buildExcludedSkillIds(configExcludedSkills);
 
-      const candidateTools = formattedData
-          .filter((skills) => !excludedSKills.has(skills.skillId))
-          .filter((tool) => (tool.rrfScore ?? 0) >= 0.016);
-      logger.log(`${PLUGIN_LOG_PREFIX} [DEBUG] Candidates with rrfScore >= 0.016: ${candidateTools.length}, details: ${candidateTools.map((t: FormattedSkill) => `${t.skillId}(rrfScore=${t.rrfScore}, status=${t.status})`).join(", ")}`);
+      const candidateTools = formattedData.filter((skills) => !excludedSKills.has(skills.skillId))
+      logger.log(`${PLUGIN_LOG_PREFIX} [DEBUG] Skill candidates count: ${candidateTools.length}, details: ${candidateTools.map((t: FormattedSkill) => `${t.skillId}(rrfScore=${t.rrfScore}, status=${t.status})`)
+          .join(", ")}`);
 
       const hasInstalledInCandidates = candidateTools.some((tool) => tool.status === "已安装");
       if (hasInstalledInCandidates) {
@@ -214,14 +216,13 @@ export async function searchTools(options: SearchToolsOptions): Promise<ToolSear
         return null;
       }
 
-      const filteredTools = candidateTools.slice(0, 2);
-      if (filteredTools.length === 0) {
-        logger.log(`${PLUGIN_LOG_PREFIX} [DEBUG] No candidates with rrfScore >= 0.016, returning null`);
+      if (candidateTools.length === 0) {
+        logger.log(`${PLUGIN_LOG_PREFIX} [DEBUG] No satisfied candidate skills, returning null`);
         return null;
       }
 
       return {
-        tools: filteredTools,
+        tools: candidateTools,
         query,
         timestamp: Date.now(),
       };
