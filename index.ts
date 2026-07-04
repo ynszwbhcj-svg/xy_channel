@@ -15,6 +15,7 @@ import { normalizeToolRetrieverConfig } from "./src/skill-retriever/config.js";
 import { registerCLIHook } from "./src/tools/hmos-cli.js";
 import { writeSkillUsage } from "./src/utils/skills-logger.js";
 import { getSteerQueue } from "./src/steer-queue.js";
+import { logger } from "./src/utils/logger.js";
 
 /**
  * Parse a file path string to detect if it refers to a SKILL.md file within
@@ -236,37 +237,24 @@ function registerFullHooks(api: OpenClawPluginApi) {
   // and injects them as appendContext on the next agent turn.
   // This bypasses dispatchReplyFromConfig's admitReplyTurn blocking.
   //
-  // appendContext places the steer after the current prompt context (which
-  // includes the original user query + tool results), so the model sees:
-  //   [original context]\n\n用户追加诉求：<steer text>
+  // Uses before_prompt_build (NOT agent_turn_prepare) because the global
+  // hook runner's hasHooks/runAgentTurnPrepare check can fail to detect
+  // hooks registered via api.on(). before_prompt_build is proven to work
+  // (already used by skill-retriever in the same registerFullHooks call).
   //
-  // Key is deleted BEFORE splice to avoid a race: if bot.ts pushes a new
-  // message between splice and delete, it would be lost when delete removes
-  // the (now-repopulated) entry. With delete-first, bot.ts always creates a
-  // fresh entry for new messages.
-  let hookFireCount = 0;
-  api.on("agent_turn_prepare", async (_event, ctx) => {
-    hookFireCount++;
-    // Use ctx.sessionId (A2A session UUID) as the queue lookup key.
-    // bot.ts writes with parsed.sessionId — both refer to the same A2A UUID.
+  // appendContext places the steer after the current prompt context, so the
+  // model sees: [original context]\n\n用户追加诉求：<steer text>
+  //
+  // Key is deleted BEFORE splice to avoid a race.
+  api.on("before_prompt_build", async (_event, ctx) => {
     const sessionId = ctx.sessionId;
     if (!sessionId) return;
     const queue = getSteerQueue();
     const pending = queue.get(sessionId);
-
-    // Diagnostic: log every N-th hook fire and whenever queue has entries
-    const queueKeys = Array.from(queue.keys());
-    if (hookFireCount <= 3 || queueKeys.length > 0 || (pending && pending.length > 0)) {
-      console.log(
-        `[STEER-HOOK-DIAG] fireCount=${hookFireCount} sessionId=${sessionId} ` +
-        `sessionKey=${ctx.sessionKey} queueKeys=${JSON.stringify(queueKeys)} pendingLen=${pending?.length ?? 0}`,
-      );
-    }
-
     if (!pending || pending.length === 0) return;
     queue.delete(sessionId); // delete first to prevent race
     const text = pending.splice(0).join("\n\n");
-    console.log(`[STEER-HOOK] Injecting steer: sessionId=${sessionId} textLen=${text.length}`);
+    logger.log(`[STEER-HOOK] Injecting steer: sessionId=${sessionId} textLen=${text.length}`);
     return { appendContext: `\n用户追加诉求：${text}` };
   });
 }
