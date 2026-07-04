@@ -7,6 +7,8 @@ interface TaskIdBinding {
   currentTaskId: string;
   currentMessageId: string;
   updatedAt: number;
+  /** 引用计数：每次 registerTaskId +1，每次 decrementTaskIdRef -1，归零时删除 */
+  refCount: number;
 }
 
 /**
@@ -33,10 +35,11 @@ export function registerTaskId(
   const existing = activeTaskIds.get(sessionId);
 
   if (existing) {
-    logger.log(`[TASK_MANAGER] Updating taskId: ${existing.currentTaskId} → ${taskId}`);
+    logger.log(`[TASK_MANAGER] Updating taskId: ${existing.currentTaskId} → ${taskId}, refCount: ${existing.refCount} → ${existing.refCount + 1}`);
     existing.currentTaskId = taskId;
     existing.currentMessageId = messageId;
     existing.updatedAt = Date.now();
+    existing.refCount++;
     return true; // isUpdate
   } else {
     activeTaskIds.set(sessionId, {
@@ -44,8 +47,9 @@ export function registerTaskId(
       currentTaskId: taskId,
       currentMessageId: messageId,
       updatedAt: Date.now(),
+      refCount: 1,
     });
-    logger.log(`[TASK_MANAGER] Registered new taskId: ${taskId}`);
+    logger.log(`[TASK_MANAGER] Registered new taskId: ${taskId}, refCount: 1`);
     return false;
   }
 }
@@ -54,8 +58,17 @@ export function registerTaskId(
  * 移除session的活跃taskId（消息处理完成时调用）。
  */
 export function decrementTaskIdRef(sessionId: string): void {
-  logger.log(`[TASK_MANAGER] Removing taskId`);
-  activeTaskIds.delete(sessionId);
+  const binding = activeTaskIds.get(sessionId);
+  if (!binding) {
+    logger.log(`[TASK_MANAGER] decrementTaskIdRef: no binding for ${sessionId}`);
+    return;
+  }
+  binding.refCount--;
+  logger.log(`[TASK_MANAGER] decrementTaskIdRef: taskId=${binding.currentTaskId}, refCount: ${binding.refCount + 1} → ${binding.refCount}`);
+  if (binding.refCount <= 0) {
+    activeTaskIds.delete(sessionId);
+    logger.log(`[TASK_MANAGER] Removed taskId binding (refCount reached 0)`);
+  }
 }
 
 /**
