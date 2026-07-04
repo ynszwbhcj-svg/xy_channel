@@ -489,8 +489,9 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
         // signal init complete to release the global dispatch gate
         // for the next session.
         const dispatchPromise = runWithSessionContext(sessionContext, async () => {
-          log.log(`[ALS-PROOF] bot entered dispatch scope sessionId=${(sessionContext as any).sessionId} taskId=${(sessionContext as any).taskId} isSteer=false`);
-          log.log(`[BOT-DISPATCH] dispatchReplyFromConfig starting, body.length=${(ctxPayload.Body as string)?.length ?? 0}`);
+          const isSteerDispatch = isUpdate && !skipReg;
+          log.log(`[ALS-PROOF] bot entered dispatch scope sessionId=${(sessionContext as any).sessionId} taskId=${(sessionContext as any).taskId} isSteer=${isSteerDispatch}`);
+          log.log(`[BOT-DISPATCH] dispatchReplyFromConfig starting, body.length=${(ctxPayload.Body as string)?.length ?? 0}, isSteer=${isSteerDispatch}`);
           try {
             const result = await core.channel.reply.dispatchReplyFromConfig({
               ctx: ctxPayload,
@@ -499,7 +500,12 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
               replyOptions,
             });
 
-            log.log(`[BOT-DISPATCH] dispatchReplyFromConfig returned, result=${JSON.stringify(result)}`);
+            // 区分 steer 成功（undefined）和 steer 失败/正常 run（有结果）
+            if (result === undefined) {
+              log.log(`[BOT-DISPATCH] dispatchReplyFromConfig returned undefined — steer injected successfully`);
+            } else {
+              log.log(`[BOT-DISPATCH] dispatchReplyFromConfig returned, resultType=${typeof result}, isSteer=${isSteerDispatch}, steered=${steerState.steered}`);
+            }
 
             return result;
           } catch (dispatchErr) {
