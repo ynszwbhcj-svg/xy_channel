@@ -40,7 +40,7 @@ import { logger } from "./utils/logger.js";
 const RECOVERY_LOG_TAG = "[CRON-RECOVERY]";
 
 /** Root dir, hardcoded to ~/.openclaw. */
-const ROOT_DIR = "~/.openclaw";
+const ROOT_DIR = "/home/sandbox/.openclaw";
 
 /** Path to the legacy cron store JSON file. */
 const LEGACY_CRON_STORE_PATH = path.join(ROOT_DIR, "cron", "jobs.json");
