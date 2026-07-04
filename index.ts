@@ -14,22 +14,7 @@ import { createBeforePromptBuildHandler } from "./src/skill-retriever/hooks.js";
 import { normalizeToolRetrieverConfig } from "./src/skill-retriever/config.js";
 import { registerCLIHook } from "./src/tools/hmos-cli.js";
 import { writeSkillUsage } from "./src/utils/skills-logger.js";
-import { getSteerQueue } from "./src/steer-queue.js";
 import { logger } from "./src/utils/logger.js";
-import fs from "node:fs";
-import path from "node:path";
-
-// Diagnostic: write marker file to confirm hook fires
-function touchHookMarker(label: string) {
-  try {
-    const dir = "/tmp/xy-steer-diag";
-    fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(
-      path.join(dir, `${Date.now()}_${label}.txt`),
-      `${new Date().toISOString()} ${label}\n`,
-    );
-  } catch {}
-}
 
 /**
  * Parse a file path string to detect if it refers to a SKILL.md file within
@@ -243,49 +228,10 @@ function registerFullHooks(api: OpenClawPluginApi) {
     envFilePath: "~/.openclaw/.xiaoyienv",
     timeoutMs: pluginConfig.skillRetrieverTimeoutMs ?? 1000,
   });
-  const baseBeforePromptBuildHandler = createBeforePromptBuildHandler(skillRetrieverConfig);
-
-  // STEER INJECTION: merged into the before_prompt_build handler so it runs
-  // in the same hook registration call that we know already works (skill-retriever).
-  // This avoids any issues with separate api.on() registrations not being
-  // picked up by the global hook runner.
-  touchHookMarker("register_hook");
+  const beforePromptBuildHandler = createBeforePromptBuildHandler(skillRetrieverConfig);
   api.on("before_prompt_build", async (event, ctx) => {
     logger.log(`[BEFORE_PROMPT_BUILD] hook fired, sessionKey=${ctx.sessionKey || "undefined"}, sessionId=${ctx.sessionId || "undefined"}`);
-    // Run skill-retriever first
-    const baseResult = await baseBeforePromptBuildHandler(event, ctx);
-
-    // Check for pending steer messages queued by bot.ts.
-    const sessionKey = ctx.sessionKey;
-    const queue = getSteerQueue();
-    const pending = sessionKey ? queue.get(sessionKey) : undefined;
-    const allKeys = Array.from(queue.keys());
-
-    // Diagnostic: write state to marker file for each hook fire
-    touchHookMarker(
-      `hook_sessionKey=${sessionKey || "undefined"}_` +
-      `pendingLen=${pending?.length ?? 0}_` +
-      `queueSize=${queue.size}_` +
-      `queueKeys=${allKeys.join(",") || "empty"}`,
-    );
-
-    if (!sessionKey || !pending || pending.length === 0) return baseResult;
-
-    // Drain pending steer messages
-    queue.delete(sessionKey);
-    const steerText = pending.splice(0).join("\n\n");
-    const steerAppend = `\n用户追加诉求：${steerText}`;
-    logger.log(`[STEER-HOOK] Injecting steer: sessionKey=${sessionKey} textLen=${steerText.length}`);
-    touchHookMarker(`steer_ok_${sessionKey}`);
-
-    // Merge steer appendContext with skill-retriever's result
-    const merged: Record<string, unknown> = { ...(baseResult ?? {}) };
-    if (merged.appendContext) {
-      merged.appendContext = `${merged.appendContext}\n\n${steerAppend}`;
-    } else {
-      merged.appendContext = steerAppend;
-    }
-    return merged;
+    return beforePromptBuildHandler(event, ctx);
   });
   registerSelfEvolutionToolResultNudge(api);
 }

@@ -20,7 +20,6 @@ import { selfEvolutionManager } from "./utils/self-evolution-manager.js";
 import { saveRuntimeInfo } from "./utils/runtime-manager.js";
 import { toolCallNudgeManager } from "./utils/tool-call-nudge-manager.js";
 import { setCsplSteerContext } from "./cspl/steer-context.js";
-import { getSteerQueue } from "./steer-queue.js";
 import {
   registerTaskId,
   decrementTaskIdRef,
@@ -413,47 +412,6 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
       ReplyToBody: undefined, // A2A protocol doesn't support reply/quote
       ...mediaPayload,
     });
-
-    // 🔑 Steer bypass: queue the message for agent_turn_prepare hook injection
-    // instead of going through dispatchReplyFromConfig which blocks on admitReplyTurn
-    // waiting for the active reply operation to complete.
-    //
-    // This covers BOTH:
-    //   1. Normal A2A steer (isUpdate && !skipReg) — user sends a message during
-    //      an active agent run
-    //   2. CSPL/self-evolution steer (isUpdate && skipReg) — hook-triggered
-    //      injection via tryInjectSteer. Without the bypass, CSPL steer would
-    //      deadlock: it runs inside the agent turn, so admitReplyTurn's
-    //      waitForIdle waits for the reply operation to finish, but the
-    //      operation is owned by the very same agent turn.
-    //
-    // The hook fires before every agent prompt build, so the steer text reaches
-    // the model on the next turn without blocking.
-    if (isUpdate) {
-      const steerQueue = getSteerQueue();
-      // Use route.sessionKey as the queue key. The hook looks up by
-      // ctx.sessionKey which is the same value (agent:main:direct:<peerId>).
-      // Do NOT use parsed.sessionId because ctx.sessionId in the hook
-      // context is OpenClaw's internal random UUID, not the A2A sessionId.
-      const queueKey = route.sessionKey;
-      const pending = steerQueue.get(queueKey) ?? [];
-      pending.push(textForAgent);
-      steerQueue.set(queueKey, pending);
-
-      log.log(
-        `[BOT] Steer bypass: queued for agent_turn_prepare hook, queueKey=${queueKey}, sessionKey=${route.sessionKey}, queueDepth=${pending.length}, skipReg=${skipReg}`,
-      );
-
-      // Only decrement refCount when registerTaskId was called (non-skipReg).
-      // skipReg callers (CSPL/self-evolution) don't increment refCount.
-      if (!skipReg) {
-        decrementTaskIdRef(parsed.sessionId);
-      }
-
-      // Release the global dispatch init gate — steer doesn't need it.
-      params.onInitComplete?.();
-      return;
-    }
 
     // 🔑 For steer messages, pre-set steered=true so the dispatcher skips final
     // response and cleanup — the first message's dispatcher handles those.
