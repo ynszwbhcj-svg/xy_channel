@@ -359,6 +359,15 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
       mediaPayload = buildXYMediaPayload(downloadedFiles);
     }
 
+    // 🔑 对于 steer 消息，将文件路径附加到消息文本中。
+    // auto-reply 管道的 steer 注入只携带 prompt 文本（followupRun.prompt），
+    // 不携带 mediaPayload，所以模型需要以文本形式看到附件路径。
+    if (isUpdate && mediaPayload.MediaPaths?.length) {
+      const fileHint = `\n【用户上传附件】：${JSON.stringify(mediaPayload.MediaPaths)}`;
+      textForAgent = `${textForAgent}${fileHint}`;
+      log.log(`[BOT] Steer: appended file paths to text`);
+    }
+
     // Resolve envelope format options (following feishu pattern)
     const envelopeOptions = core.channel.reply.resolveEnvelopeFormatOptions(cfg);
 

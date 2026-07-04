@@ -293,6 +293,7 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
         if (steerState.steered && !hasSentResponse) {
           scopedLog().log(`[ON-IDLE] Steered dispatch, no response generated, skipping`);
           stopStatusInterval();
+          await onIdleComplete?.();
           return;
         }
 
