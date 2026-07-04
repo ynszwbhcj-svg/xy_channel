@@ -16,6 +16,20 @@ import { registerCLIHook } from "./src/tools/hmos-cli.js";
 import { writeSkillUsage } from "./src/utils/skills-logger.js";
 import { getSteerQueue } from "./src/steer-queue.js";
 import { logger } from "./src/utils/logger.js";
+import fs from "node:fs";
+import path from "node:path";
+
+// Diagnostic: write marker file to confirm hook fires
+function touchHookMarker(label: string) {
+  try {
+    const dir = "/tmp/xy-steer-diag";
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, `${Date.now()}_${label}.txt`),
+      `${new Date().toISOString()} ${label}\n`,
+    );
+  } catch {}
+}
 
 /**
  * Parse a file path string to detect if it refers to a SKILL.md file within
@@ -229,34 +243,43 @@ function registerFullHooks(api: OpenClawPluginApi) {
     envFilePath: "~/.openclaw/.xiaoyienv",
     timeoutMs: pluginConfig.skillRetrieverTimeoutMs ?? 1000,
   });
-  const beforePromptBuildHandler = createBeforePromptBuildHandler(skillRetrieverConfig);
-  api.on("before_prompt_build", beforePromptBuildHandler);
-  registerSelfEvolutionToolResultNudge(api);
+  const baseBeforePromptBuildHandler = createBeforePromptBuildHandler(skillRetrieverConfig);
 
-  // STEER INJECTION HOOK: reads pending steer messages queued by bot.ts
-  // and injects them as appendContext on the next agent turn.
-  // This bypasses dispatchReplyFromConfig's admitReplyTurn blocking.
-  //
-  // Uses before_prompt_build (NOT agent_turn_prepare) because the global
-  // hook runner's hasHooks/runAgentTurnPrepare check can fail to detect
-  // hooks registered via api.on(). before_prompt_build is proven to work
-  // (already used by skill-retriever in the same registerFullHooks call).
-  //
-  // appendContext places the steer after the current prompt context, so the
-  // model sees: [original context]\n\n用户追加诉求：<steer text>
-  //
-  // Key is deleted BEFORE splice to avoid a race.
-  api.on("before_prompt_build", async (_event, ctx) => {
+  // STEER INJECTION: merged into the before_prompt_build handler so it runs
+  // in the same hook registration call that we know already works (skill-retriever).
+  // This avoids any issues with separate api.on() registrations not being
+  // picked up by the global hook runner.
+  touchHookMarker("register_hook");
+  api.on("before_prompt_build", async (event, ctx) => {
+    touchHookMarker(`hook_fired_sessionId=${ctx.sessionId || "undefined"}`);
+
+    // Run skill-retriever first
+    const baseResult = await baseBeforePromptBuildHandler(event, ctx);
+
+    // Check for pending steer messages queued by bot.ts
     const sessionId = ctx.sessionId;
-    if (!sessionId) return;
+    if (!sessionId) return baseResult;
     const queue = getSteerQueue();
     const pending = queue.get(sessionId);
-    if (!pending || pending.length === 0) return;
-    queue.delete(sessionId); // delete first to prevent race
-    const text = pending.splice(0).join("\n\n");
-    logger.log(`[STEER-HOOK] Injecting steer: sessionId=${sessionId} textLen=${text.length}`);
-    return { appendContext: `\n用户追加诉求：${text}` };
+    if (!pending || pending.length === 0) return baseResult;
+
+    // Drain pending steer messages
+    queue.delete(sessionId);
+    const steerText = pending.splice(0).join("\n\n");
+    const steerAppend = `\n用户追加诉求：${steerText}`;
+    logger.log(`[STEER-HOOK] Injecting steer: sessionId=${sessionId} textLen=${steerText.length}`);
+    touchHookMarker(`steer_injected_sessionId=${sessionId}_len=${steerText.length}`);
+
+    // Merge steer appendContext with skill-retriever's result
+    const merged: Record<string, unknown> = { ...(baseResult ?? {}) };
+    if (merged.appendContext) {
+      merged.appendContext = `${merged.appendContext}\n\n${steerAppend}`;
+    } else {
+      merged.appendContext = steerAppend;
+    }
+    return merged;
   });
+  registerSelfEvolutionToolResultNudge(api);
 }
 
 const pluginEntry: ReturnType<typeof definePluginEntry> = definePluginEntry({
