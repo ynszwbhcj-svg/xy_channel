@@ -381,6 +381,15 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
       pending.push(textForAgent);
       steerQueue.set(queueKey, pending);
       log.log(`[BOT-STEER] Queued for provider injection, sessionId=${queueKey}, queueDepth=${pending.length}`);
+
+      // Bypass dispatchReplyFromConfig entirely — steer injection is handled
+      // at the provider level (provider.ts drains the queue on every model call).
+      // No need for /steer command dispatch or dispatcher creation.
+      if (!skipReg) {
+        decrementTaskIdRef(parsed.sessionId);
+      }
+      params.onInitComplete?.();
+      return;
     }
 
     // Resolve envelope format options (following feishu pattern)
@@ -402,25 +411,12 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
       body: messageBody,
     });
 
-    // 🔑 Steer messages use /steer prefix to trigger the native slash command
-    // fast path in get-reply, which calls handleSteerCommand → queueEmbedded-
-    // AgentMessageWithOutcomeAsync without going through admitReplyTurn or
-    // the isStreaming guard in runReplyAgent.
-    // CommandSource "native" is required so isNativeCommandTurn returns true
-    // and the fast path activates (otherwise it falls through to blocking admit).
-    const steerCommandBody = isUpdate ? `/steer ${textForAgent}` : textForAgent;
-
-    if (isUpdate) {
-      log.log(`[BOT-STEER] Dispatching via /steer command, sessionKey=${route.sessionKey}, cmdLen=${steerCommandBody.length}, CommandSource=native`);
-    }
-
     // ✅ Finalize inbound context (following feishu pattern)
     // Use route.accountId and route.sessionKey instead of parsed fields
     const ctxPayload = core.channel.reply.finalizeInboundContext({
       Body: body,
-      RawBody: steerCommandBody,
-      CommandBody: steerCommandBody,
-      ...(isUpdate ? { CommandSource: "native" as const } : {}),
+      RawBody: textForAgent,
+      CommandBody: textForAgent,
       From: parsed.sessionId,
       To: parsed.sessionId,  // ✅ Simplified: use sessionId as target (context is managed by SessionKey)
       SessionKey: route.sessionKey,  // ✅ Use route.sessionKey
