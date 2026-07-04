@@ -13,6 +13,8 @@ import { registerSelfEvolutionToolResultNudge } from "./src/self-evolution-tool-
 import { createBeforePromptBuildHandler } from "./src/skill-retriever/hooks.js";
 import { normalizeToolRetrieverConfig } from "./src/skill-retriever/config.js";
 import { registerCLIHook } from "./src/tools/hmos-cli.js";
+import { recoverCronState } from "./src/cron-recovery.js";
+import type { CronRecoveryResult } from "./src/cron-recovery.js";
 import { writeSkillUsage } from "./src/utils/skills-logger.js";
 import { logger } from "./src/utils/logger.js";
 
@@ -51,7 +53,6 @@ function registerSkillsDiagnosticHook(api: OpenClawPluginApi) {
     }
   });
 }
-
 /**
  * Register the cron detection hook.
  *
@@ -218,6 +219,51 @@ function readJobIdFromResult(result: unknown): string | undefined {
   return undefined;
 }
 
+// ── Gateway startup: cron state recovery ────────────────────────────────────
+
+/**
+ * Register the gateway_start hook for cron state recovery.
+ *
+ * On gateway startup, checks .openclaw/cron/ for legacy JSON/JSONL files
+ * and migrates them into the SQLite state database:
+ *  - Reads legacy jobs.json + jobs-state.json → imports into cron_jobs table
+ *  - Reads legacy runs/*.jsonl → imports into cron_run_logs table
+ *  - Archives migrated files with .migrated suffix
+ *
+ * Pattern follows legacy-store-migration.ts and legacy-run-log-migration.ts:
+ * check → load → import into SQLite → archive old files.
+ */
+function registerCronRecoveryHook(api: OpenClawPluginApi): void {
+  api.on("gateway_start", async (_event: unknown, _ctx: unknown) => {
+    const logTag = "[CRON-RECOVERY-HOOK]";
+    logger.log(`${logTag} gateway_start fired — checking for legacy cron files`);
+
+    let result: CronRecoveryResult;
+    try {
+      result = await recoverCronState();
+    } catch (err) {
+      logger.error(`${logTag} cron state recovery threw:`, err);
+      // Don't let a recovery failure block gateway startup.
+      return;
+    }
+
+    if (result.recovered) {
+      logger.log(
+        `${logTag} migration performed: ` +
+          `storeMigrated=${result.storeMigrated}, ` +
+          `runLogFilesImported=${result.runLogFilesImported}`,
+      );
+    } else {
+      logger.log(`${logTag} no legacy cron files found, nothing to migrate`);
+    }
+
+    // Log full diagnostics
+    for (const diag of result.diagnostics) {
+      logger.log(`${logTag} diag: ${diag}`);
+    }
+  });
+}
+
 function registerFullHooks(api: OpenClawPluginApi) {
   // SKILL RETRIEVER HOOK: before_prompt_build hook
   const pluginConfig = (api as { pluginConfig?: unknown }).pluginConfig as Record<string, unknown> || {};
@@ -271,6 +317,8 @@ const pluginEntry: ReturnType<typeof definePluginEntry> = definePluginEntry({
       registerCronDetectionHook(api);
       // CLI exec hook: intercepts built-in exec for HarmonyOS CLI skill tools
       registerCLIHook(api);
+      // Cron recovery hook: prunes stale cron-push-map and pushData on gateway startup
+      registerCronRecoveryHook(api);
       // Skills diagnostic hook: log skill usage (detected via SKILL.md reads)
       registerSkillsDiagnosticHook(api);
     }
