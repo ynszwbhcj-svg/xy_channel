@@ -20,6 +20,7 @@ import { selfEvolutionManager } from "./utils/self-evolution-manager.js";
 import { saveRuntimeInfo } from "./utils/runtime-manager.js";
 import { toolCallNudgeManager } from "./utils/tool-call-nudge-manager.js";
 import { setCsplSteerContext } from "./cspl/steer-context.js";
+import { getSteerQueue } from "./steer-queue.js";
 import {
   registerTaskId,
   decrementTaskIdRef,
@@ -366,6 +367,20 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
       const fileHint = `\n【用户上传附件】：${JSON.stringify(mediaPayload.MediaPaths)}`;
       textForAgent = `${textForAgent}${fileHint}`;
       log.log(`[BOT] Steer: appended file paths to text`);
+    }
+
+    // 🔑 Provider-level steer injection: push steer text to the shared queue.
+    // provider.ts checks this queue on every model call (including tool-loop
+    // model calls in agent.continue()) and drains pending steer messages
+    // directly into context.messages before sending to the model.
+    // Key: parsed.sessionId (A2A conversationId) matches getCurrentSessionContext().sessionId.
+    if (isUpdate) {
+      const steerQueue = getSteerQueue();
+      const queueKey = parsed.sessionId;
+      const pending = steerQueue.get(queueKey) ?? [];
+      pending.push(textForAgent);
+      steerQueue.set(queueKey, pending);
+      log.log(`[BOT-STEER] Queued for provider injection, sessionId=${queueKey}, queueDepth=${pending.length}`);
     }
 
     // Resolve envelope format options (following feishu pattern)
