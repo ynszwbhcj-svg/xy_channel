@@ -456,31 +456,114 @@ async function queryTimeListFromGateway(
 // ============================================================================
 
 /**
+ * Filename patterns that may contain legacy run-log data.
+ *
+ * After cron-recovery migration (gateway_start hook), .jsonl files are
+ * archived to .jsonl.migrated (or .migrated.2, .migrated.3, …).
+ * We must match all of these so that historical runs are still visible
+ * in queryTimeList after migration.
+ */
+const RUN_LOG_SUFFIXES = [
+  ".jsonl",           // active / pre-migration
+  ".jsonl.migrated",  // first migration
+];
+
+/**
+ * Check whether a filename looks like a run-log file (any generation).
+ */
+function isRunLogFile(name: string): boolean {
+  return RUN_LOG_SUFFIXES.some((suffix) => name.endsWith(suffix))
+    // Also catch .migrated.2, .migrated.3, …
+    || /\.jsonl\.migrated\.\d+$/.test(name);
+}
+
+/**
+ * Strip known run-log suffixes to extract the bare jobId from a filename.
+ * e.g. "abc123.jsonl.migrated.2" → "abc123"
+ */
+function extractJobIdFromRunLogName(name: string): string {
+  // Try each known suffix first
+  for (const suffix of RUN_LOG_SUFFIXES) {
+    if (name.endsWith(suffix)) {
+      return name.slice(0, -suffix.length);
+    }
+  }
+  // Fallback: strip .jsonl and everything after
+  const dotJsonl = name.indexOf(".jsonl");
+  if (dotJsonl >= 0) {
+    return name.slice(0, dotJsonl);
+  }
+  // Last resort: just use the basename without extension
+  return path.basename(name, path.extname(name));
+}
+
+/**
  * Read local run-log entries for a single job from the legacy runs folder.
+ *
+ * Tries multiple filename suffixes (active + archived) since migration
+ * may have renamed the file to .jsonl.migrated.
  */
 async function readLocalRunLogsForJob(jobId: string): Promise<CronRunLogEntry[]> {
-  const filePath = path.join(LEGACY_CRON_RUNS_DIR, `${jobId}.jsonl`);
-  try {
-    const raw = await fsp.readFile(filePath, "utf-8");
-    return parseCronRunLogEntriesFromJsonl(raw, { jobId });
-  } catch {
-    return [];
+  // Try active file first, then archived variants
+  const candidates = [
+    `${jobId}.jsonl`,
+    `${jobId}.jsonl.migrated`,
+  ];
+
+  for (const candidate of candidates) {
+    const filePath = path.join(LEGACY_CRON_RUNS_DIR, candidate);
+    try {
+      const raw = await fsp.readFile(filePath, "utf-8");
+      if (raw.trim()) {
+        return parseCronRunLogEntriesFromJsonl(raw, { jobId });
+      }
+    } catch {
+      // Try next candidate
+    }
   }
+
+  // Also scan for .migrated.N variants
+  try {
+    const dirEntries = await fsp.readdir(LEGACY_CRON_RUNS_DIR, { withFileTypes: true });
+    const migratedRe = new RegExp(`^${escapeRegex(jobId)}\\.jsonl\\.migrated\\.\\d+$`);
+    for (const entry of dirEntries) {
+      if (entry.isFile() && migratedRe.test(entry.name)) {
+        try {
+          const raw = await fsp.readFile(
+            path.join(LEGACY_CRON_RUNS_DIR, entry.name),
+            "utf-8",
+          );
+          if (raw.trim()) {
+            return parseCronRunLogEntriesFromJsonl(raw, { jobId });
+          }
+        } catch {
+          // Keep trying other candidates
+        }
+      }
+    }
+  } catch {
+    // Directory listing failed, give up
+  }
+
+  return [];
 }
 
 /**
  * Read all local run-log entries from the legacy runs folder.
+ *
+ * Matches .jsonl files as well as post-migration archived copies
+ * (.jsonl.migrated, .jsonl.migrated.2, …).
  */
 async function readAllLocalRunLogs(): Promise<CronRunLogEntry[]> {
   try {
     const entries = await fsp.readdir(LEGACY_CRON_RUNS_DIR, { withFileTypes: true });
-    const jsonlFiles = entries.filter(
-      (e) => e.isFile() && e.name.endsWith(".jsonl"),
+    const runLogFiles = entries.filter(
+      (e) => e.isFile() && isRunLogFile(e.name),
     );
 
     const allEntries: CronRunLogEntry[] = [];
-    for (const file of jsonlFiles) {
-      const jobId = path.basename(file.name, ".jsonl");
+    for (const file of runLogFiles) {
+      const jobId = extractJobIdFromRunLogName(file.name);
       try {
         const raw = await fsp.readFile(
           path.join(LEGACY_CRON_RUNS_DIR, file.name),
@@ -496,6 +579,11 @@ async function readAllLocalRunLogs(): Promise<CronRunLogEntry[]> {
   } catch {
     return [];
   }
+}
+
+/** Escape special regex characters in a string. */
+function escapeRegex(s: string): string {
+  return s.replace(/[-\/\\^$*+?.()|[\]{}]/g, "\\$&");
 }
 
 /**
