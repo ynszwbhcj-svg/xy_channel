@@ -31,7 +31,7 @@ import { tryInjectSteer } from './steer-context.js';
 
 // 主入口模块
 export default function register(api: OpenClawPluginApi) {
-    api.on("before_tool_call", async (event, ctx) => {
+    api.on("before_tool_call", async (event, _ctx) => {
         logger.log(`[SENTINEL HOOK] before_tool_call_event toolName: ${event.toolName}`);
         // 获取真实sessionID：优先使用ALS中的A2A sessionId，降级到OpenClaw runId或随机值
         const sessionCtx = getCurrentSessionContext();

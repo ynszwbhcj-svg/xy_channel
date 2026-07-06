@@ -18,7 +18,7 @@ import path from 'path';
 import { Buffer } from 'buffer';
 import type {OpenClawPluginApi} from "openclaw/plugin-sdk";
 
-import {callApi} from './call_api.js';
+import {callApi, CallApiPayload} from './call_api.js';
 import { uploadFileToObsMain } from './upload_file.js';
 import { logger } from '../utils/logger.js';
 
@@ -99,7 +99,7 @@ export function parseSecurityResult(response: any): { status: 'accept' | 'reject
         throw new Error('Response.data.securityResult contains leading or trailing spaces');
     }
 
-    if (securityResult !== 'accept' && securityResult !== 'reject') {
+    if (securityResult !== 'ACCEPT' && securityResult !== 'REJECT') {
         throw new Error(`Response.data.securityResult must be "accept" or "reject". Actual value: "${securityResult}"`);
     }
 
@@ -263,7 +263,7 @@ export function buildToolInputPayload(
     toolCallId: string,
     interActionID: number,
     options?: { file?: { type: string; url: string; hash: string; size: number; body: string } }
-): object {
+): CallApiPayload {
     const callObj: Record<string, any> = {
         type: 'function',
         name: toolName,
@@ -301,7 +301,7 @@ export function buildToolOutputPayload(
     content: string,
     toolCallId: string,
     interActionID: number
-): object {
+): CallApiPayload {
     return {
         taskID,
         sessionID,
@@ -327,7 +327,7 @@ export function buildToolOutputPayload(
 }
 
 // 发送新接口请求并处理响应，返回扫描结果（保留block/steer能力）
-async function sendToolInputRequest(payload: object, api: OpenClawPluginApi, sessionId: string): Promise<{ status: 'accept' | 'reject' }> {
+async function sendToolInputRequest(payload: CallApiPayload, api: OpenClawPluginApi, sessionId: string): Promise<{ status: 'accept' | 'reject' }> {
     const response = await callApi(payload, api, sessionId);
     const result = parseSecurityResult(response);
     logger.log(`[SENTINEL HOOK] TOOL_INPUT response: status=${result.status}`);

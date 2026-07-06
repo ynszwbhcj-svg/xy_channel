@@ -6,7 +6,8 @@ import https from 'https';
 import http from 'http';
 import {URL} from 'url';
 
-import { logger } from '../utils/logger.js';
+import type {OpenClawPluginApi} from 'openclaw/plugin-sdk';
+
 import {getConfig} from './config.js';
 import {
     ApiResponse,
@@ -99,13 +100,18 @@ function handleResponse(
     });
 }
 
-export async function callApi(payload: object, api, sessionId: string): Promise<ApiResponse> {
+export interface CallApiPayload {
+    sceneID: string;
+    [key: string]: unknown;
+}
+
+export async function callApi(payload: CallApiPayload, api: OpenClawPluginApi, sessionId: string): Promise<ApiResponse> {
     const config = getConfig(api);
 
     const headersForCelia = buildHeadersForCelia(config, sessionId);
 
     // 确保 uid 存在于消息体中（从 config 注入）
-    const payloadWithUid = { ...payload, uid: config.uid };
+    const payloadWithUid = { ...payload, uid: config.uid , action:payload.sceneID,packageName:"com.huawei.hmos.vassistant",ansDone:false,userId:config.uid};
     const httpBody = JSON.stringify(payloadWithUid);
 
     const apiUrl = `${config.api.url}${API_URL_SUFFIX}`;
