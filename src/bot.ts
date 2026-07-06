@@ -21,6 +21,10 @@ import { saveRuntimeInfo } from "./utils/runtime-manager.js";
 import { toolCallNudgeManager } from "./utils/tool-call-nudge-manager.js";
 import { setCsplSteerContext } from "./cspl/steer-context.js";
 import {
+  resolveActiveEmbeddedRunSessionId,
+  queueAgentHarnessMessage,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
   registerTaskId,
   decrementTaskIdRef,
   hasActiveTask,
@@ -366,6 +370,30 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
       const fileHint = `\n【用户上传附件】：${JSON.stringify(mediaPayload.MediaPaths)}`;
       textForAgent = `${textForAgent}${fileHint}`;
       log.log(`[BOT] Steer: appended file paths to text`);
+    }
+
+    // 🔑 Direct steer: bypass dispatchReplyFromConfig entirely and inject the
+    // message directly into the active embedded agent run. This avoids the
+    // per-session ReplyOperation lock in admitReplyTurn which would otherwise
+    // block the steer message until the first message completes — making steer
+    // indistinguishable from a followup.
+    if (isUpdate && !skipReg && route.sessionKey) {
+      const activeSessionId = resolveActiveEmbeddedRunSessionId(route.sessionKey);
+      if (activeSessionId) {
+        log.log(`[BOT-STEER] Direct steer attempt: activeSessionId=${activeSessionId}, textLen=${textForAgent.length}`);
+        const queued = queueAgentHarnessMessage(activeSessionId, textForAgent, {
+          steeringMode: "all",
+        });
+        if (queued) {
+          log.log(`[BOT-STEER] Direct steer succeeded — message injected into active run`);
+          // Steer message taskId refCount is no longer needed since we skip the dispatcher.
+          decrementTaskIdRef(parsed.sessionId);
+          return;
+        }
+        log.log(`[BOT-STEER] Direct steer failed (queued=false), falling through to dispatchReplyFromConfig`);
+      } else {
+        log.log(`[BOT-STEER] No active embedded run session for key=${route.sessionKey}, falling through to dispatchReplyFromConfig`);
+      }
     }
 
     // Resolve envelope format options (following feishu pattern)
