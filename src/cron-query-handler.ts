@@ -10,11 +10,18 @@
 // then transforms the gateway response → device format before sending back.
 
 import { callGatewayTool } from "openclaw/plugin-sdk/agent-harness-runtime";
+import fsp from "node:fs/promises";
+import path from "node:path";
 import { sendCommand } from "./formatter.js";
 import { resolveXYConfig } from "./config.js";
 import { configManager } from "./utils/config-manager.js";
 import { setJobPushId } from "./utils/cron-push-map.js";
 import { logger } from "./utils/logger.js";
+import {
+  LEGACY_CRON_RUNS_DIR,
+  parseCronRunLogEntriesFromJsonl,
+} from "./cron-recovery.js";
+import type { CronRunLogEntry } from "./cron-recovery.js";
 
 const GATEWAY_TIMEOUT_MS = 60_000;
 
@@ -63,13 +70,36 @@ export async function handleCronQueryEvent(context: any, cfg: any): Promise<void
 
       // ── runs ─────────────────────────────────────────────────────
       case "runs": {
-        const gatewayParams = buildRunsParams(jobId, params);
-        const gatewayResult = await callGatewayTool(
-          "cron.runs",
-          { timeoutMs: GATEWAY_TIMEOUT_MS },
-          gatewayParams,
-        );
-        result = transformRunsResponse(gatewayResult, params);
+        const { offset = 0, limit = 50, ...otherParams } = params ?? {};
+
+        // Fetch from local runs folder and gateway RPC in parallel
+        const [localEntries, gatewayResult] = await Promise.all([
+          readLocalRunLogsForJob(jobId).catch(() => [] as CronRunLogEntry[]),
+          callGatewayTool(
+            "cron.runs",
+            { timeoutMs: GATEWAY_TIMEOUT_MS },
+            { jobId, scope: "job" as const, ...otherParams },
+          ).catch(() => ({ entries: [] as any[] })),
+        ]);
+
+        const gatewayEntries: any[] = (gatewayResult as any)?.entries ?? [];
+
+        // Merge, deduplicate, and sort by time (newest first)
+        const merged = mergeAndDedupeRunEntries(localEntries, gatewayEntries);
+
+        // Apply pagination after merge
+        const total = merged.length;
+        const paged = merged.slice(offset, offset + limit);
+        const hasMore = total > offset + limit;
+
+        result = {
+          entries: paged,
+          total,
+          offset,
+          limit,
+          hasMore,
+          nextOffset: hasMore ? offset + limit : null,
+        };
         break;
       }
 
@@ -191,15 +221,6 @@ function buildListParams(params: any): Record<string, any> {
   return params ?? {};
 }
 
-/** runs: inject jobId and forward remaining params. */
-function buildRunsParams(jobId: string, params: any): Record<string, any> {
-  return {
-    jobId,
-    scope: "job" as const,
-    ...(params ?? {}),
-  };
-}
-
 /** add: unwrap params.job → top-level gateway params. */
 function buildAddParams(params: any): Record<string, any> {
   const job = params?.job ?? params ?? {};
@@ -270,21 +291,6 @@ function transformStatusResponse(gatewayResult: any): any {
     storePath: ".openclaw/cron/jobs.json",
     jobs: gatewayResult?.jobs ?? 0,
     nextWakeAtMs: gatewayResult?.nextRunAtMs ?? null,
-  };
-}
-
-/** runs: add pagination fields. */
-function transformRunsResponse(gatewayResult: any, params: any): any {
-  const entries = gatewayResult?.entries ?? [];
-  const total: number = gatewayResult?.total ?? entries.length;
-  const pagination = computePagination(params, total);
-  return {
-    entries,
-    total,
-    offset: pagination.offset,
-    limit: pagination.limit,
-    hasMore: pagination.hasMore,
-    nextOffset: pagination.nextOffset,
   };
 }
 
@@ -378,8 +384,8 @@ async function persistCronPushMap(
 }
 
 /**
- * Query run history from the last 7 days via the gateway's native cron.runs RPC,
- * grouped by date and sorted by time.
+ * Query run history from the last 7 days from both local runs folder
+ * and the gateway's native cron.runs RPC, merged and grouped by date.
  *
  * Return format:
  *   [ { "YYYY-MM-DD": [ { run record with .name }, ... ] }, ... ]
@@ -387,25 +393,32 @@ async function persistCronPushMap(
 async function queryTimeListFromGateway(
   params: any,
 ): Promise<Array<Record<string, Array<Record<string, any>>>>> {
-  const rpcResult: any = await callGatewayTool(
-    "cron.runs",
-    { timeoutMs: GATEWAY_TIMEOUT_MS },
-    {
-      scope: "all",
-      limit: 200,
-      sortDir: "desc",
-      ...(params ?? {}),
-    },
-  );
+  // Fetch from local runs folder and gateway RPC in parallel
+  const [localEntries, rpcResult] = await Promise.all([
+    readAllLocalRunLogs().catch(() => [] as CronRunLogEntry[]),
+    callGatewayTool(
+      "cron.runs",
+      { timeoutMs: GATEWAY_TIMEOUT_MS },
+      {
+        scope: "all",
+        limit: 200,
+        sortDir: "desc",
+        ...(params ?? {}),
+      },
+    ).catch(() => ({ entries: [] as any[] })),
+  ]);
 
-  const entries: any[] = rpcResult?.entries ?? [];
-  if (entries.length === 0) {
+  const gatewayEntries: any[] = (rpcResult as any)?.entries ?? [];
+
+  // Merge and deduplicate
+  const merged = mergeAndDedupeRunEntries(localEntries, gatewayEntries);
+  if (merged.length === 0) {
     return [];
   }
 
   // Filter to last 7 days
   const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
-  const recent = entries.filter((e) => e.ts && e.ts >= sevenDaysAgo);
+  const recent = merged.filter((e) => e.ts && e.ts >= sevenDaysAgo);
 
   // Ensure .name is populated (gateway returns jobName; normalize to .name)
   for (const run of recent) {
@@ -436,4 +449,107 @@ async function queryTimeListFromGateway(
     result.push({ [date]: runs });
   }
   return result;
+}
+
+// ============================================================================
+// Local run-log helpers — read legacy runs/*.jsonl files
+// ============================================================================
+
+/**
+ * Read local run-log entries for a single job from the legacy runs folder.
+ */
+async function readLocalRunLogsForJob(jobId: string): Promise<CronRunLogEntry[]> {
+  const filePath = path.join(LEGACY_CRON_RUNS_DIR, `${jobId}.jsonl`);
+  try {
+    const raw = await fsp.readFile(filePath, "utf-8");
+    return parseCronRunLogEntriesFromJsonl(raw, { jobId });
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Read all local run-log entries from the legacy runs folder.
+ */
+async function readAllLocalRunLogs(): Promise<CronRunLogEntry[]> {
+  try {
+    const entries = await fsp.readdir(LEGACY_CRON_RUNS_DIR, { withFileTypes: true });
+    const jsonlFiles = entries.filter(
+      (e) => e.isFile() && e.name.endsWith(".jsonl"),
+    );
+
+    const allEntries: CronRunLogEntry[] = [];
+    for (const file of jsonlFiles) {
+      const jobId = path.basename(file.name, ".jsonl");
+      try {
+        const raw = await fsp.readFile(
+          path.join(LEGACY_CRON_RUNS_DIR, file.name),
+          "utf-8",
+        );
+        const parsed = parseCronRunLogEntriesFromJsonl(raw, { jobId });
+        allEntries.push(...parsed);
+      } catch {
+        // Skip unreadable files
+      }
+    }
+    return allEntries;
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Build a dedup key for a run-log entry.
+ */
+function makeRunEntryKey(entry: {
+  jobId: string;
+  ts: number;
+  runId?: string;
+  status?: string;
+  summary?: string;
+  error?: string;
+}): string {
+  return [
+    entry.jobId,
+    String(entry.ts),
+    entry.runId ?? "",
+    entry.status ?? "",
+    entry.summary ?? "",
+    entry.error ?? "",
+  ].join("\0");
+}
+
+/**
+ * Merge local and gateway run entries, deduplicate, and sort by ts descending.
+ * Gateway entries take precedence over local entries with the same key.
+ */
+function mergeAndDedupeRunEntries(
+  localEntries: CronRunLogEntry[],
+  gatewayEntries: any[],
+): any[] {
+  const seen = new Set<string>();
+  const merged: any[] = [];
+
+  // Add gateway entries first (they take precedence)
+  for (const entry of gatewayEntries) {
+    const key = makeRunEntryKey(entry);
+    if (!seen.has(key)) {
+      seen.add(key);
+      merged.push(entry);
+    }
+  }
+
+  // Add local entries that aren't already in gateway results
+  for (const entry of localEntries) {
+    const key = makeRunEntryKey(entry);
+    if (!seen.has(key)) {
+      seen.add(key);
+      merged.push(entry);
+    }
+  }
+
+  // Sort by ts descending (newest first)
+  merged.sort((a: any, b: any) => b.ts - a.ts);
+
+  return merged;
 }
