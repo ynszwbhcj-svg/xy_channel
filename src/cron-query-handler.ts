@@ -342,6 +342,7 @@ function buildUpdateParams(jobId: string, params: any): Record<string, any> {
   return {
     id: jobId,
     patch,
+    description: patch?.payload?.message,
   };
 }
 
