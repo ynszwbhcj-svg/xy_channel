@@ -157,10 +157,17 @@ export async function monitorXYProvider(opts: MonitorXYOpts = {}): Promise<void>
       // completion. The actual steer injection is handled by OpenClaw's auto-reply
       // pipeline (agent-runner.ts), not by the channel itself.
       const messageMethod = message.method;
-      if (messageMethod === "clearContext" || messageMethod === "clear_context"
-        || messageMethod === "tasks/cancel" || messageMethod === "tasks_cancel") {
+      if (messageMethod === "clearContext" || messageMethod === "clear_context") {
         void enqueue(sessionId, task).catch((err) => {
           logger.error(`XY gateway: queue processing failed: ${String(err)}`);
+          activeMessages.delete(messageKey);
+        });
+      } else if (messageMethod === "tasks/cancel" || messageMethod === "tasks_cancel") {
+        // tasks/cancel 仅发送一个简单的响应，不涉及复杂的任务状态变更，
+        // 因此无需排队等待，直接并发执行以确保客户端及时收到 canceled 响应。
+        logger.log(`[MONITOR] CANCEL: executing concurrently, messageKey=${messageKey}`);
+        void task().catch((err) => {
+          logger.error(`XY gateway: concurrent cancel task failed for ${messageKey}: ${String(err)}`);
           activeMessages.delete(messageKey);
         });
       } else {
