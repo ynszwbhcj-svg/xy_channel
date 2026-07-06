@@ -677,6 +677,13 @@ export const xiaoyiProvider: ProviderPlugin = {
             }
           }
         }
+        const apiKey = typeof options?.apiKey === "string" ? options.apiKey : undefined;
+        logger.log(
+          `[compaction-provider] capturing snapshot: hasApiKey=${!!apiKey} ` +
+            `hasAuthHeaders=${Object.keys(authHeaders).length > 0} ` +
+            `headerKeys=[${Object.keys(authHeaders).join(",")}] ` +
+            `traceId=${dynamicHeaders[HEADER_TRACE_ID]}`,
+        );
         setCompactionSessionSnapshot({
           traceId: dynamicHeaders[HEADER_TRACE_ID] ?? "",
           sessionId: dynamicHeaders[HEADER_SESSION_ID] ?? "",
@@ -685,6 +692,7 @@ export const xiaoyiProvider: ProviderPlugin = {
           appVer: appVer ?? undefined,
           sdkApiVersion: sdkApiVersion ?? undefined,
           authHeaders: Object.keys(authHeaders).length > 0 ? authHeaders : undefined,
+          apiKey: apiKey ?? undefined,
         });
       }
 

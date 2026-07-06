@@ -45,6 +45,8 @@ interface CompactionSessionSnapshot {
   sdkApiVersion?: string;
   /** Auth headers from the last normal request (resolved by OpenClaw). */
   authHeaders?: Record<string, string>;
+  /** API key from the last normal request (for Bearer token auth). */
+  apiKey?: string;
 }
 
 let storedConfig: CompactionConfig | null = null;
@@ -169,13 +171,21 @@ export const xiaoyiCompactionProvider = {
     promptText += `\n\n${instructions}`;
 
     // ── Build request ─────────────────────────────────────────────
-    // Start with auth headers from the last normal request (resolved by
-    // OpenClaw). These contain the proper Authorization / API key headers
-    // that the model gateway expects. Our dynamic trace headers override
-    // any same-named keys so the session trace identity is correct.
+    // Reconstruct the exact same headers that the normal request uses:
+    // 1. Auth headers from options.headers (model-config and registry-resolved)
+    // 2. Bearer token from options.apiKey (streamSimple adds Authorization: Bearer)
+    // 3. Dynamic trace headers (overrides anything with the same key)
+    const authHeaders = session?.authHeaders;
+    const authKeys = authHeaders ? Object.keys(authHeaders) : [];
+    logger.log(
+      `[compaction-provider] snapshot auth: hasApiKey=${!!session?.apiKey} ` +
+        `authHeaderKeys=[${authKeys.join(",")}]`,
+    );
+
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
-      ...session?.authHeaders,
+      ...authHeaders,
+      ...(session?.apiKey ? { Authorization: `Bearer ${session.apiKey}` } : {}),
       [HEADER_TRACE_ID]: traceId,
       [HEADER_SESSION_ID]: sessionId,
       [HEADER_INTERACTION_ID]: interactionId,
