@@ -2,7 +2,6 @@ import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 import type { EnvConfig, FormattedSkill, RawSkill, ToolSearchResult } from "./types.js";
-import { filterDisabledSkills, parseSkillFrontmatter } from "./skill-status.js";
 import { logger } from "../utils/logger.js";
 import { getCurrentSessionContext } from "../tools/session-manager.js";
 
