@@ -216,7 +216,18 @@ export const xiaoyiCompactionProvider = {
     };
 
     const url = `${cfg.baseUrl.replace(/\/+$/, "")}/chat/completions`;
-    logger.log(`[compaction-provider] POST ${url}`);
+    // Log headers for diagnostics (redact sensitive values)
+    const safeHeaders: Record<string, string> = {};
+    for (const [key, value] of Object.entries(headers)) {
+      if (key.toLowerCase().includes("auth") || key.toLowerCase().includes("api-key")) {
+        safeHeaders[key] = value ? `${value.slice(0, 4)}***` : "(empty)";
+      } else {
+        safeHeaders[key] = value;
+      }
+    }
+    logger.log(
+      `[compaction-provider] POST ${url} headers=${JSON.stringify(safeHeaders)}`,
+    );
 
     // ── Call ──────────────────────────────────────────────────────
     let response: Response;
