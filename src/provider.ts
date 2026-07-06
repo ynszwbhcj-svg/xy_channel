@@ -12,6 +12,7 @@ import { logger } from "./utils/logger.js";
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 import { getCurrentSessionContext, setCurrentCronJobId } from "./tools/session-manager.js";
 import { selfEvolutionManager } from "./utils/self-evolution-manager.js";
+import { setCompactionConfig, setCompactionSessionSnapshot } from "./compaction-provider.js";
 // ── Retry config ──────────────────────────────────────────────
 const RETRY_DELAYS_MS = [10_000, 20_000, 40_000, 60_000, 60_000];
 const MAX_RETRY_ATTEMPTS = 5;
@@ -498,6 +499,33 @@ export const xiaoyiProvider: ProviderPlugin = {
   prepareExtraParams: (ctx) => {
     const uid = getUidFromConfig(ctx.config);
     if (!uid) return undefined;
+
+    // Store config for CompactionProvider so it can make LLM calls
+    // with proper x-hag-trace-id headers during compaction summarization.
+    const cfg = ctx.config as Record<string, unknown> | undefined;
+    const modelsConfig = cfg?.models as Record<string, Record<string, unknown>> | undefined;
+    const xiaoyiProviderConfig = modelsConfig?.providers?.xiaoyiprovider as
+      | Record<string, unknown>
+      | undefined;
+    const zaiProviderConfig = modelsConfig?.providers?.zai as Record<string, unknown> | undefined;
+    const baseUrl =
+      (typeof xiaoyiProviderConfig?.baseUrl === "string"
+        ? xiaoyiProviderConfig.baseUrl
+        : undefined) ??
+      (typeof zaiProviderConfig?.baseUrl === "string" ? zaiProviderConfig.baseUrl : undefined);
+
+    if (baseUrl) {
+      setCompactionConfig({
+        uid,
+        baseUrl,
+        modelName: typeof ctx.modelId === "string" ? ctx.modelId : "LLM_DeepSeekV4_Think",
+        apiKey:
+          typeof xiaoyiProviderConfig?.apiKey === "string"
+            ? (xiaoyiProviderConfig.apiKey as string)
+            : undefined,
+      });
+    }
+
     return {
       ...ctx.extraParams,
       [FALLBACK_PREFIX_KEY]: encodeUid(uid),
@@ -632,6 +660,23 @@ export const xiaoyiProvider: ProviderPlugin = {
       }
       if (sdkApiVersion) {
         logger.log(`[xiaoyiprovider] sdk_api_version: ${sdkApiVersion}`);
+      }
+
+      // Capture the resolved session snapshot for CompactionProvider.
+      // During compaction, getCurrentSessionContext() returns null because
+      // compaction runs outside the original A2A async scope. By storing
+      // the snapshot from the last normal request, the CompactionProvider
+      // can reuse the same A2A traceId/sessionId/devicetype in its
+      // summarization API call.
+      if (dynamicHeaders[HEADER_TRACE_ID]) {
+        setCompactionSessionSnapshot({
+          traceId: dynamicHeaders[HEADER_TRACE_ID] ?? "",
+          sessionId: dynamicHeaders[HEADER_SESSION_ID] ?? "",
+          interactionId: dynamicHeaders[HEADER_INTERACTION_ID] ?? "",
+          deviceType: deviceType ?? undefined,
+          appVer: appVer ?? undefined,
+          sdkApiVersion: sdkApiVersion ?? undefined,
+        });
       }
 
       // 在发送给模型前，优化 systemPrompt 结构

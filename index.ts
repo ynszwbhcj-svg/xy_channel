@@ -2,6 +2,7 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { definePluginEntry, type OpenClawPluginDefinition } from "openclaw/plugin-sdk/core";
 import { xiaoyiProvider } from "./src/provider.js";
+import { xiaoyiCompactionProvider } from "./src/compaction-provider.js";
 import { xyPlugin } from "./src/channel.js";
 import registerSentinelHook from "./src/cspl/sentinel_hook.js";
 import { setXYRuntime } from "./src/runtime.js";
@@ -332,6 +333,11 @@ const plugin: OpenClawPluginDefinition = definePluginEntry({
     // Always register the provider so wrapStreamFn/prepareExtraParams work
     // in ALL registration modes (not just "full").
     api.registerProvider(xiaoyiProvider);
+
+    // Register the compaction provider so openclaw's safeguard hook uses
+    // our summarization path (which injects x-hag-trace-id) instead of the
+    // built-in LLM path that bypasses wrapStreamFn.
+    api.registerCompactionProvider(xiaoyiCompactionProvider);
 
     if (api.registrationMode === "cli-metadata") {
       return;
