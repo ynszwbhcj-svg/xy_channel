@@ -5,6 +5,7 @@
 import fs from 'fs';
 import path from 'path';
 import https from 'https';
+import http from 'http';
 import { URL } from 'url';
 import { Buffer } from 'buffer';
 
@@ -47,9 +48,10 @@ function httpRequest(
 ): Promise<string> {
     return new Promise((resolve, reject) => {
         const urlObj = new URL(url);
+        const isHttps = urlObj.protocol === 'https:';
         const options = {
             hostname: urlObj.hostname,
-            port: urlObj.port || DEFAULT_HTTPS_PORT,
+            port: urlObj.port || (isHttps ? DEFAULT_HTTPS_PORT : DEFAULT_HTTP_PORT),
             path: urlObj.pathname + urlObj.search,
             method: method,
             headers: headers,
@@ -57,7 +59,8 @@ function httpRequest(
             rejectUnauthorized: false
         };
 
-        const req = https.request(options as any, (res) => {
+        const transport = isHttps ? https : http;
+        const req = transport.request(options as any, (res) => {
             let data = '';
             res.on('data', (chunk) => {
                 data += chunk;
@@ -157,9 +160,10 @@ async function uploadFileToObs(uploadInfo: UploadInfo, fileBytes: Buffer): Promi
     while (true) {
         try {
             const urlObj = new URL(uploadInfo.url);
+            const isHttps = urlObj.protocol === 'https:';
             const options = {
                 hostname: urlObj.hostname,
-                port: urlObj.port || DEFAULT_HTTPS_PORT,
+                port: urlObj.port || (isHttps ? DEFAULT_HTTPS_PORT : DEFAULT_HTTP_PORT),
                 path: urlObj.pathname + urlObj.search,
                 method: 'PUT',
                 headers: {
@@ -169,7 +173,8 @@ async function uploadFileToObs(uploadInfo: UploadInfo, fileBytes: Buffer): Promi
                 rejectUnauthorized: false
             };
             await new Promise<void>((resolve, reject) => {
-                const req = https.request(options as any, (res) => {
+                const transport = isHttps ? https : http;
+                const req = transport.request(options as any, (res) => {
                     let data = '';
                     res.on('data', (chunk) => {
                         data += chunk;

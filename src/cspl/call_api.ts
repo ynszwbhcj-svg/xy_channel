@@ -12,6 +12,7 @@ import {
     ApiPayload,
     ApiResponse,
     HttpHeaders,
+    DEFAULT_HTTP_PORT,
     DEFAULT_HTTPS_PORT,
     HTTP_STATUS_BAD_REQUEST, API_URL_SUFFIX
 } from './constants.js';
@@ -32,13 +33,15 @@ function buildHeadersForCelia(config: { uid: string; apiKey: string; skillId: st
 
 function buildRequestOptions(url: string, headers: HttpHeaders, timeout: number) {
     const urlObj = new URL(url);
+    const isHttps = urlObj.protocol === 'https:';
     return {
         hostname: urlObj.hostname,
-        port: urlObj.port || DEFAULT_HTTPS_PORT,
+        port: urlObj.port || (isHttps ? DEFAULT_HTTPS_PORT : DEFAULT_HTTP_PORT),
         path: urlObj.pathname,
         method: "POST",
         headers: headers,
-        timeout: timeout
+        timeout: timeout,
+        rejectUnauthorized: false
     };
 }
 
@@ -115,8 +118,10 @@ export async function callApi(questionText: string, api, sessionId: string, acti
 
     return new Promise((resolve, reject) => {
         const options = buildRequestOptions(apiUrl, headersForCelia as HttpHeaders, config.api.timeout);
+        const isHttps = new URL(apiUrl).protocol === 'https:';
+        const transport = isHttps ? https : http;
 
-        const req = https.request(options as any, (res) => {
+        const req = transport.request(options as any, (res) => {
             handleResponse(res, resolve, reject);
         });
 
