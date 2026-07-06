@@ -666,9 +666,17 @@ export const xiaoyiProvider: ProviderPlugin = {
       // During compaction, getCurrentSessionContext() returns null because
       // compaction runs outside the original A2A async scope. By storing
       // the snapshot from the last normal request, the CompactionProvider
-      // can reuse the same A2A traceId/sessionId/devicetype in its
-      // summarization API call.
+      // can reuse the same A2A traceId/sessionId/devicetype and auth
+      // headers in its summarization API call.
       if (dynamicHeaders[HEADER_TRACE_ID]) {
+        const authHeaders: Record<string, string> = {};
+        if (options?.headers) {
+          for (const [key, value] of Object.entries(options.headers)) {
+            if (typeof value === "string") {
+              authHeaders[key] = value;
+            }
+          }
+        }
         setCompactionSessionSnapshot({
           traceId: dynamicHeaders[HEADER_TRACE_ID] ?? "",
           sessionId: dynamicHeaders[HEADER_SESSION_ID] ?? "",
@@ -676,6 +684,7 @@ export const xiaoyiProvider: ProviderPlugin = {
           deviceType: deviceType ?? undefined,
           appVer: appVer ?? undefined,
           sdkApiVersion: sdkApiVersion ?? undefined,
+          authHeaders: Object.keys(authHeaders).length > 0 ? authHeaders : undefined,
         });
       }
 

@@ -43,6 +43,8 @@ interface CompactionSessionSnapshot {
   deviceType?: string;
   appVer?: string;
   sdkApiVersion?: string;
+  /** Auth headers from the last normal request (resolved by OpenClaw). */
+  authHeaders?: Record<string, string>;
 }
 
 let storedConfig: CompactionConfig | null = null;
@@ -167,8 +169,13 @@ export const xiaoyiCompactionProvider = {
     promptText += `\n\n${instructions}`;
 
     // ── Build request ─────────────────────────────────────────────
+    // Start with auth headers from the last normal request (resolved by
+    // OpenClaw). These contain the proper Authorization / API key headers
+    // that the model gateway expects. Our dynamic trace headers override
+    // any same-named keys so the session trace identity is correct.
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
+      ...session?.authHeaders,
       [HEADER_TRACE_ID]: traceId,
       [HEADER_SESSION_ID]: sessionId,
       [HEADER_INTERACTION_ID]: interactionId,
@@ -182,10 +189,6 @@ export const xiaoyiCompactionProvider = {
     }
     if (session?.sdkApiVersion) {
       headers["x-sdk-api-version"] = session.sdkApiVersion;
-    }
-
-    if (cfg.apiKey) {
-      headers["Authorization"] = `Bearer ${cfg.apiKey}`;
     }
 
     const body = {
