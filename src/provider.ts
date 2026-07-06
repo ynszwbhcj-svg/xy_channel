@@ -669,19 +669,29 @@ export const xiaoyiProvider: ProviderPlugin = {
       // can reuse the same A2A traceId/sessionId/devicetype and auth
       // headers in its summarization API call.
       if (dynamicHeaders[HEADER_TRACE_ID]) {
-        const authHeaders: Record<string, string> = {};
+        const requestHeaders: Record<string, string> = {};
         if (options?.headers) {
           for (const [key, value] of Object.entries(options.headers)) {
             if (typeof value === "string") {
-              authHeaders[key] = value;
+              requestHeaders[key] = value;
+            }
+          }
+        }
+        // model.headers comes from resolveDynamicModel — streamSimple
+        // reads these directly when building the HTTP request.
+        const modelHeaders: Record<string, string> = {};
+        if (model?.headers) {
+          for (const [key, value] of Object.entries(model.headers as Record<string, unknown>)) {
+            if (typeof value === "string") {
+              modelHeaders[key] = value;
             }
           }
         }
         const apiKey = typeof options?.apiKey === "string" ? options.apiKey : undefined;
         logger.log(
           `[compaction-provider] capturing snapshot: hasApiKey=${!!apiKey} ` +
-            `hasAuthHeaders=${Object.keys(authHeaders).length > 0} ` +
-            `headerKeys=[${Object.keys(authHeaders).join(",")}] ` +
+            `requestHeaders=[${Object.keys(requestHeaders).join(",")}] ` +
+            `modelHeaders=[${Object.keys(modelHeaders).join(",")}] ` +
             `traceId=${dynamicHeaders[HEADER_TRACE_ID]}`,
         );
         setCompactionSessionSnapshot({
@@ -691,7 +701,8 @@ export const xiaoyiProvider: ProviderPlugin = {
           deviceType: deviceType ?? undefined,
           appVer: appVer ?? undefined,
           sdkApiVersion: sdkApiVersion ?? undefined,
-          authHeaders: Object.keys(authHeaders).length > 0 ? authHeaders : undefined,
+          requestHeaders: Object.keys(requestHeaders).length > 0 ? requestHeaders : undefined,
+          modelHeaders: Object.keys(modelHeaders).length > 0 ? modelHeaders : undefined,
           apiKey: apiKey ?? undefined,
         });
       }

@@ -43,10 +43,12 @@ interface CompactionSessionSnapshot {
   deviceType?: string;
   appVer?: string;
   sdkApiVersion?: string;
-  /** Auth headers from the last normal request (resolved by OpenClaw). */
-  authHeaders?: Record<string, string>;
+  /** Auth headers from options.headers in the last normal request. */
+  requestHeaders?: Record<string, string>;
   /** API key from the last normal request (for Bearer token auth). */
   apiKey?: string;
+  /** Model-level headers from resolveDynamicModel (streamSimple adds these). */
+  modelHeaders?: Record<string, string>;
 }
 
 let storedConfig: CompactionConfig | null = null;
@@ -171,20 +173,22 @@ export const xiaoyiCompactionProvider = {
     promptText += `\n\n${instructions}`;
 
     // ── Build request ─────────────────────────────────────────────
-    // Reconstruct the exact same headers that the normal request uses:
-    // 1. Auth headers from options.headers (model-config and registry-resolved)
-    // 2. Bearer token from options.apiKey (streamSimple adds Authorization: Bearer)
-    // 3. Dynamic trace headers (overrides anything with the same key)
-    const authHeaders = session?.authHeaders;
-    const authKeys = authHeaders ? Object.keys(authHeaders) : [];
+    // Reconstruct the exact same headers that the normal request uses.
+    // streamSimple adds model.headers to the HTTP request directly, so
+    // we capture them separately from options.headers.
+    const reqHdrs = session?.requestHeaders;
+    const modelHdrs = session?.modelHeaders;
+    const reqKeys = reqHdrs ? Object.keys(reqHdrs) : [];
+    const modelKeys = modelHdrs ? Object.keys(modelHdrs) : [];
     logger.log(
       `[compaction-provider] snapshot auth: hasApiKey=${!!session?.apiKey} ` +
-        `authHeaderKeys=[${authKeys.join(",")}]`,
+        `requestHeaders=[${reqKeys.join(",")}] modelHeaders=[${modelKeys.join(",")}]`,
     );
 
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
-      ...authHeaders,
+      ...modelHdrs,
+      ...reqHdrs,
       ...(session?.apiKey ? { Authorization: `Bearer ${session.apiKey}` } : {}),
       [HEADER_TRACE_ID]: traceId,
       [HEADER_SESSION_ID]: sessionId,
