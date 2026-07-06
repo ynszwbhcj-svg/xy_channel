@@ -200,31 +200,73 @@ function readJobIdFromResult(result: unknown): string | undefined {
 function registerCronRecoveryHook(api: OpenClawPluginApi): void {
   api.on("gateway_start", async (_event: unknown, _ctx: unknown) => {
     const logTag = "[CRON-RECOVERY-HOOK]";
+    const startTime = Date.now();
+    logger.log(`${logTag} ═══════════════════════════════════════════`);
     logger.log(`${logTag} gateway_start fired — checking for legacy cron files`);
+    logger.log(`${logTag} Timestamp: ${new Date().toISOString()}`);
+    logger.log(`${logTag} Plugin registration mode: ${api.registrationMode ?? "unknown"}`);
 
     let result: CronRecoveryResult;
     try {
       result = await recoverCronState();
     } catch (err) {
-      logger.error(`${logTag} cron state recovery threw:`, err);
+      const errMsg = err instanceof Error ? err.message : String(err);
+      const errStack = err instanceof Error ? err.stack : undefined;
+      logger.error(`${logTag} cron state recovery threw: ${errMsg}`);
+      if (errStack) logger.error(`${logTag} Stack: ${errStack}`);
       // Don't let a recovery failure block gateway startup.
+      logger.log(
+        `${logTag} Recovery failed after ${Date.now() - startTime}ms — gateway startup continues`,
+      );
       return;
     }
 
+    const elapsed = Date.now() - startTime;
+
     if (result.recovered) {
       logger.log(
-        `${logTag} migration performed: ` +
-          `storeMigrated=${result.storeMigrated}, ` +
-          `runLogFilesImported=${result.runLogFilesImported}`,
+        `${logTag} ✅ Migration performed successfully in ${elapsed}ms:` +
+          ` storeMigrated=${result.storeMigrated}, ` +
+          ` runLogFilesImported=${result.runLogFilesImported}`,
       );
     } else {
-      logger.log(`${logTag} no legacy cron files found, nothing to migrate`);
+      logger.log(
+        `${logTag} ℹ️ No legacy cron files migrated in ${elapsed}ms ` +
+          `(nothing to migrate or database unavailable)`,
+      );
     }
 
-    // Log full diagnostics
-    for (const diag of result.diagnostics) {
-      logger.log(`${logTag} diag: ${diag}`);
+    // Log diagnostics summary
+    const warnings = result.diagnostics.filter((d) =>
+      d.includes("skipping") || d.includes("locked") || d.includes("unavailable"),
+    );
+    const errors = result.diagnostics.filter((d) =>
+      d.includes("error") || d.includes("failed") || d.includes("Failed"),
+    );
+
+    if (warnings.length > 0) {
+      logger.warn(
+        `${logTag} ${warnings.length} warning(s) from migration:`,
+      );
+      for (const w of warnings) {
+        logger.warn(`${logTag}   ⚠ ${w}`);
+      }
     }
+
+    if (errors.length > 0) {
+      logger.error(
+        `${logTag} ${errors.length} error(s) from migration:`,
+      );
+      for (const e of errors) {
+        logger.error(`${logTag}   ✗ ${e}`);
+      }
+    }
+
+    if (warnings.length === 0 && errors.length === 0) {
+      logger.log(`${logTag} All diagnostics clean, no warnings or errors`);
+    }
+
+    logger.log(`${logTag} ═══════════════════════════════════════════`);
   });
 }
 
