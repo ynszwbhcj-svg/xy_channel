@@ -10,11 +10,116 @@
 // then transforms the gateway response → device format before sending back.
 
 import { callGatewayTool } from "openclaw/plugin-sdk/agent-harness-runtime";
+import fsp from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { sendCommand } from "./formatter.js";
 import { resolveXYConfig } from "./config.js";
 import { configManager } from "./utils/config-manager.js";
 import { setJobPushId } from "./utils/cron-push-map.js";
 import { logger } from "./utils/logger.js";
+
+// ── Local run-log constants, types, and parsers (moved from cron-recovery) ───
+
+const ROOT_DIR = path.join(os.homedir(), ".openclaw");
+
+/** Path to the legacy cron run-log directory. */
+const LEGACY_CRON_RUNS_DIR = path.join(ROOT_DIR, "cron", "runs");
+
+export interface CronRunLogEntry {
+  jobId: string;
+  ts: number;
+  runId?: string;
+  status?: string;
+  error?: string;
+  summary?: string;
+  diagnosticsSummary?: string;
+  deliveryStatus?: string;
+  deliveryError?: string;
+  delivered?: boolean;
+  sessionId?: string;
+  sessionKey?: string;
+  runAtMs?: number;
+  durationMs?: number;
+  nextRunAtMs?: number;
+  model?: string;
+  provider?: string;
+  totalTokens?: number;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function readString(record: Record<string, unknown>, key: string): string | undefined {
+  const val = record[key];
+  return typeof val === "string" && val.trim() ? val.trim() : undefined;
+}
+
+function readOptionalString(record: Record<string, unknown>, key: string): string | undefined {
+  const val = record[key];
+  return typeof val === "string" ? val : undefined;
+}
+
+function readNumber(record: Record<string, unknown>, key: string): number | undefined {
+  const val = record[key];
+  return typeof val === "number" && Number.isFinite(val) ? val : undefined;
+}
+
+function readBoolean(record: Record<string, unknown>, key: string): boolean | undefined {
+  const val = record[key];
+  return typeof val === "boolean" ? val : undefined;
+}
+
+function parseRunLogEntry(obj: unknown, opts?: { jobId?: string }): CronRunLogEntry | null {
+  if (!isRecord(obj)) return null;
+
+  const ts = readNumber(obj, "ts");
+  if (ts === undefined) return null;
+
+  const jobId = opts?.jobId ?? readString(obj, "jobId");
+  if (!jobId) return null;
+
+  return {
+    jobId,
+    ts,
+    runId: readOptionalString(obj, "runId"),
+    status: readOptionalString(obj, "status"),
+    error: readOptionalString(obj, "error"),
+    summary: readOptionalString(obj, "summary"),
+    diagnosticsSummary: readOptionalString(obj, "diagnosticsSummary"),
+    deliveryStatus: readOptionalString(obj, "deliveryStatus"),
+    deliveryError: readOptionalString(obj, "deliveryError"),
+    delivered: readBoolean(obj, "delivered"),
+    sessionId: readOptionalString(obj, "sessionId"),
+    sessionKey: readOptionalString(obj, "sessionKey"),
+    runAtMs: readNumber(obj, "runAtMs"),
+    durationMs: readNumber(obj, "durationMs"),
+    nextRunAtMs: readNumber(obj, "nextRunAtMs"),
+    model: readOptionalString(obj, "model"),
+    provider: readOptionalString(obj, "provider"),
+    totalTokens: readNumber(obj, "totalTokens"),
+  };
+}
+
+function parseCronRunLogEntriesFromJsonl(
+  raw: string,
+  opts?: { jobId?: string },
+): CronRunLogEntry[] {
+  if (!raw.trim()) return [];
+  const entries: CronRunLogEntry[] = [];
+  for (const line of raw.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    try {
+      const entry = parseRunLogEntry(JSON.parse(trimmed), opts);
+      if (entry) entries.push(entry);
+    } catch {
+      // Skip malformed historical rows
+    }
+  }
+  return entries;
+}
 
 const GATEWAY_TIMEOUT_MS = 60_000;
 
@@ -63,13 +168,36 @@ export async function handleCronQueryEvent(context: any, cfg: any): Promise<void
 
       // ── runs ─────────────────────────────────────────────────────
       case "runs": {
-        const gatewayParams = buildRunsParams(jobId, params);
-        const gatewayResult = await callGatewayTool(
-          "cron.runs",
-          { timeoutMs: GATEWAY_TIMEOUT_MS },
-          gatewayParams,
-        );
-        result = transformRunsResponse(gatewayResult, params);
+        const { offset = 0, limit = 50, ...otherParams } = params ?? {};
+
+        // Fetch from local runs folder and gateway RPC in parallel
+        const [localEntries, gatewayResult] = await Promise.all([
+          readLocalRunLogsForJob(jobId).catch(() => [] as CronRunLogEntry[]),
+          callGatewayTool(
+            "cron.runs",
+            { timeoutMs: GATEWAY_TIMEOUT_MS },
+            { jobId, scope: "job" as const, ...otherParams },
+          ).catch(() => ({ entries: [] as any[] })),
+        ]);
+
+        const gatewayEntries: any[] = (gatewayResult as any)?.entries ?? [];
+
+        // Merge, deduplicate, and sort by time (newest first)
+        const merged = mergeAndDedupeRunEntries(localEntries, gatewayEntries);
+
+        // Apply pagination after merge
+        const total = merged.length;
+        const paged = merged.slice(offset, offset + limit);
+        const hasMore = total > offset + limit;
+
+        result = {
+          entries: paged,
+          total,
+          offset,
+          limit,
+          hasMore,
+          nextOffset: hasMore ? offset + limit : null,
+        };
         break;
       }
 
@@ -191,15 +319,6 @@ function buildListParams(params: any): Record<string, any> {
   return params ?? {};
 }
 
-/** runs: inject jobId and forward remaining params. */
-function buildRunsParams(jobId: string, params: any): Record<string, any> {
-  return {
-    jobId,
-    scope: "job" as const,
-    ...(params ?? {}),
-  };
-}
-
 /** add: unwrap params.job → top-level gateway params. */
 function buildAddParams(params: any): Record<string, any> {
   const job = params?.job ?? params ?? {};
@@ -270,21 +389,6 @@ function transformStatusResponse(gatewayResult: any): any {
     storePath: ".openclaw/cron/jobs.json",
     jobs: gatewayResult?.jobs ?? 0,
     nextWakeAtMs: gatewayResult?.nextRunAtMs ?? null,
-  };
-}
-
-/** runs: add pagination fields. */
-function transformRunsResponse(gatewayResult: any, params: any): any {
-  const entries = gatewayResult?.entries ?? [];
-  const total: number = gatewayResult?.total ?? entries.length;
-  const pagination = computePagination(params, total);
-  return {
-    entries,
-    total,
-    offset: pagination.offset,
-    limit: pagination.limit,
-    hasMore: pagination.hasMore,
-    nextOffset: pagination.nextOffset,
   };
 }
 
@@ -378,8 +482,8 @@ async function persistCronPushMap(
 }
 
 /**
- * Query run history from the last 7 days via the gateway's native cron.runs RPC,
- * grouped by date and sorted by time.
+ * Query run history from the last 7 days from both local runs folder
+ * and the gateway's native cron.runs RPC, merged and grouped by date.
  *
  * Return format:
  *   [ { "YYYY-MM-DD": [ { run record with .name }, ... ] }, ... ]
@@ -387,25 +491,49 @@ async function persistCronPushMap(
 async function queryTimeListFromGateway(
   params: any,
 ): Promise<Array<Record<string, Array<Record<string, any>>>>> {
-  const rpcResult: any = await callGatewayTool(
-    "cron.runs",
-    { timeoutMs: GATEWAY_TIMEOUT_MS },
-    {
-      scope: "all",
-      limit: 200,
-      sortDir: "desc",
-      ...(params ?? {}),
-    },
+  // Fetch from local runs folder and gateway RPC in parallel
+  const [localEntries, rpcResult] = await Promise.all([
+    readAllLocalRunLogs().catch((err) => {
+      logger.error(`[CRON-QUERY] readAllLocalRunLogs failed:`, err);
+      return [] as CronRunLogEntry[];
+    }),
+    callGatewayTool(
+      "cron.runs",
+      { timeoutMs: GATEWAY_TIMEOUT_MS },
+      {
+        scope: "all",
+        limit: 200,
+        sortDir: "desc",
+        ...(params ?? {}),
+      },
+    ).catch((err) => {
+      logger.error(`[CRON-QUERY] gateway cron.runs RPC failed:`, err);
+      return { entries: [] as any[] };
+    }),
+  ]);
+
+  const gatewayEntries: any[] = (rpcResult as any)?.entries ?? [];
+
+  logger.log(
+    `[CRON-QUERY] queryTimeList: local=${localEntries.length}, gateway=${gatewayEntries.length}`,
   );
 
-  const entries: any[] = rpcResult?.entries ?? [];
-  if (entries.length === 0) {
+  // Merge and deduplicate
+  const merged = mergeAndDedupeRunEntries(localEntries, gatewayEntries);
+  logger.log(
+    `[CRON-QUERY] queryTimeList: merged=${merged.length} (after dedup)`,
+  );
+
+  if (merged.length === 0) {
     return [];
   }
 
   // Filter to last 7 days
   const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
-  const recent = entries.filter((e) => e.ts && e.ts >= sevenDaysAgo);
+  const recent = merged.filter((e) => e.ts && e.ts >= sevenDaysAgo);
+  logger.log(
+    `[CRON-QUERY] queryTimeList: recent=${recent.length} (within 7 days, threshold=${new Date(sevenDaysAgo).toISOString()})`,
+  );
 
   // Ensure .name is populated (gateway returns jobName; normalize to .name)
   for (const run of recent) {
@@ -436,4 +564,216 @@ async function queryTimeListFromGateway(
     result.push({ [date]: runs });
   }
   return result;
+}
+
+// ============================================================================
+// Local run-log helpers — read legacy runs/*.jsonl files
+// ============================================================================
+
+/**
+ * Filename patterns that may contain legacy run-log data.
+ *
+ * After cron-recovery migration (gateway_start hook), .jsonl files are
+ * archived to .jsonl.migrated (or .migrated.2, .migrated.3, …).
+ * We must match all of these so that historical runs are still visible
+ * in queryTimeList after migration.
+ */
+const RUN_LOG_SUFFIXES = [
+  ".jsonl",           // active / pre-migration
+  ".jsonl.migrated",  // first migration
+];
+
+/**
+ * Check whether a filename looks like a run-log file (any generation).
+ */
+function isRunLogFile(name: string): boolean {
+  return RUN_LOG_SUFFIXES.some((suffix) => name.endsWith(suffix))
+    // Also catch .migrated.2, .migrated.3, …
+    || /\.jsonl\.migrated\.\d+$/.test(name);
+}
+
+/**
+ * Strip known run-log suffixes to extract the bare jobId from a filename.
+ * e.g. "abc123.jsonl.migrated.2" → "abc123"
+ */
+function extractJobIdFromRunLogName(name: string): string {
+  // Try each known suffix first
+  for (const suffix of RUN_LOG_SUFFIXES) {
+    if (name.endsWith(suffix)) {
+      return name.slice(0, -suffix.length);
+    }
+  }
+  // Fallback: strip .jsonl and everything after
+  const dotJsonl = name.indexOf(".jsonl");
+  if (dotJsonl >= 0) {
+    return name.slice(0, dotJsonl);
+  }
+  // Last resort: just use the basename without extension
+  return path.basename(name, path.extname(name));
+}
+
+/**
+ * Read local run-log entries for a single job from the legacy runs folder.
+ *
+ * Tries multiple filename suffixes (active + archived) since migration
+ * may have renamed the file to .jsonl.migrated.
+ */
+async function readLocalRunLogsForJob(jobId: string): Promise<CronRunLogEntry[]> {
+  logger.log(`[CRON-QUERY] readLocalRunLogsForJob: jobId=${jobId}, dir=${LEGACY_CRON_RUNS_DIR}`);
+
+  // Try active file first, then archived variants
+  const candidates = [
+    `${jobId}.jsonl`,
+    `${jobId}.jsonl.migrated`,
+  ];
+
+  for (const candidate of candidates) {
+    const filePath = path.join(LEGACY_CRON_RUNS_DIR, candidate);
+    try {
+      const raw = await fsp.readFile(filePath, "utf-8");
+      if (raw.trim()) {
+        const parsed = parseCronRunLogEntriesFromJsonl(raw, { jobId });
+        logger.log(
+          `[CRON-QUERY] readLocalRunLogsForJob: found ${candidate}, bytes=${raw.length}, entries=${parsed.length}`,
+        );
+        return parsed;
+      }
+    } catch {
+      logger.log(`[CRON-QUERY] readLocalRunLogsForJob: ${candidate} not found`);
+    }
+  }
+
+  // Also scan for .migrated.N variants
+  try {
+    const dirEntries = await fsp.readdir(LEGACY_CRON_RUNS_DIR, { withFileTypes: true });
+    const migratedRe = new RegExp(`^${escapeRegex(jobId)}\\.jsonl\\.migrated\\.\\d+$`);
+    for (const entry of dirEntries) {
+      if (entry.isFile() && migratedRe.test(entry.name)) {
+        try {
+          const raw = await fsp.readFile(
+            path.join(LEGACY_CRON_RUNS_DIR, entry.name),
+            "utf-8",
+          );
+          if (raw.trim()) {
+            const parsed = parseCronRunLogEntriesFromJsonl(raw, { jobId });
+            logger.log(
+              `[CRON-QUERY] readLocalRunLogsForJob: found ${entry.name}, entries=${parsed.length}`,
+            );
+            return parsed;
+          }
+        } catch {
+          // Keep trying other candidates
+        }
+      }
+    }
+  } catch {
+    // Directory listing failed, give up
+  }
+
+  logger.log(`[CRON-QUERY] readLocalRunLogsForJob: no local run-log files found for jobId=${jobId}`);
+  return [];
+}
+
+/**
+ * Read all local run-log entries from the legacy runs folder.
+ *
+ * Matches .jsonl files as well as post-migration archived copies
+ * (.jsonl.migrated, .jsonl.migrated.2, …).
+ */
+async function readAllLocalRunLogs(): Promise<CronRunLogEntry[]> {
+  try {
+    logger.log(`[CRON-QUERY] readAllLocalRunLogs: scanning ${LEGACY_CRON_RUNS_DIR}`);
+    const entries = await fsp.readdir(LEGACY_CRON_RUNS_DIR, { withFileTypes: true });
+    const runLogFiles = entries.filter(
+      (e) => e.isFile() && isRunLogFile(e.name),
+    );
+    logger.log(
+      `[CRON-QUERY] readAllLocalRunLogs: total dir entries=${entries.length}, runLogFiles=${runLogFiles.length}` +
+      (runLogFiles.length > 0 ? ` files=[${runLogFiles.map(f => f.name).join(", ")}]` : ""),
+    );
+
+    const allEntries: CronRunLogEntry[] = [];
+    for (const file of runLogFiles) {
+      const jobId = extractJobIdFromRunLogName(file.name);
+      try {
+        const raw = await fsp.readFile(
+          path.join(LEGACY_CRON_RUNS_DIR, file.name),
+          "utf-8",
+        );
+        const parsed = parseCronRunLogEntriesFromJsonl(raw, { jobId });
+        logger.log(
+          `[CRON-QUERY] readAllLocalRunLogs: file=${file.name} jobId=${jobId} bytes=${raw.length} entries=${parsed.length}`,
+        );
+        allEntries.push(...parsed);
+      } catch (err) {
+        logger.warn(`[CRON-QUERY] readAllLocalRunLogs: failed to read ${file.name}:`, err);
+      }
+    }
+    logger.log(`[CRON-QUERY] readAllLocalRunLogs: total local entries=${allEntries.length}`);
+    return allEntries;
+  } catch (err) {
+    logger.warn(`[CRON-QUERY] readAllLocalRunLogs: failed to scan runs dir:`, err);
+    return [];
+  }
+}
+
+/** Escape special regex characters in a string. */
+function escapeRegex(s: string): string {
+  return s.replace(/[-\/\\^$*+?.()|[\]{}]/g, "\\$&");
+}
+
+/**
+ * Build a dedup key for a run-log entry.
+ */
+function makeRunEntryKey(entry: {
+  jobId: string;
+  ts: number;
+  runId?: string;
+  status?: string;
+  summary?: string;
+  error?: string;
+}): string {
+  return [
+    entry.jobId,
+    String(entry.ts),
+    entry.runId ?? "",
+    entry.status ?? "",
+    entry.summary ?? "",
+    entry.error ?? "",
+  ].join("\0");
+}
+
+/**
+ * Merge local and gateway run entries, deduplicate, and sort by ts descending.
+ * Gateway entries take precedence over local entries with the same key.
+ */
+function mergeAndDedupeRunEntries(
+  localEntries: CronRunLogEntry[],
+  gatewayEntries: any[],
+): any[] {
+  const seen = new Set<string>();
+  const merged: any[] = [];
+
+  // Add gateway entries first (they take precedence)
+  for (const entry of gatewayEntries) {
+    const key = makeRunEntryKey(entry);
+    if (!seen.has(key)) {
+      seen.add(key);
+      merged.push(entry);
+    }
+  }
+
+  // Add local entries that aren't already in gateway results
+  for (const entry of localEntries) {
+    const key = makeRunEntryKey(entry);
+    if (!seen.has(key)) {
+      seen.add(key);
+      merged.push(entry);
+    }
+  }
+
+  // Sort by ts descending (newest first)
+  merged.sort((a: any, b: any) => b.ts - a.ts);
+
+  return merged;
 }

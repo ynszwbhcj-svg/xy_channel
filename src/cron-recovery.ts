@@ -1,9 +1,13 @@
-// Legacy cron store and run-log migration on gateway startup.
+// Legacy cron store migration on gateway startup.
 //
 // On gateway startup, this module checks .openclaw/cron/ for legacy
-// JSON/JSONL files and migrates them into the SQLite state database.
+// JSON files and migrates them into the SQLite state database.
 //
-// Pattern follows legacy-store-migration.ts and legacy-run-log-migration.ts:
+// Run-log files (runs/*.jsonl) are no longer migrated to SQLite.
+// They are read on-demand by cron-query-handler and merged with gateway
+// RPC results at query time.
+//
+// Pattern:
 //   1. Check for legacy files
 //   2. Load and validate the data
 //   3. Import into SQLite
@@ -17,7 +21,7 @@ const { DatabaseSync } = nodeRequire("node:sqlite") as {
   DatabaseSync: new (path: string) => SqliteDb;
 };
 
-// Minimal local interface for node:sqlite SqliteDb (avoiding missing type defs)
+// Minimal local interface for node:sqlite (avoiding missing type defs with @types/node@^20)
 interface SqliteDb {
   exec(sql: string): void;
   prepare(sql: string): SqliteStmt;
@@ -39,14 +43,11 @@ import { logger } from "./utils/logger.js";
 
 const RECOVERY_LOG_TAG = "[CRON-RECOVERY]";
 
-/** Root dir, hardcoded to ~/.openclaw. */
-const ROOT_DIR = "/home/sandbox/.openclaw";
+/** Root dir, derived from home directory. */
+const ROOT_DIR = path.join(os.homedir(), ".openclaw");
 
 /** Path to the legacy cron store JSON file. */
 const LEGACY_CRON_STORE_PATH = path.join(ROOT_DIR, "cron", "jobs.json");
-
-/** Path to the legacy cron run-log directory. */
-const LEGACY_CRON_RUNS_DIR = path.join(ROOT_DIR, "cron", "runs");
 
 /** Path to the shared SQLite state database. */
 const STATE_DB_PATH = path.join(ROOT_DIR, "state", "openclaw.sqlite");
@@ -129,21 +130,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function readString(record: Record<string, unknown>, key: string): string | undefined {
   const val = record[key];
   return typeof val === "string" && val.trim() ? val.trim() : undefined;
-}
-
-function readOptionalString(record: Record<string, unknown>, key: string): string | undefined {
-  const val = record[key];
-  return typeof val === "string" ? val : undefined;
-}
-
-function readNumber(record: Record<string, unknown>, key: string): number | undefined {
-  const val = record[key];
-  return typeof val === "number" && Number.isFinite(val) ? val : undefined;
-}
-
-function readBoolean(record: Record<string, unknown>, key: string): boolean | undefined {
-  const val = record[key];
-  return typeof val === "boolean" ? val : undefined;
 }
 
 // ── Legacy store loading (mirrors legacy-store-migration.ts) ───────────────
@@ -280,6 +266,7 @@ async function loadLegacyCronStore(): Promise<{
   const storePath = LEGACY_CRON_STORE_PATH;
 
   if (!(await fileExists(storePath))) {
+    logger.log(`${RECOVERY_LOG_TAG} Legacy store file does not exist: ${storePath}`);
     return null;
   }
 
@@ -287,8 +274,10 @@ async function loadLegacyCronStore(): Promise<{
   let raw: string;
   try {
     raw = await fsp.readFile(storePath, "utf-8");
+    logger.log(`${RECOVERY_LOG_TAG} Read legacy store file: ${raw.length} bytes`);
   } catch (err) {
-    logger.error(`${RECOVERY_LOG_TAG} Failed to read ${storePath}:`, err);
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.error(`${RECOVERY_LOG_TAG} Failed to read ${storePath}: ${msg}`);
     return null;
   }
 
@@ -296,7 +285,8 @@ async function loadLegacyCronStore(): Promise<{
   try {
     parsed = parseJsonWithFallback(raw);
   } catch (err) {
-    logger.error(`${RECOVERY_LOG_TAG} Failed to parse ${storePath}:`, err);
+    const msg = err instanceof Error ? err.message : String(err);
+    logger.error(`${RECOVERY_LOG_TAG} Failed to parse ${storePath}: ${msg}`);
     return null;
   }
 
@@ -306,15 +296,23 @@ async function loadLegacyCronStore(): Promise<{
     rawJobs = parsed;
   } else if (isRecord(parsed) && Array.isArray(parsed.jobs)) {
     rawJobs = parsed.jobs as unknown[];
+  } else {
+    logger.warn(
+      `${RECOVERY_LOG_TAG} Unexpected store structure (type=${typeof parsed}, isArray=${Array.isArray(parsed)})`,
+    );
   }
 
   const jobs: LegacyCronJob[] = [];
+  let skippedCount = 0;
   for (const row of rawJobs) {
     if (isRecord(row)) {
       jobs.push(row as unknown as LegacyCronJob);
     } else {
-      logger.warn(`${RECOVERY_LOG_TAG} Skipping non-object legacy cron row`);
+      skippedCount++;
     }
+  }
+  if (skippedCount > 0) {
+    logger.warn(`${RECOVERY_LOG_TAG} Skipped ${skippedCount} non-object rows in legacy store`);
   }
 
   // 2. Load jobs-state.json
@@ -324,6 +322,7 @@ async function loadLegacyCronStore(): Promise<{
   if (await fileExists(statePath)) {
     try {
       const stateRaw = await fsp.readFile(statePath, "utf-8");
+      logger.log(`${RECOVERY_LOG_TAG} Read legacy state file: ${stateRaw.length} bytes`);
       const stateParsed = parseJsonWithFallback(stateRaw);
       if (
         isRecord(stateParsed) &&
@@ -331,10 +330,22 @@ async function loadLegacyCronStore(): Promise<{
         isRecord(stateParsed.jobs)
       ) {
         stateEntries = stateParsed.jobs as LegacyCronStateFile["jobs"];
+        logger.log(
+          `${RECOVERY_LOG_TAG} Parsed state file: ${Object.keys(stateEntries).length} entries`,
+        );
+      } else {
+        logger.warn(
+          `${RECOVERY_LOG_TAG} State file has unexpected structure: ` +
+            `version=${isRecord(stateParsed) ? stateParsed.version : "N/A"}, ` +
+            `hasJobs=${isRecord(stateParsed) && isRecord((stateParsed as Record<string,unknown>).jobs)}`,
+        );
       }
     } catch (err) {
-      logger.warn(`${RECOVERY_LOG_TAG} Could not load state file, continuing without:`, err);
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.warn(`${RECOVERY_LOG_TAG} Could not load state file, continuing without: ${msg}`);
     }
+  } else {
+    logger.log(`${RECOVERY_LOG_TAG} No legacy state file found (will use embedded state from jobs.json)`);
   }
 
   logger.log(
@@ -346,21 +357,95 @@ async function loadLegacyCronStore(): Promise<{
 
 // ── SQLite helpers ─────────────────────────────────────────────────────────
 
+/**
+ * Open the shared state database.
+ *
+ * Returns a SqliteDb handle or null if the database cannot be opened.
+ * Distinguishes between "file not found" (returns null with clear diag) and
+ * "database locked / busy" (retries up to 5 times with backoff, then returns
+ * null with a distinct error message).
+ */
 function openStateDb(): SqliteDb | null {
   const dbPath = STATE_DB_PATH;
+  const dbDir = path.dirname(dbPath);
+
+  logger.log(
+    `${RECOVERY_LOG_TAG} Attempting to open state database at: ${dbPath}`,
+  );
+  logger.log(
+    `${RECOVERY_LOG_TAG} State db dir exists: ${fileExistsSync(dbDir)}, db file exists: ${fileExistsSync(dbPath)}`,
+  );
+
   if (!fileExistsSync(dbPath)) {
-    logger.warn(`${RECOVERY_LOG_TAG} State database not found at ${dbPath}`);
+    logger.warn(
+      `${RECOVERY_LOG_TAG} State database not found at ${dbPath}. ` +
+        `Skipping migration — database must exist before migration can run.`,
+    );
     return null;
   }
+
+  // Log db file size for diagnostics
   try {
-    const db = new DatabaseSync(dbPath);
-    db.exec("PRAGMA busy_timeout = 30000;");
-    db.exec("PRAGMA foreign_keys = ON;");
-    return db;
-  } catch (err) {
-    logger.error(`${RECOVERY_LOG_TAG} Failed to open state database:`, err);
-    return null;
+    const stat = fs.statSync(dbPath);
+    logger.log(
+      `${RECOVERY_LOG_TAG} State database size: ${stat.size} bytes, mode: ${stat.mode.toString(8)}`,
+    );
+  } catch {
+    logger.warn(`${RECOVERY_LOG_TAG} Could not stat database file`);
   }
+
+  // Retry loop for lock contention (SQLITE_BUSY from gateway holding the db)
+  const maxRetries = 5;
+  const baseDelayMs = 500;
+  let lastError: Error | undefined;
+
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      const db = new DatabaseSync(dbPath);
+      db.exec("PRAGMA busy_timeout = 30000;");
+      db.exec("PRAGMA foreign_keys = ON;");
+      logger.log(
+        `${RECOVERY_LOG_TAG} Successfully opened state database ` +
+          `${attempt > 1 ? `(attempt ${attempt}/${maxRetries})` : `(first attempt)`}`,
+      );
+      return db;
+    } catch (err) {
+      lastError = err as Error;
+      const msg = (err as Error).message ?? String(err);
+      const isLocked =
+        msg.includes("locked") ||
+        msg.includes("SQLITE_BUSY") ||
+        msg.includes("busy");
+
+      if (isLocked && attempt < maxRetries) {
+        const delay = baseDelayMs * attempt;
+        logger.warn(
+          `${RECOVERY_LOG_TAG} Database locked (attempt ${attempt}/${maxRetries}), ` +
+            `retrying in ${delay}ms...`,
+        );
+        // Busy-wait — no Atomics.wait available in plugin sandbox
+        const deadline = Date.now() + delay;
+        while (Date.now() < deadline) {
+          // Spin — acceptable for a one-time startup migration
+        }
+        continue;
+      }
+
+      logger.error(
+        `${RECOVERY_LOG_TAG} Failed to open state database ` +
+          `(attempt ${attempt}/${maxRetries}): ${msg}` +
+          (isLocked ? " [DATABASE LOCKED — is the gateway already running?]" : ""),
+      );
+    }
+  }
+
+  logger.error(
+    `${RECOVERY_LOG_TAG} Could not open state database after ${maxRetries} attempts. ` +
+      `Last error: ${lastError?.message ?? "unknown"}. ` +
+      `Migration will be skipped. The gateway may be holding an exclusive lock. ` +
+      `Consider running migration before the gateway starts.`,
+  );
+  return null;
 }
 
 /** Generate a stable store_key from the store path. */
@@ -605,7 +690,7 @@ function insertCronJobs(db: SqliteDb, storeKey: string, rows: CronJobRow[]): voi
   );
 
   for (const row of rows) {
-    insert.run(...CRON_JOB_COLUMNS.map((col) => (row as any)[col]));
+    insert.run(...CRON_JOB_COLUMNS.map((col) => (row as unknown as Record<string, unknown>)[col]));
   }
 
   logger.log(
@@ -621,25 +706,54 @@ async function migrateStore(
   diags: string[],
 ): Promise<boolean> {
   const storePath = LEGACY_CRON_STORE_PATH;
+  const statePath = resolveLegacyCronStatePath(storePath);
+
+  logger.log(`${RECOVERY_LOG_TAG} Checking for legacy store at: ${storePath}`);
+  logger.log(`${RECOVERY_LOG_TAG} Checking for legacy state at: ${statePath}`);
 
   if (!(await fileExists(storePath))) {
+    logger.log(`${RECOVERY_LOG_TAG} Legacy cron store not found, skipping store migration`);
     diags.push("legacy cron store not found, skipping store migration");
     return false;
+  }
+
+  // Log store file size
+  try {
+    const storeStat = fs.statSync(storePath);
+    logger.log(`${RECOVERY_LOG_TAG} Legacy store file size: ${storeStat.size} bytes`);
+    const stateExists = await fileExists(statePath);
+    if (stateExists) {
+      const stateStat = fs.statSync(statePath);
+      logger.log(`${RECOVERY_LOG_TAG} Legacy state file size: ${stateStat.size} bytes`);
+    } else {
+      logger.log(`${RECOVERY_LOG_TAG} Legacy state file not found (will use job-embedded state)`);
+    }
+  } catch {
+    // non-critical
   }
 
   // 1. Load legacy data
   const legacy = await loadLegacyCronStore();
   if (!legacy || legacy.jobs.length === 0) {
+    logger.log(`${RECOVERY_LOG_TAG} Legacy cron store empty or unreadable, skipping store migration`);
     diags.push("legacy cron store empty or unreadable, skipping store migration");
     return false;
   }
 
-  diags.push(`loaded legacy cron store: ${legacy.jobs.length} jobs`);
+  diags.push(`loaded legacy cron store: ${legacy.jobs.length} jobs, ${Object.keys(legacy.stateEntries).length} state entries`);
+  logger.log(
+    `${RECOVERY_LOG_TAG} Loaded ${legacy.jobs.length} legacy jobs, ` +
+      `${Object.keys(legacy.stateEntries).length} state entries`,
+  );
 
   // 2. Open SQLite
   const db = openStateDb();
   if (!db) {
-    diags.push("state database not available, skipping store migration");
+    logger.warn(
+      `${RECOVERY_LOG_TAG} Store migration skipped: database not available. ` +
+        `Is the gateway holding a lock?`,
+    );
+    diags.push("state database not available (locked or missing), skipping store migration");
     return false;
   }
 
@@ -655,298 +769,121 @@ async function migrateStore(
       ),
     );
 
+    logger.log(
+      `${RECOVERY_LOG_TAG} Built ${rows.length} rows for insertion, storeKey=${storeKey}`,
+    );
+
     insertCronJobs(db, storeKey, rows);
 
     // 4. Archive legacy files
     await archiveFile(storePath);
-    await archiveFile(resolveLegacyCronStatePath(storePath));
+    await archiveFile(statePath);
 
-    diags.push(`migrated ${rows.length} cron jobs to SQLite`);
+    const jobIds = rows.map((r) => r.job_id).join(", ");
+    diags.push(
+      `migrated ${rows.length} cron jobs to SQLite: [${jobIds}]`,
+    );
     logger.log(
-      `${RECOVERY_LOG_TAG} Store migration complete: ${rows.length} jobs imported, legacy files archived`,
+      `${RECOVERY_LOG_TAG} Store migration complete: ${rows.length} jobs imported (${jobIds}), legacy files archived`,
     );
 
     return true;
   } finally {
     db.close();
-  }
-}
-
-// ── Run-log migration (mirrors legacy-run-log-migration.ts) ─────────────────
-
-interface CronRunLogEntry {
-  jobId: string;
-  ts: number;
-  runId?: string;
-  status?: string;
-  error?: string;
-  summary?: string;
-  diagnosticsSummary?: string;
-  deliveryStatus?: string;
-  deliveryError?: string;
-  delivered?: boolean;
-  sessionId?: string;
-  sessionKey?: string;
-  runAtMs?: number;
-  durationMs?: number;
-  nextRunAtMs?: number;
-  model?: string;
-  provider?: string;
-  totalTokens?: number;
-}
-
-function parseRunLogEntry(obj: unknown, opts?: { jobId?: string }): CronRunLogEntry | null {
-  if (!isRecord(obj)) return null;
-
-  const ts = readNumber(obj, "ts");
-  if (ts === undefined) return null;
-
-  const jobId = opts?.jobId ?? readString(obj, "jobId");
-  if (!jobId) return null;
-
-  return {
-    jobId,
-    ts,
-    runId: readOptionalString(obj, "runId"),
-    status: readOptionalString(obj, "status"),
-    error: readOptionalString(obj, "error"),
-    summary: readOptionalString(obj, "summary"),
-    diagnosticsSummary: readOptionalString(obj, "diagnosticsSummary"),
-    deliveryStatus: readOptionalString(obj, "deliveryStatus"),
-    deliveryError: readOptionalString(obj, "deliveryError"),
-    delivered: readBoolean(obj, "delivered"),
-    sessionId: readOptionalString(obj, "sessionId"),
-    sessionKey: readOptionalString(obj, "sessionKey"),
-    runAtMs: readNumber(obj, "runAtMs"),
-    durationMs: readNumber(obj, "durationMs"),
-    nextRunAtMs: readNumber(obj, "nextRunAtMs"),
-    model: readOptionalString(obj, "model"),
-    provider: readOptionalString(obj, "provider"),
-    totalTokens: readNumber(obj, "totalTokens"),
-  };
-}
-
-function parseCronRunLogEntriesFromJsonl(
-  raw: string,
-  opts?: { jobId?: string },
-): CronRunLogEntry[] {
-  if (!raw.trim()) return [];
-  const entries: CronRunLogEntry[] = [];
-  for (const line of raw.split("\n")) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-    try {
-      const entry = parseRunLogEntry(JSON.parse(trimmed), opts);
-      if (entry) entries.push(entry);
-    } catch {
-      // Skip malformed historical rows
-    }
-  }
-  return entries;
-}
-
-const CRON_RUN_LOG_COLUMNS = [
-  "store_key", "job_id", "seq", "ts", "status", "error", "summary",
-  "diagnostics_summary", "delivery_status", "delivery_error", "delivered",
-  "session_id", "session_key", "run_id", "run_at_ms", "duration_ms",
-  "next_run_at_ms", "model", "provider", "total_tokens",
-  "entry_json", "created_at",
-];
-
-function runLogKey(entry: CronRunLogEntry): string {
-  return [
-    entry.jobId,
-    String(entry.ts),
-    entry.runId ?? "",
-    entry.status ?? "",
-    entry.summary ?? "",
-    entry.error ?? "",
-  ].join("\0");
-}
-
-/**
- * Import one legacy JSONL run-log file into the SQLite cron_run_logs table.
- */
-async function importRunLogFile(
-  db: SqliteDb,
-  storeKey: string,
-  filePath: string,
-  jobId: string,
-): Promise<number> {
-  const raw = fs.readFileSync(filePath, "utf-8");
-  const entries = parseCronRunLogEntriesFromJsonl(raw, { jobId });
-
-  if (entries.length === 0) return 0;
-
-  // Deduplicate against existing entries
-  const existingKeys = new Set<string>();
-  const existingRows = db
-    .prepare("SELECT job_id, ts, run_id, status, summary, error FROM cron_run_logs WHERE store_key = ? AND job_id = ?")
-    .all(storeKey, jobId) as Array<Record<string, unknown>>;
-
-  for (const row of existingRows) {
-    existingKeys.add(
-      [
-        String(row.job_id ?? ""),
-        String(row.ts ?? ""),
-        String(row.run_id ?? ""),
-        String(row.status ?? ""),
-        String(row.summary ?? ""),
-        String(row.error ?? ""),
-      ].join("\0"),
-    );
-  }
-
-  let imported = 0;
-  let seq = existingRows.length;
-
-  const placeholders = CRON_RUN_LOG_COLUMNS.map(() => "?").join(", ");
-  const insert = db.prepare(
-    `INSERT INTO cron_run_logs (${CRON_RUN_LOG_COLUMNS.join(", ")}) VALUES (${placeholders})`,
-  );
-
-  for (const entry of entries) {
-    const key = runLogKey(entry);
-    if (existingKeys.has(key)) continue;
-    existingKeys.add(key);
-    seq++;
-
-    insert.run(
-      storeKey,
-      entry.jobId,
-      seq,
-      entry.ts,
-      entry.status ?? null,
-      entry.error ?? null,
-      entry.summary ?? null,
-      entry.diagnosticsSummary ?? null,
-      entry.deliveryStatus ?? null,
-      entry.deliveryError ?? null,
-      typeof entry.delivered === "boolean" ? (entry.delivered ? 1 : 0) : null,
-      entry.sessionId ?? null,
-      entry.sessionKey ?? null,
-      entry.runId ?? null,
-      entry.runAtMs ?? null,
-      entry.durationMs ?? null,
-      entry.nextRunAtMs ?? null,
-      entry.model ?? null,
-      entry.provider ?? null,
-      entry.totalTokens ?? null,
-      JSON.stringify(entry),
-      Date.now(),
-    );
-    imported++;
-  }
-
-  return imported;
-}
-
-/**
- * Migrate legacy cron run logs (runs/*.jsonl) into SQLite.
- * Returns the number of files imported.
- */
-async function migrateRunLogs(
-  diags: string[],
-): Promise<number> {
-  const runsDir = LEGACY_CRON_RUNS_DIR;
-
-  let entries: fs.Dirent[];
-  try {
-    entries = await fsp.readdir(runsDir, { withFileTypes: true });
-  } catch {
-    diags.push("legacy cron runs directory not found, skipping run-log migration");
-    return 0;
-  }
-
-  const jsonlFiles = entries.filter(
-    (entry) => entry.isFile() && entry.name.endsWith(".jsonl"),
-  );
-
-  if (jsonlFiles.length === 0) {
-    diags.push("no legacy run-log files found, skipping run-log migration");
-    return 0;
-  }
-
-  diags.push(`found ${jsonlFiles.length} legacy run-log files`);
-
-  // Open SQLite
-  const db = openStateDb();
-  if (!db) {
-    diags.push("state database not available, skipping run-log migration");
-    return 0;
-  }
-
-  const storePath = LEGACY_CRON_STORE_PATH;
-  const storeKey = cronStoreKey(storePath);
-  let importedFiles = 0;
-
-  try {
-    for (const file of jsonlFiles) {
-      const jobId = path.basename(file.name, ".jsonl");
-      const filePath = path.join(runsDir, file.name);
-
-      try {
-        const count = await importRunLogFile(db, storeKey, filePath, jobId);
-        if (count > 0) {
-          importedFiles++;
-          diags.push(`imported ${count} run-log entries for job ${jobId}`);
-          logger.log(
-            `${RECOVERY_LOG_TAG} Imported ${count} run-log entries for job ${jobId}`,
-          );
-        }
-        // Archive after successful import
-        await archiveFile(filePath);
-      } catch (err) {
-        logger.error(`${RECOVERY_LOG_TAG} Failed to import run-log for ${jobId}:`, err);
-        diags.push(`failed to import run-log for ${jobId}: ${String(err)}`);
-      }
-    }
-
-    return importedFiles;
-  } finally {
-    db.close();
+    logger.log(`${RECOVERY_LOG_TAG} Database connection closed after store migration`);
   }
 }
 
 // ── Main entry point ────────────────────────────────────────────────────────
 
 /**
- * Recover cron state on gateway startup by migrating legacy JSON/JSONL files
+ * Recover cron state on gateway startup by migrating legacy JSON files
  * into the SQLite state database.
  *
  * Called from the gateway_start hook. Performs:
  *  1. Detects legacy .openclaw/cron/jobs.json (and -state.json)
  *  2. If found, imports jobs into the SQLite cron_jobs table
- *  3. Detects legacy .openclaw/cron/runs/*.jsonl run-log files
- *  4. If found, imports entries into the SQLite cron_run_logs table
- *  5. Archives all successfully migrated files with .migrated suffix
+ *  3. Archives successfully migrated files with .migrated suffix
+ *
+ * Note: Run-log files (runs/*.jsonl) are no longer migrated to SQLite.
+ * They are read on-demand by cron-query-handler and merged with gateway
+ * RPC results at query time.
  *
  * Returns a CronRecoveryResult with diagnostics.
  */
 export async function recoverCronState(): Promise<CronRecoveryResult> {
   const diags: string[] = [];
   let storeMigrated = false;
-  let runLogFilesImported = 0;
 
-  logger.log(`${RECOVERY_LOG_TAG} Starting cron migration check on gateway startup`);
+  // ── Log resolved paths for troubleshooting ────────────────────────────
+  logger.log(`${RECOVERY_LOG_TAG} ═══════════════════════════════════════════`);
+  logger.log(`${RECOVERY_LOG_TAG} Cron migration starting on gateway startup`);
+  logger.log(`${RECOVERY_LOG_TAG} Resolved paths:`);
+  logger.log(`${RECOVERY_LOG_TAG}   homedir        = ${os.homedir()}`);
+  logger.log(`${RECOVERY_LOG_TAG}   ROOT_DIR       = ${ROOT_DIR}`);
+  logger.log(`${RECOVERY_LOG_TAG}   legacy store   = ${LEGACY_CRON_STORE_PATH}`);
+  logger.log(`${RECOVERY_LOG_TAG}   state db       = ${STATE_DB_PATH}`);
+  logger.log(`${RECOVERY_LOG_TAG}   user           = ${os.userInfo?.()?.username ?? "unknown"}`);
+  logger.log(`${RECOVERY_LOG_TAG} ═══════════════════════════════════════════`);
 
-  // 1. Migrate legacy store (jobs.json → SQLite cron_jobs)
+  // ── Pre-flight: check what files exist ────────────────────────────────
+  const storeExists = await fileExists(LEGACY_CRON_STORE_PATH);
+  const stateStoreExists = await fileExists(
+    resolveLegacyCronStatePath(LEGACY_CRON_STORE_PATH),
+  );
+  let dbSize = 0;
+  const dbExists = fileExistsSync(STATE_DB_PATH);
+  if (dbExists) {
+    try {
+      dbSize = fs.statSync(STATE_DB_PATH).size;
+    } catch {
+      // ignore
+    }
+  }
+
+  logger.log(
+    `${RECOVERY_LOG_TAG} Pre-flight check: ` +
+      `store.json=${storeExists}, ` +
+      `store-state.json=${stateStoreExists}, ` +
+      `stateDb=${dbExists}(${dbSize} bytes)`,
+  );
+  diags.push(
+    `preflight: store=${storeExists} state=${stateStoreExists} ` +
+      `db=${dbExists}(size=${dbSize})`,
+  );
+
+  // ── Migrate legacy store (jobs.json → SQLite cron_jobs) ───────────
+  logger.log(`${RECOVERY_LOG_TAG} ── Store migration ──`);
   try {
     storeMigrated = await migrateStore(diags);
+    logger.log(
+      `${RECOVERY_LOG_TAG} Store migration result: storeMigrated=${storeMigrated}`,
+    );
   } catch (err) {
-    logger.error(`${RECOVERY_LOG_TAG} Store migration failed:`, err);
-    diags.push(`store migration error: ${String(err)}`);
+    const errMsg = err instanceof Error ? err.message : String(err);
+    logger.error(`${RECOVERY_LOG_TAG} Store migration threw:`, err);
+    diags.push(`store migration error: ${errMsg}`);
   }
 
-  // 2. Migrate legacy run logs (runs/*.jsonl → SQLite cron_run_logs)
-  try {
-    runLogFilesImported = await migrateRunLogs(diags);
-  } catch (err) {
-    logger.error(`${RECOVERY_LOG_TAG} Run-log migration failed:`, err);
-    diags.push(`run-log migration error: ${String(err)}`);
-  }
+  // Run-log migration to SQLite has been removed.
+  // Legacy run-log files are now read on-demand by cron-query-handler.
+  const runLogFilesImported = 0;
 
-  const recovered = storeMigrated || runLogFilesImported > 0;
+  const recovered = storeMigrated;
+
+  // ── Summary ───────────────────────────────────────────────────────────
+  logger.log(`${RECOVERY_LOG_TAG} ═══════════════════════════════════════════`);
+  logger.log(
+    `${RECOVERY_LOG_TAG} Migration summary: ` +
+      `recovered=${recovered}, ` +
+      `storeMigrated=${storeMigrated}, ` +
+      `runLogFilesImported=${runLogFilesImported}, ` +
+      `diagnosticsCount=${diags.length}`,
+  );
+  for (const diag of diags) {
+    logger.log(`${RECOVERY_LOG_TAG}   diag: ${diag}`);
+  }
+  logger.log(`${RECOVERY_LOG_TAG} ═══════════════════════════════════════════`);
 
   const result: CronRecoveryResult = {
     recovered,
@@ -954,12 +891,6 @@ export async function recoverCronState(): Promise<CronRecoveryResult> {
     runLogFilesImported,
     diagnostics: diags,
   };
-
-  logger.log(
-    `${RECOVERY_LOG_TAG} Migration complete: ` +
-      `storeMigrated=${storeMigrated}, ` +
-      `runLogFilesImported=${runLogFilesImported}`,
-  );
 
   return result;
 }
