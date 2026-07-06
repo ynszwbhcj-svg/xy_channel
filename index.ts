@@ -1,6 +1,6 @@
 // Plugin registration entry point
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
-import { definePluginEntry } from "openclaw/plugin-sdk/core";
+import { definePluginEntry, type OpenClawPluginDefinition } from "openclaw/plugin-sdk/core";
 import { xiaoyiProvider } from "./src/provider.js";
 import { xyPlugin } from "./src/channel.js";
 import registerSentinelHook from "./src/cspl/sentinel_hook.js";
@@ -285,7 +285,7 @@ function registerFullHooks(api: OpenClawPluginApi) {
   registerSelfEvolutionToolResultNudge(api);
 }
 
-export default definePluginEntry({
+const plugin: OpenClawPluginDefinition = definePluginEntry({
   id: "xiaoyi-channel",
   name: "Xiaoyi Channel",
   description: "Xiaoyi channel plugin - Xiaoyi A2A protocol integration",
@@ -324,3 +324,5 @@ export default definePluginEntry({
     }
   },
 });
+
+export default plugin;

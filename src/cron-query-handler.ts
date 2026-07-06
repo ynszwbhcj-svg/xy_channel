@@ -11,17 +11,115 @@
 
 import { callGatewayTool } from "openclaw/plugin-sdk/agent-harness-runtime";
 import fsp from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { sendCommand } from "./formatter.js";
 import { resolveXYConfig } from "./config.js";
 import { configManager } from "./utils/config-manager.js";
 import { setJobPushId } from "./utils/cron-push-map.js";
 import { logger } from "./utils/logger.js";
-import {
-  LEGACY_CRON_RUNS_DIR,
-  parseCronRunLogEntriesFromJsonl,
-} from "./cron-recovery.js";
-import type { CronRunLogEntry } from "./cron-recovery.js";
+
+// ── Local run-log constants, types, and parsers (moved from cron-recovery) ───
+
+const ROOT_DIR = path.join(os.homedir(), ".openclaw");
+
+/** Path to the legacy cron run-log directory. */
+const LEGACY_CRON_RUNS_DIR = path.join(ROOT_DIR, "cron", "runs");
+
+export interface CronRunLogEntry {
+  jobId: string;
+  ts: number;
+  runId?: string;
+  status?: string;
+  error?: string;
+  summary?: string;
+  diagnosticsSummary?: string;
+  deliveryStatus?: string;
+  deliveryError?: string;
+  delivered?: boolean;
+  sessionId?: string;
+  sessionKey?: string;
+  runAtMs?: number;
+  durationMs?: number;
+  nextRunAtMs?: number;
+  model?: string;
+  provider?: string;
+  totalTokens?: number;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function readString(record: Record<string, unknown>, key: string): string | undefined {
+  const val = record[key];
+  return typeof val === "string" && val.trim() ? val.trim() : undefined;
+}
+
+function readOptionalString(record: Record<string, unknown>, key: string): string | undefined {
+  const val = record[key];
+  return typeof val === "string" ? val : undefined;
+}
+
+function readNumber(record: Record<string, unknown>, key: string): number | undefined {
+  const val = record[key];
+  return typeof val === "number" && Number.isFinite(val) ? val : undefined;
+}
+
+function readBoolean(record: Record<string, unknown>, key: string): boolean | undefined {
+  const val = record[key];
+  return typeof val === "boolean" ? val : undefined;
+}
+
+function parseRunLogEntry(obj: unknown, opts?: { jobId?: string }): CronRunLogEntry | null {
+  if (!isRecord(obj)) return null;
+
+  const ts = readNumber(obj, "ts");
+  if (ts === undefined) return null;
+
+  const jobId = opts?.jobId ?? readString(obj, "jobId");
+  if (!jobId) return null;
+
+  return {
+    jobId,
+    ts,
+    runId: readOptionalString(obj, "runId"),
+    status: readOptionalString(obj, "status"),
+    error: readOptionalString(obj, "error"),
+    summary: readOptionalString(obj, "summary"),
+    diagnosticsSummary: readOptionalString(obj, "diagnosticsSummary"),
+    deliveryStatus: readOptionalString(obj, "deliveryStatus"),
+    deliveryError: readOptionalString(obj, "deliveryError"),
+    delivered: readBoolean(obj, "delivered"),
+    sessionId: readOptionalString(obj, "sessionId"),
+    sessionKey: readOptionalString(obj, "sessionKey"),
+    runAtMs: readNumber(obj, "runAtMs"),
+    durationMs: readNumber(obj, "durationMs"),
+    nextRunAtMs: readNumber(obj, "nextRunAtMs"),
+    model: readOptionalString(obj, "model"),
+    provider: readOptionalString(obj, "provider"),
+    totalTokens: readNumber(obj, "totalTokens"),
+  };
+}
+
+function parseCronRunLogEntriesFromJsonl(
+  raw: string,
+  opts?: { jobId?: string },
+): CronRunLogEntry[] {
+  if (!raw.trim()) return [];
+  const entries: CronRunLogEntry[] = [];
+  for (const line of raw.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    try {
+      const entry = parseRunLogEntry(JSON.parse(trimmed), opts);
+      if (entry) entries.push(entry);
+    } catch {
+      // Skip malformed historical rows
+    }
+  }
+  return entries;
+}
 
 const GATEWAY_TIMEOUT_MS = 60_000;
 
@@ -395,7 +493,10 @@ async function queryTimeListFromGateway(
 ): Promise<Array<Record<string, Array<Record<string, any>>>>> {
   // Fetch from local runs folder and gateway RPC in parallel
   const [localEntries, rpcResult] = await Promise.all([
-    readAllLocalRunLogs().catch(() => [] as CronRunLogEntry[]),
+    readAllLocalRunLogs().catch((err) => {
+      logger.error(`[CRON-QUERY] readAllLocalRunLogs failed:`, err);
+      return [] as CronRunLogEntry[];
+    }),
     callGatewayTool(
       "cron.runs",
       { timeoutMs: GATEWAY_TIMEOUT_MS },
@@ -405,13 +506,24 @@ async function queryTimeListFromGateway(
         sortDir: "desc",
         ...(params ?? {}),
       },
-    ).catch(() => ({ entries: [] as any[] })),
+    ).catch((err) => {
+      logger.error(`[CRON-QUERY] gateway cron.runs RPC failed:`, err);
+      return { entries: [] as any[] };
+    }),
   ]);
 
   const gatewayEntries: any[] = (rpcResult as any)?.entries ?? [];
 
+  logger.log(
+    `[CRON-QUERY] queryTimeList: local=${localEntries.length}, gateway=${gatewayEntries.length}`,
+  );
+
   // Merge and deduplicate
   const merged = mergeAndDedupeRunEntries(localEntries, gatewayEntries);
+  logger.log(
+    `[CRON-QUERY] queryTimeList: merged=${merged.length} (after dedup)`,
+  );
+
   if (merged.length === 0) {
     return [];
   }
@@ -419,6 +531,9 @@ async function queryTimeListFromGateway(
   // Filter to last 7 days
   const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
   const recent = merged.filter((e) => e.ts && e.ts >= sevenDaysAgo);
+  logger.log(
+    `[CRON-QUERY] queryTimeList: recent=${recent.length} (within 7 days, threshold=${new Date(sevenDaysAgo).toISOString()})`,
+  );
 
   // Ensure .name is populated (gateway returns jobName; normalize to .name)
   for (const run of recent) {
@@ -504,6 +619,8 @@ function extractJobIdFromRunLogName(name: string): string {
  * may have renamed the file to .jsonl.migrated.
  */
 async function readLocalRunLogsForJob(jobId: string): Promise<CronRunLogEntry[]> {
+  logger.log(`[CRON-QUERY] readLocalRunLogsForJob: jobId=${jobId}, dir=${LEGACY_CRON_RUNS_DIR}`);
+
   // Try active file first, then archived variants
   const candidates = [
     `${jobId}.jsonl`,
@@ -515,10 +632,14 @@ async function readLocalRunLogsForJob(jobId: string): Promise<CronRunLogEntry[]>
     try {
       const raw = await fsp.readFile(filePath, "utf-8");
       if (raw.trim()) {
-        return parseCronRunLogEntriesFromJsonl(raw, { jobId });
+        const parsed = parseCronRunLogEntriesFromJsonl(raw, { jobId });
+        logger.log(
+          `[CRON-QUERY] readLocalRunLogsForJob: found ${candidate}, bytes=${raw.length}, entries=${parsed.length}`,
+        );
+        return parsed;
       }
     } catch {
-      // Try next candidate
+      logger.log(`[CRON-QUERY] readLocalRunLogsForJob: ${candidate} not found`);
     }
   }
 
@@ -534,7 +655,11 @@ async function readLocalRunLogsForJob(jobId: string): Promise<CronRunLogEntry[]>
             "utf-8",
           );
           if (raw.trim()) {
-            return parseCronRunLogEntriesFromJsonl(raw, { jobId });
+            const parsed = parseCronRunLogEntriesFromJsonl(raw, { jobId });
+            logger.log(
+              `[CRON-QUERY] readLocalRunLogsForJob: found ${entry.name}, entries=${parsed.length}`,
+            );
+            return parsed;
           }
         } catch {
           // Keep trying other candidates
@@ -545,6 +670,7 @@ async function readLocalRunLogsForJob(jobId: string): Promise<CronRunLogEntry[]>
     // Directory listing failed, give up
   }
 
+  logger.log(`[CRON-QUERY] readLocalRunLogsForJob: no local run-log files found for jobId=${jobId}`);
   return [];
 }
 
@@ -556,9 +682,14 @@ async function readLocalRunLogsForJob(jobId: string): Promise<CronRunLogEntry[]>
  */
 async function readAllLocalRunLogs(): Promise<CronRunLogEntry[]> {
   try {
+    logger.log(`[CRON-QUERY] readAllLocalRunLogs: scanning ${LEGACY_CRON_RUNS_DIR}`);
     const entries = await fsp.readdir(LEGACY_CRON_RUNS_DIR, { withFileTypes: true });
     const runLogFiles = entries.filter(
       (e) => e.isFile() && isRunLogFile(e.name),
+    );
+    logger.log(
+      `[CRON-QUERY] readAllLocalRunLogs: total dir entries=${entries.length}, runLogFiles=${runLogFiles.length}` +
+      (runLogFiles.length > 0 ? ` files=[${runLogFiles.map(f => f.name).join(", ")}]` : ""),
     );
 
     const allEntries: CronRunLogEntry[] = [];
@@ -570,13 +701,18 @@ async function readAllLocalRunLogs(): Promise<CronRunLogEntry[]> {
           "utf-8",
         );
         const parsed = parseCronRunLogEntriesFromJsonl(raw, { jobId });
+        logger.log(
+          `[CRON-QUERY] readAllLocalRunLogs: file=${file.name} jobId=${jobId} bytes=${raw.length} entries=${parsed.length}`,
+        );
         allEntries.push(...parsed);
-      } catch {
-        // Skip unreadable files
+      } catch (err) {
+        logger.warn(`[CRON-QUERY] readAllLocalRunLogs: failed to read ${file.name}:`, err);
       }
     }
+    logger.log(`[CRON-QUERY] readAllLocalRunLogs: total local entries=${allEntries.length}`);
     return allEntries;
-  } catch {
+  } catch (err) {
+    logger.warn(`[CRON-QUERY] readAllLocalRunLogs: failed to scan runs dir:`, err);
     return [];
   }
 }
