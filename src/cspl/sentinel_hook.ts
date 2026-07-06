@@ -5,7 +5,6 @@
 import crypto from 'crypto';
 import type {OpenClawPluginApi} from "openclaw/plugin-sdk";
 
-import { logger } from '../utils/logger.js';
 import {callApi} from './call_api.js';
 import {
     processText,
@@ -14,18 +13,17 @@ import {
     parseSecurityResult,
     handleExecToolInput,
     handleMessageToolInput,
-    handleOtherToolInput,
-    buildToolOutputPayload,
-    extractInterActionId,
-    extractSessionId
+    handleOtherToolInput
 } from './utils.js';
 import {
     ALLOWED_TOOLS,
+    MAX_TEXT_LENGTH,
     MAX_TOTAL_LENGTH,
     MIN_TEXT_LENGTH,
-    MAX_TEXT_LENGTH,
-    STEER_ABORT_MESSAGE
+    STEER_ABORT_MESSAGE,
+    TOOL_OUTPUT_ACTION
 } from './constants.js';
+import { logger } from '../utils/logger.js';
 import { getCurrentSessionContext } from '../tools/session-manager.js';
 import { tryInjectSteer } from './steer-context.js';
 
@@ -33,24 +31,20 @@ import { tryInjectSteer } from './steer-context.js';
 export default function register(api: OpenClawPluginApi) {
     api.on("before_tool_call", async (event, _ctx) => {
         logger.log(`[SENTINEL HOOK] before_tool_call_event toolName: ${event.toolName}`);
-        // 获取真实sessionID：优先使用ALS中的A2A sessionId，降级到OpenClaw runId或随机值
-        const sessionCtx = getCurrentSessionContext();
-        const sessionId = sessionCtx?.sessionId || (event.runId?.replace(/-/g, '') || crypto.randomBytes(16).toString('hex'));
-        const taskId = sessionCtx?.taskId || event.runId;
-        logger.log(`[SENTINEL HOOK] Session ID: ${sessionId}, Task ID: ${taskId} (fromALS: ${!!sessionCtx?.sessionId})`);
-        // 请求体中的sessionID从taskId中提取（第一个&之前的内容）
-        const payloadSessionId = extractSessionId(taskId) || sessionId;
+        // 生成sessionID
+        const sessionId = (event.runId?.replace(/-/g, '') || crypto.randomBytes(16).toString('hex'));
+        logger.log(`[SENTINEL HOOK] Generated Session ID: ${sessionId}`);
         // 处理 TOOL_INPUT 数据采集、发送数据，根据扫描结果决定是否阻塞
         try {
-            let scanResult: { status: 'accept' | 'reject' } | null = null;
+            let scanResult: { status: 'ACCEPT' | 'REJECT' } | null = null;
             if (event.toolName === 'exec') {
-                scanResult = await handleExecToolInput(event, api, payloadSessionId, taskId);
+                scanResult = await handleExecToolInput(event, api, sessionId);
             } else if (event.toolName === 'message') {
-                scanResult = await handleMessageToolInput(event, api, payloadSessionId, taskId);
+                scanResult = await handleMessageToolInput(event, api, sessionId);
             } else {
-                scanResult = await handleOtherToolInput(event, api, payloadSessionId, taskId);
+                scanResult = await handleOtherToolInput(event, api, sessionId);
             }
-            if (scanResult?.status === 'reject') {
+            if (scanResult?.status === 'REJECT') {
                 logger.warn(`[SENTINEL HOOK] TOOL_INPUT REJECT, blocking tool call: ${event.toolName}`);
                 return { block: true, blockReason: `安全扫描检测到风险，已阻止工具调用: ${event.toolName}` };
             }
@@ -58,22 +52,18 @@ export default function register(api: OpenClawPluginApi) {
             logger.error(`[SENTINEL HOOK] Extracted TOOL_INPUT data processing exception: ${error}`);
         }
     });
-    api.on("after_tool_call", async (event, ctx) => {
+    api.on("after_tool_call", async (event, _ctx) => {
         // 检查是否在输出白名单中
         if (!ALLOWED_TOOLS.includes(event.toolName)) {
             return;
         }
         try {
             logger.log(`[SENTINEL HOOK] after_tool_call_event toolName: ${event.toolName}`);
-            // 获取真实sessionID：优先使用ALS中的A2A sessionId，降级到OpenClaw runId或随机值
-            const sessionCtx = getCurrentSessionContext();
-            const sessionId = sessionCtx?.sessionId || (event.runId?.replace(/-/g, '') || crypto.randomBytes(16).toString('hex'));
-            const taskId = sessionCtx?.taskId || event.runId;
-            logger.log(`[SENTINEL HOOK] Session ID: ${sessionId}, Task ID: ${taskId} (fromALS: ${!!sessionCtx?.sessionId})`);
-            // 请求体中的sessionID从taskId中提取（第一个&之前的内容）
-            const payloadSessionId = extractSessionId(taskId) || sessionId;
+            // 生成sessionID
+            const sessionId = (event.runId?.replace(/-/g, '') || crypto.randomBytes(16).toString('hex'));
+            logger.log(`[SENTINEL HOOK] Generated Session ID: ${sessionId}`);
 
-            // 处理TOOL_OUTPUT数据采集
+            // 处理TOOL_OUTPUT数据采集（保持现有逻辑）
             const resultText = extractResultText(event, event.toolName);
             const resultTextLength = resultText.length;
 
@@ -89,38 +79,34 @@ export default function register(api: OpenClawPluginApi) {
             }
 
             // 处理和验证文本
-            const originText = processText(resultText);
-            let content = originText;
-            if (originText.length > MAX_TEXT_LENGTH) {
+            const questionText = {subSceneID: 'TOOL_OUTPUT',tool: `${event.toolName}`,output: [{content: ""}]};
+
+            const originText = processText(resultText, api);
+            questionText.output[0].content = `${originText}`;
+            const finalText = JSON.stringify(questionText);
+            if (finalText.length > MAX_TEXT_LENGTH) {
+                const diff_length = finalText.length - MAX_TEXT_LENGTH;
                 const {
                     text: filterText,
                     truncated
-                } = validateAndTruncateText(originText, MAX_TEXT_LENGTH);
+                } = validateAndTruncateText(originText, MAX_TEXT_LENGTH - diff_length);
                 if (truncated) {
-                    content = filterText;
+                    questionText.output[0].content = `${filterText}`;
                     logger.warn(`[SENTINEL HOOK] postText exceeds ${MAX_TEXT_LENGTH}.`);
                 }
             }
+            const postText = JSON.stringify(questionText);
 
-            const interActionID = extractInterActionId(taskId);
-            const outputPayload = buildToolOutputPayload(
-                taskId,
-                payloadSessionId,
-                event.toolName,
-                content,
-                event.toolCallId,
-                interActionID
-            );
-
-            logger.log(`[SENTINEL HOOK] Content extracted successfully. Length: ${JSON.stringify(outputPayload).length}`);
+            logger.log(`[SENTINEL HOOK] Content extracted successfully. Length: ${postText.length}`);
 
             try {
-                const response = await callApi(outputPayload, api, sessionId);
+                const response = await callApi(postText, api, sessionId, TOOL_OUTPUT_ACTION);
 
                 const result = parseSecurityResult(response);
                 logger.log(`[SENTINEL HOOK] TOOL_OUTPUT response: status=${result.status}.`);
-                if (result.status === 'reject') {
+                if (result.status === 'REJECT') {
                     logger.warn('[SENTINEL HOOK] REJECT detected, attempting steer injection');
+                    const sessionCtx = getCurrentSessionContext();
                     if (sessionCtx?.sessionId && sessionCtx?.taskId) {
                         await tryInjectSteer({
                             sessionId: sessionCtx.sessionId,
@@ -129,7 +115,7 @@ export default function register(api: OpenClawPluginApi) {
                             source: 'cspl',
                         });
                     } else {
-                        logger.warn(`[SENTINEL HOOK] Cannot inject steer: sessionKey=${ctx.sessionKey}, sessionCtx found=${!!sessionCtx}`);
+                        logger.warn(`[SENTINEL HOOK] Cannot inject steer: sessionCtx found=${!!sessionCtx}`);
                     }
                 }
             } catch (error) {

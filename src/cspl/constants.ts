@@ -17,45 +17,7 @@ export interface ApiPayload {
     questionText: string;
     textSource: string;
     action: string;
-}
-
-// resultCode 错误码映射
-export const RESULT_CODE_MAP: Record<number, string> = {
-    0: 'Success',
-    1: 'Parameter is invalid',
-    2: "Parameter's format is invalid",
-    3: 'The request frequency exceeds the limit',
-    4: "Parameter's size is invalid",
-    5: 'The text detection is abnormal',
-};
-
-// 新接口请求/响应类型定义
-export interface NewRequestPayload {
-    taskID: string;
-    sessionID: string;
-    uid: string;
-    businessID: string;
-    sceneID: string;
-    checkPoint: number;
-    interActionID: number;
-    loginType?: string;
-    reqTime?: string;
-    message: object;
-}
-
-export interface NewApiResponse {
-    data: {
-        taskID: string;
-        resultCode: number;
-        resultMessage?: string;
-        securityResult: string;
-        riskLabels?: string[];
-        riskDegree?: Array<{ riskLabel: string; score: number }>;
-        riskLabelCount?: Array<{ riskLabel: string; count: number }>;
-        actionRiskResult?: { riskScore: number; riskTag: string[] };
-    };
-    retCode?: string;
-    retMsg?: string;
+    extra?: string;
 }
 
 export interface ApiResponse {

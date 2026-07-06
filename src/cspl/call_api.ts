@@ -5,17 +5,15 @@
 import https from 'https';
 import http from 'http';
 import {URL} from 'url';
-
-import type {OpenClawPluginApi} from 'openclaw/plugin-sdk';
+import crypto from 'crypto';
 
 import {getConfig} from './config.js';
 import {
+    ApiPayload,
     ApiResponse,
     HttpHeaders,
     DEFAULT_HTTPS_PORT,
-    DEFAULT_HTTP_PORT,
-    HTTP_STATUS_BAD_REQUEST,
-    API_URL_SUFFIX
+    HTTP_STATUS_BAD_REQUEST, API_URL_SUFFIX
 } from './constants.js';
 
 function buildHeadersForCelia(config: { uid: string; apiKey: string; skillId: string; requestFrom: string }, sessionId: string): HttpHeaders {
@@ -36,7 +34,7 @@ function buildRequestOptions(url: string, headers: HttpHeaders, timeout: number)
     const urlObj = new URL(url);
     return {
         hostname: urlObj.hostname,
-        port: urlObj.port || (urlObj.protocol === 'https:' ? DEFAULT_HTTPS_PORT : DEFAULT_HTTP_PORT),
+        port: urlObj.port || DEFAULT_HTTPS_PORT,
         path: urlObj.pathname,
         method: "POST",
         headers: headers,
@@ -100,25 +98,25 @@ function handleResponse(
     });
 }
 
-export interface CallApiPayload {
-    sceneID: string;
-    [key: string]: unknown;
-}
-
-export async function callApi(payload: CallApiPayload, api: OpenClawPluginApi, sessionId: string): Promise<ApiResponse> {
+export async function callApi(questionText: string, api, sessionId: string, action: string): Promise<ApiResponse> {
     const config = getConfig(api);
 
     const headersForCelia = buildHeadersForCelia(config, sessionId);
 
-    // 确保 uid 存在于消息体中（从 config 注入）
-    const payloadWithUid = { ...payload, uid: config.uid , action:payload.sceneID,packageName:"com.huawei.hmos.vassistant",ansDone:false,userId:config.uid};
-    const httpBody = JSON.stringify(payloadWithUid);
+    const payload: ApiPayload = {
+        questionText: questionText,
+        textSource: config.textSource,
+        action: action,
+        extra: `${JSON.stringify({userId: config.uid})}`
+    };
 
+    const httpBody = JSON.stringify(payload);
     const apiUrl = `${config.api.url}${API_URL_SUFFIX}`;
 
     return new Promise((resolve, reject) => {
         const options = buildRequestOptions(apiUrl, headersForCelia as HttpHeaders, config.api.timeout);
-        const req = https.request(options, (res) => {
+
+        const req = https.request(options as any, (res) => {
             handleResponse(res, resolve, reject);
         });
 
