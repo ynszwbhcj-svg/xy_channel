@@ -25,8 +25,7 @@ export const callPhoneTool = {
       },
       slotId: {
         type: "number",
-        description: "SIM卡槽ID，仅当用户明确指定主卡/副卡时才设置，否则默认为空",
-        default: 0,
+        description: "SIM卡槽ID，仅当用户明确指定主卡/副卡时才设置，否则不传",
       },
     },
     required: ["phoneNumber"],
@@ -42,11 +41,8 @@ export const callPhoneTool = {
       throw new Error("Missing required parameter: phoneNumber must be a non-empty string");
     }
 
-    // Set default slotId if not provided
-    const slotId = params.slotId !== undefined && params.slotId !== null ? params.slotId : 0;
-
-    // Validate slotId (must be 0 or 1)
-    if (slotId !== 0 && slotId !== 1) {
+    // Validate slotId if provided (must be 0 or 1)
+    if (params.slotId !== undefined && params.slotId !== null && params.slotId !== 0 && params.slotId !== 1) {
       throw new Error("Invalid slotId: must be 0 (primary SIM) or 1 (secondary SIM)");
     }
 
@@ -72,7 +68,7 @@ export const callPhoneTool = {
           timeOut: 5,
           intentParam: {
             phoneNumber: params.phoneNumber.trim(),
-            slotId: slotId,
+            ...(params.slotId !== undefined && params.slotId !== null ? { slotId: params.slotId } : {}),
           },
           permissionId: [],
           achieveType: "INTENT",
