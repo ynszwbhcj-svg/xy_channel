@@ -258,6 +258,15 @@ const HEADER_SESSION_ID = "x-session-id";
 const HEADER_INTERACTION_ID = "x-interaction-id";
 /** Internal key for passing fallback uid prefix from prepareExtraParams to wrapStreamFn. */
 const FALLBACK_PREFIX_KEY = "_xiaoyi_fallback_prefix";
+
+// Module-level cache of the most recent trace context.
+// resolveDynamicModel reads these so the LLM compaction path (which bypasses
+// wrapStreamFn) still gets x-hag-trace-id on model.headers.
+let globalTraceContext: {
+  traceId: string;
+  sessionId: string;
+  interactionId: string;
+} | null = null;
 const SELF_EVOLUTION_PROMPT_BEGIN = "<self_evolution_prompt>";
 const SELF_EVOLUTION_PROMPT_END = "</self_evolution_prompt>";
 const SELF_EVOLUTION_ENABLED_PROMPT_SECTION = `
@@ -485,8 +494,19 @@ export const xiaoyiProvider: ProviderPlugin = {
       contextWindow: 256_000,
       maxTokens: 8192,
       ...(ctx.providerConfig?.headers && typeof ctx.providerConfig.headers === "object"
-        ? { headers: ctx.providerConfig.headers as Record<string, string> }
-        : {}),
+        ? { headers: {
+            ...ctx.providerConfig.headers as Record<string, string>,
+            ...(globalTraceContext ? {
+              [HEADER_TRACE_ID]: globalTraceContext.traceId,
+              [HEADER_SESSION_ID]: globalTraceContext.sessionId,
+              [HEADER_INTERACTION_ID]: globalTraceContext.interactionId,
+            } : {}),
+          } }
+        : (globalTraceContext ? { headers: {
+            [HEADER_TRACE_ID]: globalTraceContext.traceId,
+            [HEADER_SESSION_ID]: globalTraceContext.sessionId,
+            [HEADER_INTERACTION_ID]: globalTraceContext.interactionId,
+          } } : {})),
     };
   },
 
@@ -639,6 +659,16 @@ export const xiaoyiProvider: ProviderPlugin = {
           }
           logger.log(`[ALS-PROOF] provider headers source=uid-fallback (ALS miss)`);
         }
+      }
+
+      // Cache trace context globally so resolveDynamicModel can inject
+      // x-hag-trace-id into model.headers for the LLM compaction path.
+      if (dynamicHeaders[HEADER_TRACE_ID]) {
+        globalTraceContext = {
+          traceId: dynamicHeaders[HEADER_TRACE_ID],
+          sessionId: dynamicHeaders[HEADER_SESSION_ID] ?? dynamicHeaders[HEADER_TRACE_ID],
+          interactionId: dynamicHeaders[HEADER_INTERACTION_ID] ?? dynamicHeaders[HEADER_TRACE_ID],
+        };
       }
 
       // 记录输入
