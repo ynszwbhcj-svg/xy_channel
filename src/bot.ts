@@ -459,12 +459,19 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
     log.log(`[BOT-DISPATCHER] Creating reply dispatcher, isSteer=${isUpdate}, sessionKey=${route.sessionKey}`);
 
     // Cleanup: 必须在 onIdle 内部执行（参见 reply-dispatcher.ts 中 onIdleComplete 的注释）
+    // Steer dispatches must NOT decrement refCount because the steer injection
+    // uses skipRegistration (no increment). Only the original message's
+    // dispatcher owns the refCount lifecycle.
     let cleaned = false;
     const cleanup = () => {
       if (cleaned) return;
       cleaned = true;
-      log.log(`[BOT] Cleanup started`);
-      decrementTaskIdRef(parsed.sessionId);
+      log.log(`[BOT] Cleanup started, steered=${steerState.steered}`);
+      if (!steerState.steered) {
+        decrementTaskIdRef(parsed.sessionId);
+      } else {
+        log.log(`[BOT] Steered cleanup, skipping decrementTaskIdRef`);
+      }
       log.log(`[BOT] Cleanup completed`);
     };
 
