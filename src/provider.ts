@@ -641,17 +641,6 @@ export const xiaoyiProvider: ProviderPlugin = {
         }
       }
 
-      // Mutate model.headers so the LLM compaction path picks up trace context.
-      // The LLM path (summarizeViaLLM → summarizeInStages) bypasses wrapStreamFn
-      // but reuses the same model object, so mutating model.headers here ensures
-      // x-hag-trace-id et al are forwarded even when the custom compaction
-      // provider is not reached (e.g. queued compaction with different sessionManager).
-      if (model?.headers && dynamicHeaders[HEADER_TRACE_ID]) {
-        model.headers[HEADER_TRACE_ID] = dynamicHeaders[HEADER_TRACE_ID];
-        model.headers[HEADER_SESSION_ID] = dynamicHeaders[HEADER_SESSION_ID];
-        model.headers[HEADER_INTERACTION_ID] = dynamicHeaders[HEADER_INTERACTION_ID];
-      }
-
       // 记录输入
       logger.log(`[xiaoyiprovider] input messages count: ${context.messages?.length ?? 0}`);
 
