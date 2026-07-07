@@ -451,6 +451,7 @@ function transformAddResponse(gatewayResult: any): any {
     id: gatewayResult?.id,
     name: gatewayResult?.name,
     enabled: gatewayResult?.enabled,
+    description: gatewayResult?.payload?.message,
     createdAtMs: gatewayResult?.createdAtMs,
     updatedAtMs: gatewayResult?.updatedAtMs,
     schedule: gatewayResult?.schedule,
