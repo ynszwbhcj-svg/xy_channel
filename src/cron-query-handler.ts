@@ -153,9 +153,11 @@ export async function handleCronQueryEvent(context: any, cfg: any): Promise<void
         );
 
         // Scan for systemEvent jobs and migrate them to agentTurn
+        // Skip main-session jobs — gateway requires payload.kind="systemEvent" for those
         const jobs: any[] = (gatewayResult as any)?.jobs ?? [];
         const systemEventJobs = jobs.filter(
-          (j: any) => j?.payload?.kind === "systemEvent",
+          (j: any) =>
+            j?.payload?.kind === "systemEvent" 
         );
 
         if (systemEventJobs.length > 0) {
@@ -165,10 +167,17 @@ export async function handleCronQueryEvent(context: any, cfg: any): Promise<void
 
           for (const job of systemEventJobs) {
             const updatePatch = {
+              sessionTarget: "isolated",
+              description: job.payload?.text ?? job.payload?.message ?? "",
               payload: {
                 kind: "agentTurn",
                 message: job.payload?.text ?? job.payload?.message ?? "",
               },
+              delivery: {
+                channel: "xiaoyi-channel",
+                mode: "announce",
+                to: "default"
+              }
             };
             try {
               await callGatewayTool(
