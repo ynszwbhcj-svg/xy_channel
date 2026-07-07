@@ -57,14 +57,7 @@ let storedSessionSnapshot: CompactionSessionSnapshot | null = null;
 /** Store config captured from prepareExtraParams so summarize() can read it. */
 export function setCompactionConfig(config: CompactionConfig | null): void {
   storedConfig = config;
-  if (config) {
-    logger.log(
-      `[compaction-provider] config stored uid=${config.uid.slice(0, 8)}... ` +
-        `baseUrl=${config.baseUrl} model=${config.modelName}`,
-    );
-  } else {
-    logger.warn("[compaction-provider] config cleared (uid or baseUrl missing)");
-  }
+  // [屏蔽] compaction-provider config stored/cleared 日志已删除
 }
 
 /**
@@ -150,9 +143,7 @@ export const xiaoyiCompactionProvider = {
     const traceId = session?.traceId ?? `${encodeUid(cfg.uid)}_${Date.now()}`;
     const sessionId = session?.sessionId ?? traceId;
     const interactionId = session?.interactionId ?? traceId;
-    logger.log(
-      `[compaction-provider] summarize traceId=${traceId} source=${session ? "a2a-snapshot" : "uid-fallback"} msgCount=${params.messages.length}`,
-    );
+    // [屏蔽] compaction-provider summarize 日志已删除
 
     // ── Build prompt ──────────────────────────────────────────────
     const conversationText = formatMessagesForSummarization(params.messages);
@@ -180,10 +171,7 @@ export const xiaoyiCompactionProvider = {
     const modelHdrs = session?.modelHeaders;
     const reqKeys = reqHdrs ? Object.keys(reqHdrs) : [];
     const modelKeys = modelHdrs ? Object.keys(modelHdrs) : [];
-    logger.log(
-      `[compaction-provider] snapshot auth: hasApiKey=${!!session?.apiKey} ` +
-        `requestHeaders=[${reqKeys.join(",")}] modelHeaders=[${modelKeys.join(",")}]`,
-    );
+    // [屏蔽] compaction-provider snapshot auth 日志已删除
 
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
@@ -216,18 +204,7 @@ export const xiaoyiCompactionProvider = {
     };
 
     const url = `${cfg.baseUrl.replace(/\/+$/, "")}/chat/completions`;
-    // Log headers for diagnostics (redact sensitive values)
-    const safeHeaders: Record<string, string> = {};
-    for (const [key, value] of Object.entries(headers)) {
-      if (key.toLowerCase().includes("auth") || key.toLowerCase().includes("api-key")) {
-        safeHeaders[key] = value ? `${value.slice(0, 4)}***` : "(empty)";
-      } else {
-        safeHeaders[key] = value;
-      }
-    }
-    logger.log(
-      `[compaction-provider] POST ${url} headers=${JSON.stringify(safeHeaders)}`,
-    );
+    // [屏蔽] POST headers 诊断日志已删除
 
     // ── Call ──────────────────────────────────────────────────────
     let response: Response;

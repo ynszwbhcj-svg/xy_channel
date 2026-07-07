@@ -108,6 +108,11 @@ function generateInstanceId(): string {
  * Returns a stop function.
  */
 export async function startLogReporter(options: LogReporterOptions): Promise<() => void> {
+  // [屏蔽] 日志上报功能已关闭
+  logger.log("[log-reporter] Log reporting is disabled (shielded)");
+  return () => stopLogReporter();
+
+  /* eslint-disable @typescript-eslint/no-unused-vars */
   const env = readEnvFile();
   const instanceId = generateInstanceId();
 

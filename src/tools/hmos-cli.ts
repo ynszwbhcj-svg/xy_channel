@@ -593,69 +593,11 @@ interface HookResult {
  * Non-matching commands return undefined (noop) so native exec handles them.
  */
 export async function cliBeforeToolCallHandler(
-  event: BeforeToolCallEvent,
-  ctx: HookContext,
+  _event: BeforeToolCallEvent,
+  _ctx: HookContext,
 ): Promise<HookResult | undefined> {
-  if (event.toolName !== "exec") return undefined;
-
-  const rawCommand = event.params?.command;
-  if (typeof rawCommand !== "string" || rawCommand.trim().length === 0) return undefined;
-
-  const t0 = performance.now();
-  const command = rawCommand.trim();
-
-  // Search all cached skills for a CLI matching the command prefix
-  const cache = getCLICache();
-  const match = cache.findCLIByCommand(command);
-  if (!match) {
-    logger.log(`[CLI-HOOK] No CLI match for '${command}', noop (${(performance.now() - t0).toFixed(1)}ms)`);
-    return undefined;
-  }
-
-  const { entry: matchedCLI, skillName } = match;
-  logger.log(`[CLI-HOOK] Matched CLI '${matchedCLI.cliName}' in skill '${skillName}' (${(performance.now() - t0).toFixed(1)}ms)`);
-
-  // Parse and validate
-  let parsed: ParsedCLIArgs;
-  try {
-    parsed = parseAndValidate(command, matchedCLI.definition);
-  } catch (err) {
-    if (err instanceof InvokeError) {
-      logger.warn(`[CLI-HOOK] Validation failed: ${err.code} - ${err.message} (${(performance.now() - t0).toFixed(1)}ms)`);
-      return { block: true, blockReason: cliErrorToResult(err).content[0]?.text ?? err.message };
-    }
-    throw err;
-  }
-
-  // requirePermissions → requireApproval
-  const permissions = matchedCLI.definition.requirePermissions;
-  if (permissions && permissions.length > 0) {
-    logger.log(`[CLI-HOOK] requireApproval needed, returning (${(performance.now() - t0).toFixed(1)}ms)`);
-    return {
-      requireApproval: {
-        title: `Execute CLI: ${matchedCLI.cliName}`,
-        description: `Requires permissions: ${permissions.join(", ")}. Args: ${JSON.stringify(parsed.args)}`,
-      },
-    };
-  }
-
-  // Get session context via ALS (propagated through the async call chain)
-  const sessionCtx = getCurrentSessionContext();
-
-  if (!sessionCtx) {
-    logger.warn(`[CLI-HOOK] No session context, blocking (${(performance.now() - t0).toFixed(1)}ms)`);
-    return { block: true, blockReason: JSON.stringify({ code: "CONFIG_MISSING", message: "No active session context for CLI execution", retryable: false }) };
-  }
-
-  try {
-    const result = await executeCLI(parsed, sessionCtx, event.toolCallId);
-    logger.log(`[CLI-HOOK] CLI execution completed (${(performance.now() - t0).toFixed(1)}ms)`);
-    return { block: true, blockReason: result.content[0]?.text ?? "" };
-  } catch (err) {
-    const errResult = cliErrorToResult(err);
-    logger.warn(`[CLI-HOOK] CLI execution failed (${(performance.now() - t0).toFixed(1)}ms)`);
-    return { block: true, blockReason: errResult.content[0]?.text ?? "CLI execution failed" };
-  }
+  // [屏蔽] exec commandline 检查已关闭，所有 exec 命令直接放行
+  return undefined;
 }
 
 /**

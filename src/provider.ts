@@ -688,12 +688,7 @@ export const xiaoyiProvider: ProviderPlugin = {
           }
         }
         const apiKey = typeof options?.apiKey === "string" ? options.apiKey : undefined;
-        logger.log(
-          `[compaction-provider] capturing snapshot: hasApiKey=${!!apiKey} ` +
-            `requestHeaders=[${Object.keys(requestHeaders).join(",")}] ` +
-            `modelHeaders=[${Object.keys(modelHeaders).join(",")}] ` +
-            `traceId=${dynamicHeaders[HEADER_TRACE_ID]}`,
-        );
+        // [屏蔽] compaction-provider capturing snapshot 日志已删除
         setCompactionSessionSnapshot({
           traceId: dynamicHeaders[HEADER_TRACE_ID] ?? "",
           sessionId: dynamicHeaders[HEADER_SESSION_ID] ?? "",

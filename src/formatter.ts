@@ -356,16 +356,17 @@ export async function sendCommand(params: SendCommandParams): Promise<void> {
     throw new Error("sendCommand requires command or commands.");
   }
 
+  // [屏蔽] Cron push 通道已关闭，不再通过 push 发送命令
   // ── Cron mode: route through push channel ──────────────────────
   // Detected via: (a) sessionId "cron-" prefix from synthetic session, OR
   //               (b) toolCallId marked by before_tool_call hook from openclaw's sessionKey.
-  if (sessionId.startsWith("cron-") || isCronToolCall(toolCallId)) {
-    const { sendCommandViaPush } = await import("./cron-command.js");
-    // 解析正确设备的 pushId：合成 sessionId → jobId → cron-push-map。
-    // provider.ts 在 isCron 分支已把 jobId 绑定到该 sessionId。
-    const pushId = await resolveCronPushId(sessionId, config);
-    return sendCommandViaPush({ config, command: commands[0], pushId });
-  }
+  // if (sessionId.startsWith("cron-") || isCronToolCall(toolCallId)) {
+  //   const { sendCommandViaPush } = await import("./cron-command.js");
+  //   // 解析正确设备的 pushId：合成 sessionId → jobId → cron-push-map。
+  //   // provider.ts 在 isCron 分支已把 jobId 绑定到该 sessionId。
+  //   const pushId = await resolveCronPushId(sessionId, config);
+  //   return sendCommandViaPush({ config, command: commands[0], pushId });
+  // }
 
   // ── Normal mode: WebSocket ─────────────────────────────────────
   const log = logger.withContext(sessionId, taskId);
