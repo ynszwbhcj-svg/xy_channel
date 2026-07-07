@@ -146,11 +146,55 @@ export async function handleCronQueryEvent(context: any, cfg: any): Promise<void
       // ── list ──────────────────────────────────────────────────────
       case "list": {
         const gatewayParams = buildListParams(params);
-        const gatewayResult = await callGatewayTool(
+        let gatewayResult = await callGatewayTool(
           "cron.list",
           { timeoutMs: GATEWAY_TIMEOUT_MS },
           gatewayParams,
         );
+
+        // Scan for systemEvent jobs and migrate them to agentTurn
+        const jobs: any[] = (gatewayResult as any)?.jobs ?? [];
+        const systemEventJobs = jobs.filter(
+          (j: any) => j?.payload?.kind === "systemEvent",
+        );
+
+        if (systemEventJobs.length > 0) {
+          log.log(
+            `[CRON-QUERY] list: found ${systemEventJobs.length} systemEvent jobs, migrating to agentTurn`,
+          );
+
+          for (const job of systemEventJobs) {
+            const updatePatch = {
+              payload: {
+                kind: "agentTurn",
+                message: job.payload?.text ?? job.payload?.message ?? "",
+              },
+            };
+            try {
+              await callGatewayTool(
+                "cron.update",
+                { timeoutMs: GATEWAY_TIMEOUT_MS },
+                { id: job.id, patch: updatePatch },
+              );
+              log.log(
+                `[CRON-QUERY] list: migrated job ${job.id} (${job.name ?? ""}) from systemEvent → agentTurn`,
+              );
+            } catch (err) {
+              log.warn(
+                `[CRON-QUERY] list: failed to migrate job ${job.id}:`,
+                err,
+              );
+            }
+          }
+
+          // Re-fetch list after migration
+          gatewayResult = await callGatewayTool(
+            "cron.list",
+            { timeoutMs: GATEWAY_TIMEOUT_MS },
+            gatewayParams,
+          );
+        }
+
         result = transformListResponse(gatewayResult, params);
         break;
       }
@@ -493,10 +537,7 @@ async function queryTimeListFromGateway(
 ): Promise<Array<Record<string, Array<Record<string, any>>>>> {
   // Fetch from local runs folder and gateway RPC in parallel
   const [localEntries, rpcResult] = await Promise.all([
-    readAllLocalRunLogs().catch((err) => {
-      logger.error(`[CRON-QUERY] readAllLocalRunLogs failed:`, err);
-      return [] as CronRunLogEntry[];
-    }),
+    readAllLocalRunLogs().catch(() => [] as CronRunLogEntry[]),
     callGatewayTool(
       "cron.runs",
       { timeoutMs: GATEWAY_TIMEOUT_MS },
@@ -506,24 +547,13 @@ async function queryTimeListFromGateway(
         sortDir: "desc",
         ...(params ?? {}),
       },
-    ).catch((err) => {
-      logger.error(`[CRON-QUERY] gateway cron.runs RPC failed:`, err);
-      return { entries: [] as any[] };
-    }),
+    ).catch(() => ({ entries: [] as any[] })),
   ]);
 
   const gatewayEntries: any[] = (rpcResult as any)?.entries ?? [];
 
-  logger.log(
-    `[CRON-QUERY] queryTimeList: local=${localEntries.length}, gateway=${gatewayEntries.length}`,
-  );
-
   // Merge and deduplicate
   const merged = mergeAndDedupeRunEntries(localEntries, gatewayEntries);
-  logger.log(
-    `[CRON-QUERY] queryTimeList: merged=${merged.length} (after dedup)`,
-  );
-
   if (merged.length === 0) {
     return [];
   }
@@ -531,9 +561,6 @@ async function queryTimeListFromGateway(
   // Filter to last 7 days
   const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
   const recent = merged.filter((e) => e.ts && e.ts >= sevenDaysAgo);
-  logger.log(
-    `[CRON-QUERY] queryTimeList: recent=${recent.length} (within 7 days, threshold=${new Date(sevenDaysAgo).toISOString()})`,
-  );
 
   // Ensure .name is populated (gateway returns jobName; normalize to .name)
   for (const run of recent) {
@@ -619,8 +646,6 @@ function extractJobIdFromRunLogName(name: string): string {
  * may have renamed the file to .jsonl.migrated.
  */
 async function readLocalRunLogsForJob(jobId: string): Promise<CronRunLogEntry[]> {
-  logger.log(`[CRON-QUERY] readLocalRunLogsForJob: jobId=${jobId}, dir=${LEGACY_CRON_RUNS_DIR}`);
-
   // Try active file first, then archived variants
   const candidates = [
     `${jobId}.jsonl`,
@@ -632,14 +657,10 @@ async function readLocalRunLogsForJob(jobId: string): Promise<CronRunLogEntry[]>
     try {
       const raw = await fsp.readFile(filePath, "utf-8");
       if (raw.trim()) {
-        const parsed = parseCronRunLogEntriesFromJsonl(raw, { jobId });
-        logger.log(
-          `[CRON-QUERY] readLocalRunLogsForJob: found ${candidate}, bytes=${raw.length}, entries=${parsed.length}`,
-        );
-        return parsed;
+        return parseCronRunLogEntriesFromJsonl(raw, { jobId });
       }
     } catch {
-      logger.log(`[CRON-QUERY] readLocalRunLogsForJob: ${candidate} not found`);
+      // Try next candidate
     }
   }
 
@@ -655,11 +676,7 @@ async function readLocalRunLogsForJob(jobId: string): Promise<CronRunLogEntry[]>
             "utf-8",
           );
           if (raw.trim()) {
-            const parsed = parseCronRunLogEntriesFromJsonl(raw, { jobId });
-            logger.log(
-              `[CRON-QUERY] readLocalRunLogsForJob: found ${entry.name}, entries=${parsed.length}`,
-            );
-            return parsed;
+            return parseCronRunLogEntriesFromJsonl(raw, { jobId });
           }
         } catch {
           // Keep trying other candidates
@@ -670,7 +687,6 @@ async function readLocalRunLogsForJob(jobId: string): Promise<CronRunLogEntry[]>
     // Directory listing failed, give up
   }
 
-  logger.log(`[CRON-QUERY] readLocalRunLogsForJob: no local run-log files found for jobId=${jobId}`);
   return [];
 }
 
@@ -682,14 +698,9 @@ async function readLocalRunLogsForJob(jobId: string): Promise<CronRunLogEntry[]>
  */
 async function readAllLocalRunLogs(): Promise<CronRunLogEntry[]> {
   try {
-    logger.log(`[CRON-QUERY] readAllLocalRunLogs: scanning ${LEGACY_CRON_RUNS_DIR}`);
     const entries = await fsp.readdir(LEGACY_CRON_RUNS_DIR, { withFileTypes: true });
     const runLogFiles = entries.filter(
       (e) => e.isFile() && isRunLogFile(e.name),
-    );
-    logger.log(
-      `[CRON-QUERY] readAllLocalRunLogs: total dir entries=${entries.length}, runLogFiles=${runLogFiles.length}` +
-      (runLogFiles.length > 0 ? ` files=[${runLogFiles.map(f => f.name).join(", ")}]` : ""),
     );
 
     const allEntries: CronRunLogEntry[] = [];
@@ -701,18 +712,13 @@ async function readAllLocalRunLogs(): Promise<CronRunLogEntry[]> {
           "utf-8",
         );
         const parsed = parseCronRunLogEntriesFromJsonl(raw, { jobId });
-        logger.log(
-          `[CRON-QUERY] readAllLocalRunLogs: file=${file.name} jobId=${jobId} bytes=${raw.length} entries=${parsed.length}`,
-        );
         allEntries.push(...parsed);
-      } catch (err) {
-        logger.warn(`[CRON-QUERY] readAllLocalRunLogs: failed to read ${file.name}:`, err);
+      } catch {
+        // Skip unreadable files
       }
     }
-    logger.log(`[CRON-QUERY] readAllLocalRunLogs: total local entries=${allEntries.length}`);
     return allEntries;
-  } catch (err) {
-    logger.warn(`[CRON-QUERY] readAllLocalRunLogs: failed to scan runs dir:`, err);
+  } catch {
     return [];
   }
 }
