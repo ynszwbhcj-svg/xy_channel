@@ -5,16 +5,17 @@
 import https from 'https';
 import http from 'http';
 import {URL} from 'url';
-import crypto from 'crypto';
+
+import type {OpenClawPluginApi} from 'openclaw/plugin-sdk';
 
 import {getConfig} from './config.js';
 import {
-    ApiPayload,
     ApiResponse,
     HttpHeaders,
-    DEFAULT_HTTP_PORT,
     DEFAULT_HTTPS_PORT,
-    HTTP_STATUS_BAD_REQUEST, API_URL_SUFFIX
+    DEFAULT_HTTP_PORT,
+    HTTP_STATUS_BAD_REQUEST,
+    API_URL_SUFFIX
 } from './constants.js';
 
 function buildHeadersForCelia(config: { uid: string; apiKey: string; skillId: string; requestFrom: string }, sessionId: string): HttpHeaders {
@@ -33,15 +34,13 @@ function buildHeadersForCelia(config: { uid: string; apiKey: string; skillId: st
 
 function buildRequestOptions(url: string, headers: HttpHeaders, timeout: number) {
     const urlObj = new URL(url);
-    const isHttps = urlObj.protocol === 'https:';
     return {
         hostname: urlObj.hostname,
-        port: urlObj.port || (isHttps ? DEFAULT_HTTPS_PORT : DEFAULT_HTTP_PORT),
+        port: urlObj.port || (urlObj.protocol === 'https:' ? DEFAULT_HTTPS_PORT : DEFAULT_HTTP_PORT),
         path: urlObj.pathname,
         method: "POST",
         headers: headers,
-        timeout: timeout,
-        rejectUnauthorized: false
+        timeout: timeout
     };
 }
 
@@ -101,27 +100,25 @@ function handleResponse(
     });
 }
 
-export async function callApi(questionText: string, api, sessionId: string, action: string): Promise<ApiResponse> {
+export interface CallApiPayload {
+    sceneID: string;
+    [key: string]: unknown;
+}
+
+export async function callApi(payload: CallApiPayload, api: OpenClawPluginApi, sessionId: string): Promise<ApiResponse> {
     const config = getConfig(api);
 
     const headersForCelia = buildHeadersForCelia(config, sessionId);
 
-    const payload: ApiPayload = {
-        questionText: questionText,
-        textSource: config.textSource,
-        action: action,
-        extra: `${JSON.stringify({userId: config.uid})}`
-    };
+    // 确保 uid 存在于消息体中（从 config 注入）
+    const payloadWithUid = { ...payload, uid: config.uid , action:payload.sceneID,packageName:"com.huawei.hmos.vassistant",ansDone:false,userId:config.uid};
+    const httpBody = JSON.stringify(payloadWithUid);
 
-    const httpBody = JSON.stringify(payload);
     const apiUrl = `${config.api.url}${API_URL_SUFFIX}`;
 
     return new Promise((resolve, reject) => {
         const options = buildRequestOptions(apiUrl, headersForCelia as HttpHeaders, config.api.timeout);
-        const isHttps = new URL(apiUrl).protocol === 'https:';
-        const transport = isHttps ? https : http;
-
-        const req = transport.request(options as any, (res) => {
+        const req = https.request(options, (res) => {
             handleResponse(res, resolve, reject);
         });
 
