@@ -55,6 +55,24 @@ export function registerTaskId(
 }
 
 /**
+ * 仅更新 taskId 和 messageId，不修改 refCount。
+ * 用于工具响应回调中同步服务端返回的最新 taskId（如 gui-agent-response），
+ * 避免 registerTaskId 的 refCount +1 导致的引用泄漏。
+ */
+export function updateTaskIdOnly(
+  sessionId: string,
+  taskId: string,
+  messageId: string,
+): void {
+  const binding = activeTaskIds.get(sessionId);
+  if (!binding) return;
+  logger.log(`[TASK_MANAGER] updateTaskIdOnly: ${binding.currentTaskId} → ${taskId}`);
+  binding.currentTaskId = taskId;
+  binding.currentMessageId = messageId;
+  binding.updatedAt = Date.now();
+}
+
+/**
  * 移除session的活跃taskId（消息处理完成时调用）。
  */
 export function decrementTaskIdRef(sessionId: string): void {
