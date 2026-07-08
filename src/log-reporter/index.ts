@@ -17,7 +17,7 @@ import type {
   ReportLogFileEntry,
   ReportPayload,
 } from "./types.js";
-import crypto from "crypto";
+import os from "os";
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -96,9 +96,9 @@ function readEnvFile(): LogReporterEnv {
   };
 }
 
-/** Generate a stable instance ID (UUID) */
+/** Generate a stable instance ID from hostname */
 function generateInstanceId(): string {
-  return crypto.randomUUID();
+  return os.hostname();
 }
 
 // ── Public API ───────────────────────────────────────────────────────────────
@@ -108,6 +108,10 @@ function generateInstanceId(): string {
  * Returns a stop function.
  */
 export async function startLogReporter(options: LogReporterOptions): Promise<() => void> {
+  // Log reporter disabled
+  logger.log("[log-reporter] Log reporter is disabled, skipping startup");
+  return () => {};
+  /* eslint-disable no-unreachable */
   const env = readEnvFile();
   const instanceId = generateInstanceId();
 
