@@ -4,7 +4,7 @@ import { sendCommand } from "../formatter.js";
 import type { SessionContext } from "./session-manager.js";
 
 import { isCronToolCall, getCurrentSessionContext } from './session-manager.js';
-import { updateTaskIdOnly } from "../task-manager.js";
+import { registerTaskId } from "../task-manager.js";
 import { logger } from "../utils/logger.js";
 
 /**
@@ -104,7 +104,7 @@ export const xiaoyiGuiTool = {
 
             // 用响应事件携带的 taskId/messageId 替换当前 session 的最新 taskId
             if (eventTaskId) {
-              updateTaskIdOnly(sessionId, eventTaskId, eventMessageId ?? messageId);
+              registerTaskId(sessionId, eventTaskId, eventMessageId ?? messageId);
             }
 
             const streamContent = event.payload?.streamInfo?.streamContent;

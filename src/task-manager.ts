@@ -2,13 +2,18 @@
 // 用于 monitor.ts 检测活跃任务（决定是否并发执行steer消息）
 import { logger } from "./utils/logger.js";
 
+interface TaskIdEntry {
+  taskId: string;
+  messageId: string;
+  updatedAt: number;
+}
+
 interface TaskIdBinding {
   sessionId: string;
   currentTaskId: string;
   currentMessageId: string;
   updatedAt: number;
-  /** 引用计数：每次 registerTaskId +1，每次 decrementTaskIdRef -1，归零时删除 */
-  refCount: number;
+  tasks?: TaskIdEntry[];
 }
 
 /**
@@ -23,6 +28,29 @@ if (!_g.__xyActiveTaskIds) {
 }
 const activeTaskIds = _g.__xyActiveTaskIds as Map<string, TaskIdBinding>;
 
+function normalizeTasks(binding: TaskIdBinding): TaskIdEntry[] {
+  if (Array.isArray(binding.tasks) && binding.tasks.length > 0) {
+    return binding.tasks;
+  }
+  return [{
+    taskId: binding.currentTaskId,
+    messageId: binding.currentMessageId,
+    updatedAt: binding.updatedAt,
+  }];
+}
+
+function syncCurrent(binding: TaskIdBinding, tasks: TaskIdEntry[]): void {
+  binding.tasks = tasks;
+  const current = tasks[tasks.length - 1];
+  if (!current) {
+    activeTaskIds.delete(binding.sessionId);
+    return;
+  }
+  binding.currentTaskId = current.taskId;
+  binding.currentMessageId = current.messageId;
+  binding.updatedAt = current.updatedAt;
+}
+
 /**
  * 注册或更新session的活跃taskId。
  * Returns true if this was an update (session already had an active task).
@@ -35,11 +63,10 @@ export function registerTaskId(
   const existing = activeTaskIds.get(sessionId);
 
   if (existing) {
-    logger.log(`[TASK_MANAGER] Updating taskId: ${existing.currentTaskId} → ${taskId}, refCount: ${existing.refCount} → ${existing.refCount + 1}`);
-    existing.currentTaskId = taskId;
-    existing.currentMessageId = messageId;
-    existing.updatedAt = Date.now();
-    existing.refCount++;
+    logger.log(`[TASK_MANAGER] Updating taskId: ${existing.currentTaskId} → ${taskId}`);
+    const tasks = normalizeTasks(existing).filter((entry) => entry.taskId !== taskId);
+    tasks.push({ taskId, messageId, updatedAt: Date.now() });
+    syncCurrent(existing, tasks);
     return true; // isUpdate
   } else {
     activeTaskIds.set(sessionId, {
@@ -47,45 +74,39 @@ export function registerTaskId(
       currentTaskId: taskId,
       currentMessageId: messageId,
       updatedAt: Date.now(),
-      refCount: 1,
+      tasks: [{ taskId, messageId, updatedAt: Date.now() }],
     });
-    logger.log(`[TASK_MANAGER] Registered new taskId: ${taskId}, refCount: 1`);
+    logger.log(`[TASK_MANAGER] Registered new taskId: ${taskId}`);
     return false;
   }
 }
 
 /**
- * 仅更新 taskId 和 messageId，不修改 refCount。
- * 用于工具响应回调中同步服务端返回的最新 taskId（如 gui-agent-response），
- * 避免 registerTaskId 的 refCount +1 导致的引用泄漏。
- */
-export function updateTaskIdOnly(
-  sessionId: string,
-  taskId: string,
-  messageId: string,
-): void {
-  const binding = activeTaskIds.get(sessionId);
-  if (!binding) return;
-  logger.log(`[TASK_MANAGER] updateTaskIdOnly: ${binding.currentTaskId} → ${taskId}`);
-  binding.currentTaskId = taskId;
-  binding.currentMessageId = messageId;
-  binding.updatedAt = Date.now();
-}
-
-/**
  * 移除session的活跃taskId（消息处理完成时调用）。
+ * @param expectedTaskId 可选：精确移除指定的 taskId，而非整个 session 绑定。
+ *   用于 subagent completion 等需要精确清理特定 task 的场景。
  */
-export function decrementTaskIdRef(sessionId: string): void {
-  const binding = activeTaskIds.get(sessionId);
-  if (!binding) {
-    logger.log(`[TASK_MANAGER] decrementTaskIdRef: no binding for ${sessionId}`);
+export function decrementTaskIdRef(sessionId: string, expectedTaskId?: string): void {
+  if (!expectedTaskId) {
+    logger.log(`[TASK_MANAGER] Removing taskId`);
+    activeTaskIds.delete(sessionId);
     return;
   }
-  binding.refCount--;
-  logger.log(`[TASK_MANAGER] decrementTaskIdRef: taskId=${binding.currentTaskId}, refCount: ${binding.refCount + 1} → ${binding.refCount}`);
-  if (binding.refCount <= 0) {
-    activeTaskIds.delete(sessionId);
-    logger.log(`[TASK_MANAGER] Removed taskId binding (refCount reached 0)`);
+
+  const existing = activeTaskIds.get(sessionId);
+  if (!existing) return;
+
+  const tasks = normalizeTasks(existing);
+  const nextTasks = tasks.filter((entry) => entry.taskId !== expectedTaskId);
+  if (nextTasks.length === tasks.length) {
+    logger.log(`[TASK_MANAGER] Preserving taskId ${existing.currentTaskId}; completed task ${expectedTaskId} is not active`);
+    return;
+  }
+  syncCurrent(existing, nextTasks);
+  if (nextTasks.length > 0) {
+    logger.log(`[TASK_MANAGER] Removed taskId ${expectedTaskId}, restored current taskId ${existing.currentTaskId}`);
+  } else {
+    logger.log(`[TASK_MANAGER] Removing taskId (last task ${expectedTaskId})`);
   }
 }
 

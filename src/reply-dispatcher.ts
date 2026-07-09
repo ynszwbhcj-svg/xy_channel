@@ -5,6 +5,11 @@ import { sendA2AResponse, sendStatusUpdate, sendReasoningTextUpdate, sendCommand
 import { resolveXYConfig } from "./config.js";
 import type { A2ACommand, RunCrossTaskContext, XYChannelConfig } from "./types.js";
 import { clearRunCrossTaskSentFiles, getCurrentSessionContext } from "./tools/session-manager.js";
+import {
+  getWaitState,
+  clearWaitState,
+  attachHeartbeat,
+} from "./subagent-wait-state.js";
 import fs from "fs/promises";
 import path from "path";
 import { logger } from "./utils/logger.js";
@@ -293,9 +298,49 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
         if (steerState.steered && !hasSentResponse) {
           scopedLog().log(`[ON-IDLE] Steered dispatch, no response generated, skipping`);
           stopStatusInterval();
-          await onIdleComplete?.();
           return;
         }
+
+        // ── Subagent wait state check ─────────────────────────────
+        // If this session has pending subagent completions, suppress final:true
+        // and keep the A2A session alive. The final response will be sent when
+        // all completions arrive via xyOutbound.sendText interception.
+        const waitState = getWaitState(sessionId, taskId);
+        if (
+          waitState &&
+          waitState.deliveredCompletions < waitState.expectedCompletions &&
+          !finalSent
+        ) {
+          scopedLog().log(
+            `[ON-IDLE] Waiting for subagent completions ${waitState.deliveredCompletions}/${waitState.expectedCompletions}, suppressing final:true`,
+          );
+          try {
+            await sendStatusUpdate({
+              config,
+              sessionId,
+              taskId,
+              messageId,
+              text: "子任务正在处理中，请稍候~",
+              state: "working",
+            });
+          } catch (err) {
+            scopedLog().error(`[ON-IDLE] Failed to send subagent waiting status:`, err);
+          }
+          // Attach heartbeat so the status interval stays alive during wait
+          attachHeartbeat(sessionId, taskId, stopStatusInterval);
+          return;
+        }
+        // If wait state exists and all subagents are already complete,
+        // let onSettled → markParentSettled → deliverSubagentFinalResult
+        // handle finalization. Don't send the normal final:true here,
+        // otherwise the mock server/client sees two final frames.
+        if (waitState && waitState.deliveredCompletions >= waitState.expectedCompletions) {
+          scopedLog().log(
+            `[ON-IDLE] Subagent completions all arrived (${waitState.deliveredCompletions}/${waitState.expectedCompletions}), deferring final to parent-settled path`,
+          );
+          return;
+        }
+        // ── End subagent wait state check ─────────────────────────
 
         // 🔑 用 try/finally 确保 cleanup 在 onIdle 的 async 工作全部完成后才执行。
         // openclaw 的 waitForIdle() 以 void options.onIdle?.() 调用 onIdle，
@@ -345,6 +390,9 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
                 final: true,
               });
               finalSent = true;
+              if (waitState) {
+                clearWaitState(sessionId, "main-final-delivered", taskId);
+              }
               scopedLog().log(`[ON-IDLE] Sent final response (empty, stream end)`);
             } catch (err) {
               scopedLog().error(`[ON-IDLE] Failed to send final response:`, err);
@@ -507,16 +555,15 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
               sendText = text.slice(accumulatedText.length);
             } else {
               // 新文本不以已累积内容为前缀（如工具调用后模型重新开始生成），
-              // 重置 accumulatedText 为当前文本，后续基于此新前缀做去重
+              // 更新 accumulatedText 为当前文本，后续基于此新前缀做去重
               const wasFirstRound = accumulatedText.length === 0;
+              accumulatedText = "";
               // 新一轮输出前加换行分隔（第一轮除外）
               if (sendText.length > 0 && !wasFirstRound) {
                 sendText = "\n" + sendText;
               }
             }
-            // 始终追踪模型的原始输出文本，避免注入的 "\n" 前缀污染 accumulatedText
-            // 导致下一轮 startsWith 永久匹配失败
-            accumulatedText = text;
+            accumulatedText += sendText;
             hasSentResponse = true;
 
             if (sendText.length > 0) {
