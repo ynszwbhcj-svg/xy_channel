@@ -277,8 +277,9 @@ export function buildToolInputPayload(
     return {
         taskID,
         sessionID,
-        businessID: 'xiaoyi_claw',
-        sceneID: 'ACTION_DETECT',
+        businessID: 'voiceassistant',
+        sceneID: 'XIAOYI_CLAW',
+        subSceneID: 'TOOL_INPUT',
         checkPoint: 4,
         interActionID,
         loginType: 'APP',
@@ -305,8 +306,9 @@ export function buildToolOutputPayload(
     return {
         taskID,
         sessionID,
-        businessID: 'xiaoyi_claw',
-        sceneID: 'PROMPT_DETECT',
+        businessID: 'voiceassistant',
+        sceneID: 'XIAOYI_CLAW',
+        subSceneID: 'TOOL_OUTPUT',
         checkPoint: 6,
         interActionID,
         loginType: 'APP',
