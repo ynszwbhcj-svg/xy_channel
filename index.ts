@@ -404,7 +404,7 @@ function registerFullHooks(api: OpenClawPluginApi) {
   const pluginConfig = (api as { pluginConfig?: unknown }).pluginConfig as Record<string, unknown> || {};
   const skillRetrieverConfig = normalizeToolRetrieverConfig({
     enabled: pluginConfig.skillRetrieverEnabled ?? true,
-    maxTools: pluginConfig.skillRetrieverMaxTools ?? 2,
+    maxTools: pluginConfig.skillRetrieverMaxTools ?? 4,
     includeUninstalledOnly: true,
     envFilePath: "~/.openclaw/.xiaoyienv",
     timeoutMs: pluginConfig.skillRetrieverTimeoutMs ?? 1000,
