@@ -563,7 +563,9 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
                 sendText = "\n" + sendText;
               }
             }
-            accumulatedText += sendText;
+            // 始终追踪模型的原始输出文本，避免注入的 "\n" 前缀污染 accumulatedText
+            // 导致下一轮 startsWith 永久匹配失败
+            accumulatedText = text;
             hasSentResponse = true;
 
             if (sendText.length > 0) {
