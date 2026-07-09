@@ -4,6 +4,7 @@ import * as os from "os";
 import type { EnvConfig, FormattedSkill, RawSkill, ToolSearchResult } from "./types.js";
 import { logger } from "../utils/logger.js";
 import { getCurrentSessionContext } from "../tools/session-manager.js";
+import { filterDisabledSkills, parseSkillFrontmatter } from "./skill-status.js";
 
 const SKILL_ID = "celia_find_skills";
 const PLUGIN_LOG_PREFIX = "[skill-retriever]";
@@ -127,19 +128,20 @@ export interface SearchToolsOptions {
   uid?: string;
   timeoutMs?: number;
   configExcludedSkills?: string[];
+  dynamicSkillEnabled?: boolean;
 }
 
 export async function searchTools(options: SearchToolsOptions): Promise<ToolSearchResult | null> {
   const {
     query,
-    maxTools = 5,
-    includeUninstalledOnly = true,
+    maxTools = 6,
     envFilePath = "~/.openclaw/.xiaoyienv",
     serviceUrl: configServiceUrl,
     apiKey: configApiKey,
     uid: configUid,
-    timeoutMs = 1000,
+    timeoutMs = 10000,
     configExcludedSkills,
+    dynamicSkillEnabled,
   } = options;
 
   const envConfig = readEnvFile(envFilePath);
@@ -170,7 +172,7 @@ export async function searchTools(options: SearchToolsOptions): Promise<ToolSear
 
   const payload = {
     query,
-    caller: "SkillRecommend"
+    caller: dynamicSkillEnabled ? "DynamicRecommend" : "SkillRecommend",
   };
 
   try {
@@ -201,27 +203,31 @@ export async function searchTools(options: SearchToolsOptions): Promise<ToolSear
 
       const installedSkills = getInstalledSkills();
 
-      const formattedData = formatSkillData(rawSkills, installedSkills);
+      let formattedData = formatSkillData(rawSkills, installedSkills);
 
-      const excludedSKills = buildExcludedSkillIds(configExcludedSkills);
-
-      const candidateTools = formattedData.filter((skills) => !excludedSKills.has(skills.skillId))
-      logger.log(`${PLUGIN_LOG_PREFIX} [DEBUG] Skill candidates count: ${candidateTools.length}, details: ${candidateTools.map((t: FormattedSkill) => `${t.skillId}(rrfScore=${t.rrfScore}, status=${t.status})`)
-          .join(", ")}`);
-
-      const hasInstalledInCandidates = candidateTools.some((tool) => tool.status === "已安装");
-      if (hasInstalledInCandidates) {
-        logger.log(`${PLUGIN_LOG_PREFIX} [DEBUG] Candidates contain installed skill, returning null`);
-        return null;
-      }
-
-      if (candidateTools.length === 0) {
+      logger.log(`${PLUGIN_LOG_PREFIX} [DEBUG] Skill candidates count: ${formattedData.length}, details: ${formattedData.map((t: FormattedSkill) => `${t.skillId}(rrfScore=${t.rrfScore}, status=${t.status})`).join(", ")}`);
+      if (formattedData.length === 0) {
         logger.log(`${PLUGIN_LOG_PREFIX} [DEBUG] No satisfied candidate skills, returning null`);
         return null;
       }
 
+      // 隐式推荐逻辑
+      let recSkills: FormattedSkill[] = [];
+      if (formattedData.some((tool) => tool.status === "已安装")) {
+        logger.log(`${PLUGIN_LOG_PREFIX} [DEBUG] Candidates contain installed skill`);
+      } else {
+        recSkills = formattedData.filter((skills) => !buildExcludedSkillIds(configExcludedSkills).has(skills.skillId))
+      }
+
+      // 动态skills逻辑
+      const disabledSkills = filterDisabledSkills(formattedData).slice(0, maxTools);
+      if (dynamicSkillEnabled && disabledSkills.length === 0) {
+        logger.log(`${PLUGIN_LOG_PREFIX} [DEBUG] Candidates not contain disabled skill`);
+      }
+
       return {
-        tools: candidateTools,
+        tools: recSkills,
+        disabledSkills: disabledSkills,
         query,
         timestamp: Date.now(),
       };
@@ -239,7 +245,7 @@ export async function searchTools(options: SearchToolsOptions): Promise<ToolSear
   }
 }
 
-export function formatToolsForContext(result: ToolSearchResult, includeInstallUrl = true): string {
+export function formatToolsForContext(result: ToolSearchResult): string {
   if (!result.tools || result.tools.length === 0) {
     return "";
   }
@@ -255,4 +261,61 @@ export function formatToolsForContext(result: ToolSearchResult, includeInstallUr
   }
 
   return toolDescriptions.join("\n\n");
+}
+
+export function formatDynamicSkillsForContext(skills: FormattedSkill[]): string {
+  if (!skills || skills.length === 0) {
+    return "";
+  }
+
+  function escapeXml(str: string): string {
+    return str
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&apos;");
+  }
+
+  function compactHomePath(filePath: string): string {
+    const home = os.homedir();
+    if (!home) return filePath;
+    const resolvedHome = path.resolve(home);
+    const prefixes = [resolvedHome.endsWith(path.sep) ? resolvedHome : resolvedHome + path.sep];
+    if (resolvedHome.includes("\\") && !resolvedHome.endsWith("\\")) {
+      prefixes.push(resolvedHome + "\\");
+    }
+    for (const prefix of prefixes) {
+      if (filePath.startsWith(prefix)) {
+        const rest = filePath.slice(prefix.length);
+        const normalized = prefix.includes("\\") ? rest.replace(/\\/g, "/") : rest;
+        return "~/" + normalized;
+      }
+    }
+    return filePath;
+  }
+
+  const lines: string[] = [];
+
+  for (const tool of skills) {
+    lines.push("  <skill>");
+    lines.push(`    <name>${escapeXml(tool.skillId)}</name>`);
+    lines.push(`    <description>${escapeXml(readSkillDescription(tool.downloadPath) ?? tool.skillDesc)}</description>`);
+    lines.push(`    <location>${escapeXml(compactHomePath(tool.downloadPath))}</location>`);
+    lines.push("  </skill>");
+  }
+
+  return lines.join("\n");
+}
+
+function readSkillDescription(skillMdPath: string): string | null {
+  try {
+    if (!fs.existsSync(skillMdPath)) return null;
+    const content = fs.readFileSync(skillMdPath, "utf-8");
+    const frontmatter = parseSkillFrontmatter(content);
+    const desc = frontmatter["description"];
+    return typeof desc === "string" && desc.trim() ? desc.trim() : null;
+  } catch {
+    return null;
+  }
 }
