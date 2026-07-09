@@ -41,11 +41,11 @@ export async function downloadFile(url: string, destPath: string): Promise<void>
 export async function downloadFilesFromParts(
   fileParts: Array<{ name: string; mimeType: string; uri: string }>,
   tempDir: string = "/tmp/xy_channel"
-): Promise<Array<{ path: string; name: string; mimeType: string }>> {
+): Promise<Array<{ path: string; name: string; mimeType: string; uri: string }>> {
   // Create temp directory if it doesn't exist
   await fs.mkdir(tempDir, { recursive: true });
 
-  const downloadedFiles: Array<{ path: string; name: string; mimeType: string }> = [];
+  const downloadedFiles: Array<{ path: string; name: string; mimeType: string; uri: string }> = [];
 
   for (const filePart of fileParts) {
     const { name, mimeType, uri } = filePart;
@@ -60,6 +60,7 @@ export async function downloadFilesFromParts(
         path: destPath,
         name,
         mimeType,
+        uri,
       });
     } catch (error) {
       logger.error(`Failed to download file ${name}:`);

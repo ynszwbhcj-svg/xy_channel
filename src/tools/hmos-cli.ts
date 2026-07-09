@@ -491,11 +491,12 @@ export async function executeCLI(
   parsed: ParsedCLIArgs,
   sessionCtx: SessionContext,
   toolCallId: string,
+  rawCommand: string,
 ): Promise<CLIExecuteResult> {
   const { config, sessionId, taskId, messageId } = sessionCtx;
   const log = (msg: string, ...args: unknown[]) => logger.withContext(sessionId, taskId).log(msg, ...args);
 
-  log("[CLI-EXEC] Sending ExecuteCLI", { toolCallId, toolName: parsed.toolName, subcommand: parsed.subcommand, argKeys: Object.keys(parsed.args) });
+  log("[CLI-EXEC] Sending ExecuteCLI", { toolCallId, command: rawCommand });
 
   const prevLock = acquireCLILock(sessionId);
   if (prevLock) { log("[CLI-EXEC] waiting for previous CLI lock"); await prevLock; }
@@ -536,7 +537,7 @@ export async function executeCLI(
 
       const command: A2ACommand = {
         header: { namespace: "FunctionExecute", name: "ExecuteCLI" },
-        payload: { toolName: parsed.toolName, subcommand: parsed.subcommand, args: parsed.args },
+        payload: { command: rawCommand, timeout_ms: 6_000 },
       };
 
       const currentTaskId = getCurrentTaskId(sessionId) ?? taskId;
@@ -648,7 +649,7 @@ export async function cliBeforeToolCallHandler(
   }
 
   try {
-    const result = await executeCLI(parsed, sessionCtx, event.toolCallId);
+    const result = await executeCLI(parsed, sessionCtx, event.toolCallId, command);
     logger.log(`[CLI-HOOK] CLI execution completed (${(performance.now() - t0).toFixed(1)}ms)`);
     return { block: true, blockReason: result.content[0]?.text ?? "" };
   } catch (err) {

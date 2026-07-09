@@ -607,20 +607,25 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
  * @param mediaList - Downloaded files with local paths
  */
 function buildXYMediaPayload(
-  mediaList: Array<{ path: string; name: string; mimeType: string }>,
+  mediaList: Array<{ path: string; name: string; mimeType: string; uri: string }>,
 ): {
   MediaPath?: string;
   MediaType?: string;
+  MediaUrl?: string;
   MediaPaths?: string[];
+  MediaUrls?: string[];
   MediaTypes?: string[];
 } {
   const first = mediaList[0];
   const mediaPaths = mediaList.map((media) => media.path);
+  const mediaUrls = mediaList.map((media) => media.uri);
   const mediaTypes = mediaList.map((media) => media.mimeType).filter(Boolean);
   return {
     MediaPath: first?.path,
     MediaType: first?.mimeType,
+    MediaUrl: first?.uri,
     MediaPaths: mediaPaths.length > 0 ? mediaPaths : undefined,
+    MediaUrls: mediaUrls.length > 0 ? mediaUrls : undefined,
     MediaTypes: mediaTypes.length > 0 ? mediaTypes : undefined,
   };
 }
