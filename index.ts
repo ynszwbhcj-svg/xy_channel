@@ -13,6 +13,7 @@ import { registerSelfEvolutionToolResultNudge } from "./src/self-evolution-tool-
 import { createBeforePromptBuildHandler } from "./src/skill-retriever/hooks.js";
 import { normalizeToolRetrieverConfig } from "./src/skill-retriever/config.js";
 import { registerCLIHook } from "./src/tools/hmos-cli.js";
+import { registerSkillUsedTracker } from "./src/skill-used.js";
 import { recoverCronState } from "./src/cron-recovery.js";
 import type { CronRecoveryResult } from "./src/cron-recovery.js";
 import { logger } from "./src/utils/logger.js";
@@ -319,6 +320,8 @@ const plugin: OpenClawPluginDefinition = definePluginEntry({
       registerCronDetectionHook(api);
       // CLI exec hook: intercepts built-in exec for HarmonyOS CLI skill tools
       registerCLIHook(api);
+      // Skill usage tracker: counts real skill invocations (command/read/context)
+      registerSkillUsedTracker(api);
       // Cron recovery hook: prunes stale cron-push-map and pushData on gateway startup
       registerCronRecoveryHook(api);
     }
