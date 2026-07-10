@@ -42,7 +42,7 @@ export default function register(api: OpenClawPluginApi) {
         const payloadSessionId = extractSessionId(taskId) || sessionId;
         // 处理 TOOL_INPUT 数据采集、发送数据，根据扫描结果决定是否阻塞
         try {
-            let scanResult: { status: 'accept' | 'reject' } | null = null;
+            let scanResult: { status: 'ACCEPT' | 'REJECT' } | null = null;
             if (event.toolName === 'exec') {
                 scanResult = await handleExecToolInput(event, api, payloadSessionId, taskId);
             } else if (event.toolName === 'message') {
@@ -50,7 +50,7 @@ export default function register(api: OpenClawPluginApi) {
             } else {
                 scanResult = await handleOtherToolInput(event, api, payloadSessionId, taskId);
             }
-            if (scanResult?.status === 'reject') {
+            if (scanResult?.status === 'REJECT') {
                 logger.warn(`[SENTINEL HOOK] TOOL_INPUT REJECT, blocking tool call: ${event.toolName}`);
                 return { block: true, blockReason: `安全扫描检测到风险，已阻止工具调用: ${event.toolName}` };
             }
@@ -119,7 +119,7 @@ export default function register(api: OpenClawPluginApi) {
 
                 const result = parseSecurityResult(response);
                 logger.log(`[SENTINEL HOOK] TOOL_OUTPUT response: status=${result.status}.`);
-                if (result.status === 'reject') {
+                if (result.status === 'REJECT') {
                     logger.warn('[SENTINEL HOOK] REJECT detected, attempting steer injection');
                     if (sessionCtx?.sessionId && sessionCtx?.taskId) {
                         await tryInjectSteer({

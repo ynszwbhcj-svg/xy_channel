@@ -5,6 +5,7 @@ import { xiaoyiProvider } from "./src/provider.js";
 import { xiaoyiCompactionProvider } from "./src/compaction-provider.js";
 import { xyPlugin } from "./src/channel.js";
 import registerSentinelHook from "./src/cspl/sentinel_hook.js";
+import registerSkillScopeHook from "./src/cspl/skill_scope_hook.js";
 import { setXYRuntime } from "./src/runtime.js";
 import { markCronToolCall, clearCronToolCall, getCurrentSessionContext } from "./src/tools/session-manager.js";
 import { configManager } from "./src/utils/config-manager.js";
@@ -415,6 +416,8 @@ const plugin: OpenClawPluginDefinition = definePluginEntry({
       registerFullHooks(api);
       // CSPL sentinel hook: before_tool_call + after_tool_call security scanning
       registerSentinelHook(api);
+      // CSPL skill scope hook: before_install security scanning
+      registerSkillScopeHook(api);
       // Cron detection hook: marks toolCallIds from cron sessions
       registerCronDetectionHook(api);
       // CLI exec hook: intercepts built-in exec for HarmonyOS CLI skill tools

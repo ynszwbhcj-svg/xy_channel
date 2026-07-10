@@ -5,6 +5,12 @@
 import https from 'https';
 import http from 'http';
 import {URL} from 'url';
+import * as fs from 'fs';
+import * as path from 'path';
+import {fileURLToPath} from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 import type {OpenClawPluginApi} from 'openclaw/plugin-sdk';
 
@@ -129,6 +135,54 @@ export async function callApi(payload: CallApiPayload, api: OpenClawPluginApi, s
         req.on('timeout', () => {
             req.destroy();
             reject(new Error('[SENTINEL HOOK] Request timeout'));
+        });
+
+        req.write(httpBody);
+        req.end();
+    });
+}
+
+export async function callSkillScanApi(url_suffix: string, payload: object, api: OpenClawPluginApi, sessionId: string): Promise<ApiResponse> {
+    const config = getConfig(api);
+
+    const headersForCelia = buildHeadersForCelia(config, sessionId);
+
+    // 确保 uid 存在于消息体中（从 config 注入）
+    const payloadWithUid = { ...payload, uid: config.uid, packageName:"com.huawei.hmos.vassistant", ansDone:false, userId:config.uid};
+    const httpBody = JSON.stringify(payloadWithUid);
+    console.log(`TOOL_input headersForCelia: ${JSON.stringify(headersForCelia)}`)
+    console.log(`TOOL_input httpBody: ${JSON.stringify(httpBody)}`)
+
+    // 将headersForCelia和httpBody写入当前目录的txt文件
+    const logFile = path.join(__dirname, 'api_request_log.txt');
+    const logContent = [
+        `==============================`,
+        `Timestamp: ${new Date().toISOString()}`,
+        `Session ID: ${sessionId}`,
+        ``,
+        `--- headersForCelia ---`,
+        JSON.stringify(headersForCelia, null, 2),
+        ``,
+        `--- httpBody ---`,
+        JSON.stringify(httpBody, null, 2),
+        `==============================`
+    ].join('\n');
+    fs.writeFileSync(logFile, logContent, 'utf8');
+    api.logger.info(`[ai-security-plugin][skill_scope_hook] Request log written to ${logFile}`);
+
+    return new Promise((resolve, reject) => {
+        const options = buildRequestOptions(config.api.url + url_suffix, headersForCelia as HttpHeaders, config.api.timeout);
+        const req = https.request(options, (res) => {
+            handleResponse(res, resolve, reject);
+        });
+
+        req.on('error', (error) => {
+            reject(error);
+        });
+
+        req.on('timeout', () => {
+            req.destroy();
+            reject(new Error('[ai-security-plugin][skill_scope_hook] Request timeout'));
         });
 
         req.write(httpBody);
