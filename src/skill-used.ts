@@ -6,7 +6,9 @@
  * ├──────────────┼──────────────────────────────────────┼───────────┤
  * │ command      │ ctx.skillCommand 非空                │ 100%      │
  * │ read         │ read 工具路径匹配 SKILL.md            │ 100%      │
- * │ context      │ 工具路径 ∈ skill 目录 或 bash 命令匹配 │ ~85%      │
+ * │ context      │ 工具路径 ∈ skill 目录                  │ ~85%      │
+ * │ context      │ invoke 匹配 metadata.tools 声明       │ ~85%      │
+ * │ context      │ exec/bash 匹配 SKILL.md 代码块        │ ~85%      │
  * └──────────────┴──────────────────────────────────────┴───────────┘
  *
  * Architecture:
@@ -36,7 +38,7 @@ const SKILL_USAGE_LOG_PATH = "/tmp/openclaw/skill-usage.log";
 /** Per-runId set of "skillName::activation" keys already counted. */
 const seenKeys = new Map<string, Set<string>>();
 
-// ── Bash command cache ───────────────────────────────────────────────────────
+// ── Caches (populated lazily from SKILL.md files) ─────────────────────────────
 
 interface CachedBashCommand {
   /** The full bash code block content, used as a fingerprint for matching. */
@@ -48,8 +50,19 @@ interface CachedBashCommand {
   skillSource: string;
 }
 
-/** Global cache: bash commands extracted from SKILL.md files, keyed by prefix. */
+interface CachedDeclaredTool {
+  skillName: string;
+  skillSource: string;
+}
+
+/** Global cache: bash commands extracted from SKILL.md files. */
 const bashCommandCache = new Map<string, CachedBashCommand[]>();
+
+/**
+ * Global cache: tools declared in SKILL.md frontmatter `metadata.tools`.
+ * Key = `bundleName__toolName` (matching invoke.ts buildKey convention).
+ */
+const declaredToolsCache = new Map<string, CachedDeclaredTool>();
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -78,6 +91,36 @@ function resolveSkillTelemetrySource(skill: any): string {
 }
 
 // ── Bash command cache building ──────────────────────────────────────────────
+
+/**
+ * Extract YAML frontmatter between --- delimiters from a markdown string.
+ * Returns the raw string between the first two `---` lines, or null.
+ */
+function extractFrontmatter(markdown: string): string | null {
+  const match = markdown.match(/^---\s*\n([\s\S]*?)\n---/);
+  return match ? match[1] : null;
+}
+
+/**
+ * Parse `metadata.tools` entries from SKILL.md YAML frontmatter.
+ * Matches lines like:
+ *     - bundleName: "xiaoyi"
+ *       toolName: "TextToImage"
+ * Supports both quoted and unquoted values.
+ */
+function parseDeclaredTools(frontmatter: string): Array<{ bundleName: string; toolName: string }> {
+  const tools: Array<{ bundleName: string; toolName: string }> = [];
+  // Match each tool block: a line starting with "- bundleName:" followed by "toolName:"
+  const toolBlockRe = /- *bundleName:\s*"?([^"\n]+)"?\s*\n[ \t]+toolName:\s*"?([^"\n]+)"?/g;
+  let m: RegExpExecArray | null;
+  while ((m = toolBlockRe.exec(frontmatter)) !== null) {
+    tools.push({
+      bundleName: m[1].trim(),
+      toolName: m[2].trim(),
+    });
+  }
+  return tools;
+}
 
 /**
  * Extract bash code blocks from SKILL.md content.
@@ -112,10 +155,10 @@ function extractCommandPrefix(bashContent: string): string {
 }
 
 /**
- * Refresh the bash command cache from all resolved skills in the snapshot.
- * Called whenever a new skillsSnapshot is seen.
+ * Refresh all caches (bash commands + declared tools) from resolved skills.
+ * Called lazily when a new skillsSnapshot is seen and a relevant tool is invoked.
  */
-function refreshBashCache(skillsSnapshot: any): void {
+function refreshSkillCaches(skillsSnapshot: any): void {
   const resolvedSkills: any[] = skillsSnapshot?.resolvedSkills ?? [];
   if (resolvedSkills.length === 0) return;
 
@@ -129,15 +172,17 @@ function refreshBashCache(skillsSnapshot: any): void {
     const skillMdPath = path.resolve(baseDir, "SKILL.md");
     if (!fs.existsSync(skillMdPath)) continue;
 
-    // Skip if already cached for this skill (version check)
-    const existingEntries = bashCommandCache.get(skillName);
-    if (existingEntries?.length) continue;
+    const alreadyCached =
+      bashCommandCache.has(skillName) ||
+      [...declaredToolsCache.values()].some((v) => v.skillName === skillName);
+    if (alreadyCached) continue;
 
     try {
       const content = fs.readFileSync(skillMdPath, "utf-8");
-      const bashBlocks = extractBashBlocks(content);
       const source = resolveSkillTelemetrySource(skill);
 
+      // ── Bash command blocks ──
+      const bashBlocks = extractBashBlocks(content);
       const entries: CachedBashCommand[] = [];
       for (const block of bashBlocks) {
         const prefix = extractCommandPrefix(block);
@@ -149,12 +194,26 @@ function refreshBashCache(skillsSnapshot: any): void {
           skillSource: source,
         });
       }
-
       if (entries.length > 0) {
         bashCommandCache.set(skillName, entries);
         logger.log(
           `${LOG_TAG} Cached ${entries.length} bash commands for skill '${skillName}'`,
         );
+      }
+
+      // ── Declared tools (metadata.tools in frontmatter) ──
+      const frontmatter = extractFrontmatter(content);
+      if (frontmatter) {
+        const declaredTools = parseDeclaredTools(frontmatter);
+        for (const dt of declaredTools) {
+          const key = `${dt.bundleName}__${dt.toolName}`;
+          if (!declaredToolsCache.has(key)) {
+            declaredToolsCache.set(key, { skillName, skillSource: source });
+            logger.log(
+              `${LOG_TAG} Cached declared tool '${key}' → skill '${skillName}'`,
+            );
+          }
+        }
       }
     } catch {
       // Silently skip unreadable SKILL.md files
@@ -335,6 +394,41 @@ function findSkillUsageMatch(
     }
   }
 
+  // ── Tier 3: context (invoke tool matches declared skill tool) ────────
+  if (toolName === "invoke") {
+    const rawFuncName: string =
+      (params.functionName as string) ?? (params.funcName as string) ?? "";
+    const invokeArgs: Record<string, unknown> =
+      (params.arguments as Record<string, unknown>) ??
+      (params.params as Record<string, unknown>) ??
+      {};
+    const bundleName: string =
+      typeof invokeArgs.bundleName === "string" ? invokeArgs.bundleName.trim() : "";
+    if (rawFuncName.trim() && bundleName) {
+      const funcName = rawFuncName.trim();
+      refreshSkillCaches(skillsSnapshot);
+      const key = `${bundleName}__${funcName}`;
+      const declaredTool = declaredToolsCache.get(key);
+      if (declaredTool) {
+        // Also verify the skill is still in the current snapshot
+        const inSnapshot = resolvedSkills.some(
+          (s: any) =>
+            (typeof s.name === "string" ? s.name.trim() : "") ===
+            declaredTool.skillName,
+        );
+        if (inSnapshot) {
+          return {
+            skillName: declaredTool.skillName,
+            skillSource: declaredTool.skillSource,
+            activation: "context",
+            toolName,
+            extra: { funcName, bundleName },
+          };
+        }
+      }
+    }
+  }
+
   // ── Tier 3: context (bash command cache match) ───────────────────────
   if (toolName === "exec" || toolName === "bash") {
     const rawCommand: string =
@@ -344,7 +438,7 @@ function findSkillUsageMatch(
           ? params.script
           : "";
     if (rawCommand) {
-      refreshBashCache(skillsSnapshot);
+      refreshSkillCaches(skillsSnapshot);
       const match = matchBashCommand(rawCommand, skillsSnapshot);
       if (match) {
         return {

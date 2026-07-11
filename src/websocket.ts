@@ -177,7 +177,6 @@ export class XYWebSocketManager extends EventEmitter {
     }
 
     const messageStr = JSON.stringify(message);
-    logger.log("[A2A_RESPONSE] msgDetail:", messageStr);
     this.ws.send(messageStr);
   }
 
