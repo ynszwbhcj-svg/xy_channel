@@ -169,54 +169,124 @@ function refreshSkillCaches(skillsSnapshot: any): void {
     const baseDir = typeof skill.baseDir === "string" ? skill.baseDir.trim() : "";
     if (!baseDir || !path.isAbsolute(baseDir)) continue;
 
-    const skillMdPath = path.resolve(baseDir, "SKILL.md");
-    if (!fs.existsSync(skillMdPath)) continue;
+    cacheSkillFromDir(baseDir, skillName, resolveSkillTelemetrySource(skill));
+  }
+}
 
-    const alreadyCached =
-      bashCommandCache.has(skillName) ||
-      [...declaredToolsCache.values()].some((v) => v.skillName === skillName);
-    if (alreadyCached) continue;
+/**
+ * Parse a single SKILL.md and populate caches for one skill.
+ */
+function cacheSkillFromDir(
+  baseDir: string,
+  skillName: string,
+  skillSource: string,
+): void {
+  const skillMdPath = path.resolve(baseDir, "SKILL.md");
+  if (!fs.existsSync(skillMdPath)) return;
 
-    try {
-      const content = fs.readFileSync(skillMdPath, "utf-8");
-      const source = resolveSkillTelemetrySource(skill);
+  const alreadyCached =
+    bashCommandCache.has(skillName) ||
+    [...declaredToolsCache.values()].some((v) => v.skillName === skillName);
+  if (alreadyCached) return;
 
-      // ── Bash command blocks ──
-      const bashBlocks = extractBashBlocks(content);
-      const entries: CachedBashCommand[] = [];
-      for (const block of bashBlocks) {
-        const prefix = extractCommandPrefix(block);
-        entries.push({
-          content: block,
-          prefix,
-          skillName,
-          skillBaseDir: baseDir,
-          skillSource: source,
-        });
-      }
-      if (entries.length > 0) {
-        bashCommandCache.set(skillName, entries);
-        logger.log(
-          `${LOG_TAG} Cached ${entries.length} bash commands for skill '${skillName}'`,
-        );
-      }
+  try {
+    const content = fs.readFileSync(skillMdPath, "utf-8");
 
-      // ── Declared tools (metadata.tools in frontmatter) ──
-      const frontmatter = extractFrontmatter(content);
-      if (frontmatter) {
-        const declaredTools = parseDeclaredTools(frontmatter);
-        for (const dt of declaredTools) {
-          const key = `${dt.bundleName}__${dt.toolName}`;
-          if (!declaredToolsCache.has(key)) {
-            declaredToolsCache.set(key, { skillName, skillSource: source });
-            logger.log(
-              `${LOG_TAG} Cached declared tool '${key}' → skill '${skillName}'`,
-            );
-          }
+    // ── Bash command blocks ──
+    const bashBlocks = extractBashBlocks(content);
+    const bashEntries: CachedBashCommand[] = [];
+    for (const block of bashBlocks) {
+      const prefix = extractCommandPrefix(block);
+      bashEntries.push({
+        content: block,
+        prefix,
+        skillName,
+        skillBaseDir: baseDir,
+        skillSource,
+      });
+    }
+    if (bashEntries.length > 0) {
+      bashCommandCache.set(skillName, bashEntries);
+      logger.log(
+        `${LOG_TAG} Cached ${bashEntries.length} bash commands for skill '${skillName}'`,
+      );
+    }
+
+    // ── Declared tools (metadata.tools in frontmatter) ──
+    const frontmatter = extractFrontmatter(content);
+    if (frontmatter) {
+      const declaredTools = parseDeclaredTools(frontmatter);
+      for (const dt of declaredTools) {
+        const key = `${dt.bundleName}__${dt.toolName}`;
+        if (!declaredToolsCache.has(key)) {
+          declaredToolsCache.set(key, { skillName, skillSource });
+          logger.log(
+            `${LOG_TAG} Cached declared tool '${key}' → skill '${skillName}'`,
+          );
         }
       }
+    }
+  } catch {
+    // Silently skip unreadable SKILL.md files
+  }
+}
+
+/**
+ * Expand ~ in a path to the user's home directory.
+ */
+function expandHomePath(filePath: string): string {
+  if (filePath.startsWith("~")) {
+    return path.resolve(os.homedir(), filePath.slice(filePath.startsWith("~/") ? 2 : 1));
+  }
+  return filePath;
+}
+
+/**
+ * Scan installed skill directories to eagerly populate caches.
+ * Walks common skill installation paths:
+ *   - ~/.openclaw/workspace/skills/
+ *   - openclaw bundled skills (via getInstalledSkills pattern)
+ *
+ * This ensures the declared-tools cache is warm even when the
+ * before_tool_call hook ctx lacks a skillsSnapshot.
+ */
+function scanInstalledSkillDirs(): void {
+  const skillRoots = [
+    "~/.openclaw/workspace/skills",
+  ];
+
+  for (const root of skillRoots) {
+    const expanded = expandHomePath(root);
+    try {
+      if (!fs.existsSync(expanded) || !fs.statSync(expanded).isDirectory()) continue;
+      const entries = fs.readdirSync(expanded);
+      for (const entry of entries) {
+        const entryPath = path.join(expanded, entry);
+        if (!fs.statSync(entryPath).isDirectory()) continue;
+        const skillMdPath = path.join(entryPath, "SKILL.md");
+        if (!fs.existsSync(skillMdPath)) continue;
+
+        // Read skill name from SKILL.md frontmatter
+        let skillName = entry; // fallback: use directory name
+        try {
+          const content = fs.readFileSync(skillMdPath, "utf-8");
+          const fm = extractFrontmatter(content);
+          if (fm) {
+            const nameMatch = fm.match(/^name:\s*"?([^"\n]+)"?/m);
+            if (nameMatch) skillName = nameMatch[1].trim();
+          }
+        } catch {
+          // keep fallback name
+        }
+
+        cacheSkillFromDir(entryPath, skillName, "workspace");
+      }
+      logger.log(
+        `${LOG_TAG} Scanned installed skills at '${expanded}', ` +
+        `declaredToolsCache.size=${declaredToolsCache.size}`,
+      );
     } catch {
-      // Silently skip unreadable SKILL.md files
+      // Directory doesn't exist or read error — skip
     }
   }
 }
@@ -697,7 +767,12 @@ async function beforeToolCallHandler(
 export function registerSkillUsedTracker(
   api: OpenClawPluginApi | { on: (event: string, handler: (...args: any[]) => any) => void },
 ): void {
-  // 1. Subscribe to core-emitted skill.used events
+  // 1. Eagerly scan installed skill directories to populate caches.
+  //    This ensures invoke/bash matching works even when the hook ctx
+  //    lacks a skillsSnapshot.
+  scanInstalledSkillDirs();
+
+  // 2. Subscribe to core-emitted skill.used events
   try {
     onInternalDiagnosticEvent(onSkillUsedDiagnostic);
     logger.log(`${LOG_TAG} Subscribed to internal diagnostic events`);
@@ -705,7 +780,7 @@ export function registerSkillUsedTracker(
     logger.warn(`${LOG_TAG} Failed to subscribe to diagnostic events:`, err);
   }
 
-  // 2. Register before_tool_call hook for Tier 3 (context) detection
+  // 3. Register before_tool_call hook for Tier 3 (context) detection
   api.on("before_tool_call", beforeToolCallHandler);
   logger.log(`${LOG_TAG} Registered before_tool_call hook`);
 }
