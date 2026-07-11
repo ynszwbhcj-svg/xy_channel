@@ -295,15 +295,20 @@ interface SkillUsageMatch {
 /**
  * Tier 1: `skillCommand` is set on the hook context → activation: "command"
  * Tier 2: tool is "read" and path is a SKILL.md file inside a resolved skill dir
- * Tier 3: tool params reference a path inside a skill directory, OR
+ * Tier 3: invoke tool matches SKILL.md metadata.tools declaration, OR
+ *         tool params reference a path inside a skill directory, OR
  *         exec/bash command matches a cached SKILL.md bash block
+ *
+ * NOTE: Tier 3 invoke/bash detection works via a global cache populated
+ * from skillsSnapshot. Once populated (e.g. during a prior read turn), the
+ * cache stays warm even when the current hook ctx lacks a snapshot.
  */
 function findSkillUsageMatch(
   toolName: string,
   params: Record<string, unknown>,
   ctx: any,
 ): SkillUsageMatch | null {
-  // ── Tier 1: command ──────────────────────────────────────────────────
+  // ── Tier 1: command (no snapshot needed) ──────────────────────────────
   const skillCommand = ctx?.skillCommand;
   if (skillCommand) {
     const commandSkillName =
@@ -330,9 +335,89 @@ function findSkillUsageMatch(
 
   const skillsSnapshot = ctx?.skillsSnapshot;
   const resolvedSkills: any[] = skillsSnapshot?.resolvedSkills ?? [];
-  if (resolvedSkills.length === 0) return null;
+  const hasSnapshot = resolvedSkills.length > 0;
 
-  // Build a map of resolved paths → skill info (for Tier 2 & 3)
+  // ── Eagerly refresh caches when snapshot is available ─────────────────
+  // This ensures the declared-tools and bash-command caches are warm for
+  // subsequent turns where the snapshot may be absent from the hook ctx.
+  if (hasSnapshot) {
+    refreshSkillCaches(skillsSnapshot);
+  }
+
+  // ── Tier 3: context (invoke tool matches declared skill tool) ────────
+  // Runs BEFORE the snapshot guard because the cache may already be warm
+  // from a prior turn that did have a snapshot.
+  if (toolName === "invoke") {
+    const rawFuncName: string =
+      (params.functionName as string) ?? (params.funcName as string) ?? "";
+    const invokeArgs: Record<string, unknown> =
+      (params.arguments as Record<string, unknown>) ??
+      (params.params as Record<string, unknown>) ??
+      {};
+    const bundleName: string =
+      typeof invokeArgs.bundleName === "string" ? invokeArgs.bundleName.trim() : "";
+    if (rawFuncName.trim() && bundleName) {
+      const funcName = rawFuncName.trim();
+      const key = `${bundleName}__${funcName}`;
+      const declaredTool = declaredToolsCache.get(key);
+      if (declaredTool) {
+        // Verify the skill is in the current snapshot if available;
+        // if no snapshot, trust the cache (skill must have been active
+        // when the cache was populated).
+        if (!hasSnapshot) {
+          return {
+            skillName: declaredTool.skillName,
+            skillSource: declaredTool.skillSource,
+            activation: "context",
+            toolName,
+            extra: { funcName, bundleName },
+          };
+        }
+        const inSnapshot = resolvedSkills.some(
+          (s: any) =>
+            (typeof s.name === "string" ? s.name.trim() : "") ===
+            declaredTool.skillName,
+        );
+        if (inSnapshot) {
+          return {
+            skillName: declaredTool.skillName,
+            skillSource: declaredTool.skillSource,
+            activation: "context",
+            toolName,
+            extra: { funcName, bundleName },
+          };
+        }
+      }
+    }
+  }
+
+  // ── Tier 3: context (bash command cache match) ───────────────────────
+  // Same reasoning as invoke: cache may be warm from a prior turn.
+  if (toolName === "exec" || toolName === "bash") {
+    const rawCommand: string =
+      typeof params.command === "string"
+        ? params.command
+        : typeof params.script === "string"
+          ? params.script
+          : "";
+    if (rawCommand) {
+      const match = matchBashCommand(rawCommand, skillsSnapshot);
+      if (match) {
+        return {
+          skillName: match.skillName,
+          skillSource: match.skillSource,
+          activation: "context",
+          toolName,
+          extra: { command: rawCommand },
+        };
+      }
+    }
+  }
+
+  // ── Remaining tiers need resolved skills from the snapshot ────────────
+  if (!hasSnapshot) return null;
+
+  // Build a map of resolved paths → skill info (for Tier 2 & 3 path-based)
   const skillDirMap = new Map<
     string,
     { skillName: string; skillSource: string }
@@ -347,7 +432,6 @@ function findSkillUsageMatch(
       skillDirMap.set(path.resolve(bd), { skillName: sn, skillSource: source });
     }
     if (fp && path.isAbsolute(fp)) {
-      // Also register the exact filePath → its parent dir's skill
       skillDirMap.set(path.resolve(fp), { skillName: sn, skillSource: source });
     }
   }
@@ -358,7 +442,6 @@ function findSkillUsageMatch(
     if (filePath) {
       const resolved = resolveToolPath(filePath, ctx);
       if (resolved && path.basename(resolved) === "SKILL.md") {
-        // Check if the resolved path matches a known skill's SKILL.md
         for (const [skillDir, info] of skillDirMap) {
           const expectedMd = path.resolve(skillDir, "SKILL.md");
           if (resolved === expectedMd) {
@@ -389,64 +472,6 @@ function findSkillUsageMatch(
           activation: "context",
           toolName,
           extra: { path: candidate },
-        };
-      }
-    }
-  }
-
-  // ── Tier 3: context (invoke tool matches declared skill tool) ────────
-  if (toolName === "invoke") {
-    const rawFuncName: string =
-      (params.functionName as string) ?? (params.funcName as string) ?? "";
-    const invokeArgs: Record<string, unknown> =
-      (params.arguments as Record<string, unknown>) ??
-      (params.params as Record<string, unknown>) ??
-      {};
-    const bundleName: string =
-      typeof invokeArgs.bundleName === "string" ? invokeArgs.bundleName.trim() : "";
-    if (rawFuncName.trim() && bundleName) {
-      const funcName = rawFuncName.trim();
-      refreshSkillCaches(skillsSnapshot);
-      const key = `${bundleName}__${funcName}`;
-      const declaredTool = declaredToolsCache.get(key);
-      if (declaredTool) {
-        // Also verify the skill is still in the current snapshot
-        const inSnapshot = resolvedSkills.some(
-          (s: any) =>
-            (typeof s.name === "string" ? s.name.trim() : "") ===
-            declaredTool.skillName,
-        );
-        if (inSnapshot) {
-          return {
-            skillName: declaredTool.skillName,
-            skillSource: declaredTool.skillSource,
-            activation: "context",
-            toolName,
-            extra: { funcName, bundleName },
-          };
-        }
-      }
-    }
-  }
-
-  // ── Tier 3: context (bash command cache match) ───────────────────────
-  if (toolName === "exec" || toolName === "bash") {
-    const rawCommand: string =
-      typeof params.command === "string"
-        ? params.command
-        : typeof params.script === "string"
-          ? params.script
-          : "";
-    if (rawCommand) {
-      refreshSkillCaches(skillsSnapshot);
-      const match = matchBashCommand(rawCommand, skillsSnapshot);
-      if (match) {
-        return {
-          skillName: match.skillName,
-          skillSource: match.skillSource,
-          activation: "context",
-          toolName,
-          extra: { command: rawCommand },
         };
       }
     }
@@ -611,6 +636,27 @@ async function beforeToolCallHandler(
   ctx: any,
 ): Promise<{ block?: boolean; blockReason?: string } | void> {
   try {
+    // Debug: log invoke/exec/read calls to diagnose matching issues
+    if (event.toolName === "invoke" || event.toolName === "exec" || event.toolName === "read") {
+      const hasSnapshot = ctx?.skillsSnapshot?.resolvedSkills?.length > 0;
+      logger.log(
+        `${LOG_TAG} before_tool_call: toolName=${event.toolName}, ` +
+        `hasSnapshot=${hasSnapshot}, ` +
+        `hasSkillCommand=${!!ctx?.skillCommand}, ` +
+        `cacheSize=${declaredToolsCache.size}, ` +
+        `runId=${event.runId ?? ctx?.runId ?? "-"}`,
+      );
+      if (event.toolName === "invoke") {
+        const fn = (event.params.functionName ?? event.params.funcName ?? "") as string;
+        const args = (event.params.arguments ?? event.params.params ?? {}) as Record<string, unknown>;
+        logger.log(
+          `${LOG_TAG} invoke params: functionName=${fn}, ` +
+          `bundleName=${args.bundleName}, ` +
+          `paramKeys=${Object.keys(event.params).join(",")}`,
+        );
+      }
+    }
+
     const match = findSkillUsageMatch(event.toolName, event.params, {
       ...ctx,
       toolCallId: event.toolCallId,
