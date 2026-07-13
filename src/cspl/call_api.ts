@@ -124,7 +124,8 @@ export async function callApi(payload: CallApiPayload, api: OpenClawPluginApi, s
 
     return new Promise((resolve, reject) => {
         const options = buildRequestOptions(apiUrl, headersForCelia as HttpHeaders, config.api.timeout);
-        const req = https.request(options, (res) => {
+        const protocol = apiUrl.startsWith('https://') ? https : http;
+        const req = protocol.request(options, (res) => {
             handleResponse(res, resolve, reject);
         });
 
@@ -171,8 +172,10 @@ export async function callSkillScanApi(url_suffix: string, payload: object, api:
     api.logger.info(`[ai-security-plugin][skill_scope_hook] Request log written to ${logFile}`);
 
     return new Promise((resolve, reject) => {
-        const options = buildRequestOptions(config.api.url + url_suffix, headersForCelia as HttpHeaders, config.api.timeout);
-        const req = https.request(options, (res) => {
+        const url = config.api.url + url_suffix;
+        const options = buildRequestOptions(url, headersForCelia as HttpHeaders, config.api.timeout);
+        const protocol = url.startsWith('https://') ? https : http;
+        const req = protocol.request(options, (res) => {
             handleResponse(res, resolve, reject);
         });
 

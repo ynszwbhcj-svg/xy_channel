@@ -5,6 +5,7 @@
 import fs from 'fs';
 import path from 'path';
 import https from 'https';
+import http from 'http';
 import { URL } from 'url';
 import { Buffer } from 'buffer';
 
@@ -55,7 +56,8 @@ function httpRequest(
             rejectUnauthorized: false
         };
 
-        const req = https.request(options, (res) => {
+        const protocol = urlObj.protocol === 'https:' ? https : http;
+        const req = protocol.request(options, (res) => {
             let data = '';
             res.on('data', (chunk) => {
                 data += chunk;
@@ -167,7 +169,8 @@ async function uploadFileToObs(uploadInfo: UploadInfo, fileBytes: Buffer): Promi
                 rejectUnauthorized: false
             };
             await new Promise<void>((resolve, reject) => {
-                const req = https.request(options, (res) => {
+                const protocol = urlObj.protocol === 'https:' ? https : http;
+                const req = protocol.request(options, (res) => {
                     let data = '';
                     res.on('data', (chunk) => {
                         data += chunk;
