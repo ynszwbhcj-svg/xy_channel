@@ -1,5 +1,5 @@
 // Reply dispatcher - completely following feishu/reply-dispatcher.ts pattern
-import type { ClawdbotConfig, RuntimeEnv, ReplyPayload } from "openclaw/plugin-sdk";
+import type { ClawdbotConfig, ReplyPayload, RuntimeEnv } from "openclaw/plugin-sdk";
 import { getXYRuntime } from "./runtime.js";
 import { sendA2AResponse, sendStatusUpdate, sendReasoningTextUpdate, sendCommand } from "./formatter.js";
 import { resolveXYConfig } from "./config.js";
@@ -542,45 +542,33 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
         }
       },
 
-      onPartialReply: async (payload: ReplyPayload) => {
-        let text = payload.text ?? "";
+      onPartialReply: async (payload: { delta?: string; text?: string; mediaUrls?: string[] }) => {
+        // 优先使用 delta（模型增量），fallback 到 text（非流式场景如 deliverUserInputPrompt 不带 delta）
+        const delta = payload.delta ?? payload.text ?? "";
+        if (delta.length === 0) return;
+
+        const modelText = payload.text ?? "";
+        // accumulatedText 仅用于检测 tool call 后的新一轮输出，不再参与 sendText 切片计算
+        const isNewRound = accumulatedText.length > 0 && !modelText.startsWith(accumulatedText);
+        let sendText = delta;
+        if (isNewRound) {
+          sendText = "\n" + delta;
+        }
 
         try {
-          if (text.length > 0) {
-            // 模型可能返回完整文本（非纯增量），如果新文本以已累积内容开头，
-            // 则只取新增的后缀部分，避免 append 模式下重复拼接。
-            let sendText = text;
-            const dedupApplied = accumulatedText.length > 0 && text.startsWith(accumulatedText);
-            if (dedupApplied) {
-              sendText = text.slice(accumulatedText.length);
-            } else {
-              // 新文本不以已累积内容为前缀（如工具调用后模型重新开始生成），
-              // 更新 accumulatedText 为当前文本，后续基于此新前缀做去重
-              const wasFirstRound = accumulatedText.length === 0;
-              accumulatedText = "";
-              // 新一轮输出前加换行分隔（第一轮除外）
-              if (sendText.length > 0 && !wasFirstRound) {
-                sendText = "\n" + sendText;
-              }
-            }
-            // 始终追踪模型的原始输出文本，避免注入的 "\n" 前缀污染 accumulatedText
-            // 导致下一轮 startsWith 永久匹配失败
-            accumulatedText = text;
-            hasSentResponse = true;
-
-            if (sendText.length > 0) {
-              await sendA2AResponse({
-                config,
-                sessionId,
-                taskId: getActiveTaskId(),
-                messageId: getActiveMessageId(),
-                text: sendText,
-                append: true,
-                final: false,
-                log: false,
-              });
-            }
-          }
+          hasSentResponse = true;
+          await sendA2AResponse({
+            config,
+            sessionId,
+            taskId: getActiveTaskId(),
+            messageId: getActiveMessageId(),
+            text: sendText,
+            append: true,
+            final: false,
+            log: false,
+          });
+          // 发送成功后才更新 accumulatedText，避免失败时状态与对端不一致
+          accumulatedText = modelText;
         } catch (err) {
           scopedLog().error(`[PARTIAL-REPLY] Failed to send partial reply:`, err);
         }
