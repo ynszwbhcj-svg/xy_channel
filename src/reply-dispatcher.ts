@@ -228,9 +228,10 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
   let finalSent = false;
   let accumulatedText = "";
   let finalReplyText = "";
-  // 串行化 onPartialReply 的 sendA2AResponse 调用，避免 SDK fire-and-forget 模式下
-  // typingSignals.signalTextDelta 的异步 I/O 导致 ws.send 乱序。
-  let partialSendChain: Promise<void> = Promise.resolve();
+  // 串行化 onPartialReply 回调的进入，避免 SDK fire-and-forget 模式下
+  // typingSignals.signalTextDelta 的异步 I/O 导致多个回调并发执行，
+  // 进而造成 accumulatedText 错乱和 ws.send 乱序。
+  let processingLock: Promise<void> = Promise.resolve();
   const initialRunCrossTaskContext = getCurrentSessionContext()?.runCrossTaskContext;
 
   const getRunCrossTaskContext = (): RunCrossTaskContext | undefined => {
@@ -432,8 +433,8 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
               scopedLog().log(`[ON-IDLE] Sent completion status update`);
 
               // 🔑 使用动态taskId发送最终响应（空字符串表示流结束）
-              // 确保在所有的 partial 都发送完之后再发送 final 帧
-              await partialSendChain;
+              // 确保在所有的 partial 都处理完之后再发送 final 帧
+              await processingLock;
               await sendA2AResponse({
                 config,
                 sessionId,
@@ -605,48 +606,54 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
         // 不 await），经过 reply-turn-admission 层的 handlePartialForTyping
         // 还会先 await typingSignals.signalTextDelta。如果 typing 未禁用，
         // 这个异步 I/O 会导致多个 onPartialReply 调用并发进入本回调，
-        // 造成 accumulatedText 的 startsWith 去重和 ws.send 顺序都不可控。
+        // 造成 accumulatedText 错乱和 ws.send 乱序。
         //
-        // 通过 partialSendChain 把所有文本去重 + 发送串行化，从根本上杜绝乱序。
+        // 通过 processingLock 串行化回调的进入（类似飞书的 partialUpdateQueue），
+        // 确保同一时刻只有一个回调在操作 accumulatedText 和发送。
+        // 注意：不能用 Promise 链（.then），因为链只串行化发送，
+        // 不串行化回调本身——如果回调乱序到达，链上的 accumulatedText 就已经是错的。
 
-        // 同步置位，防止 deliver 在链处理完成前重复发送
         hasSentResponse = true;
 
         const textCaptured = text;
-        partialSendChain = partialSendChain.then(async () => {
-          try {
-            if (textCaptured.length === 0) return;
-
-            const { delta, accumulated } = resolveStreamingDelta(accumulatedText, textCaptured);
-            let sendText = delta;
-
-            // 如果新旧文本没有任何关联（resolveStreamingDelta 兜底），
-            // 说明是工具调用后模型开始新一轮输出，加换行分隔
-            if (delta === textCaptured && accumulatedText.length > 0) {
-              sendText = "\n" + delta;
-            }
-
-            accumulatedText = accumulated;
-
-            if (sendText.length > 0) {
-              await sendA2AResponse({
-                config,
-                sessionId,
-                taskId: getActiveTaskId(),
-                messageId: getActiveMessageId(),
-                text: sendText,
-                append: true,
-                final: false,
-                log: false,
-              });
-            }
-          } catch (err) {
-            scopedLog().error(`[PARTIAL-REPLY] Chain send failed:`, err);
-          }
+        const prevLock = processingLock;
+        let releaseLock: () => void;
+        processingLock = new Promise<void>((resolve) => {
+          releaseLock = resolve;
         });
 
-        // 等待当前链完成，提供背压，防止回调过早返回
-        await partialSendChain;
+        try {
+          await prevLock;
+
+          if (textCaptured.length === 0) return;
+
+          const { delta, accumulated } = resolveStreamingDelta(accumulatedText, textCaptured);
+          let sendText = delta;
+
+          // 新旧文本无关联（工具调用后的新一轮输出），加换行分隔。
+          if (delta === textCaptured && accumulatedText.length > 0) {
+            sendText = "\n" + delta;
+          }
+
+          accumulatedText = accumulated;
+
+          if (sendText.length > 0) {
+            await sendA2AResponse({
+              config,
+              sessionId,
+              taskId: getActiveTaskId(),
+              messageId: getActiveMessageId(),
+              text: sendText,
+              append: true,
+              final: false,
+              log: false,
+            });
+          }
+        } catch (err) {
+          scopedLog().error(`[PARTIAL-REPLY] Failed to send partial reply:`, err);
+        } finally {
+          releaseLock!();
+        }
       },
     },
     markDispatchIdle,
