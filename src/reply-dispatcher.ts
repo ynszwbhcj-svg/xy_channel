@@ -110,7 +110,10 @@ function resolveStreamingDelta(
   const prev = previousText;
   const next = nextFullText;
   if (!next) return { delta: "", accumulated: prev };
-  if (!prev || next === prev) return { delta: "", accumulated: next };
+  // 首次调用：全文即为增量
+  if (!prev) return { delta: next, accumulated: next };
+  // 完全重复：无需发送
+  if (next === prev) return { delta: "", accumulated: next };
 
   // 正常追加：新文本以旧文本开头 → 只取增量后缀
   if (next.startsWith(prev)) {
