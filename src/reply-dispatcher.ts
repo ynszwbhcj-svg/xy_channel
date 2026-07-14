@@ -515,6 +515,10 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
     dispatcher,
     replyOptions: {
       ...replyOptions,
+      // A2A 通道无需 typing indicator，禁用 typing 可让
+      // reply-turn-admission 层中的 signalTextDelta 变为 no-op，
+      // 从而消除导致 onPartialReply 回调乱序的异步 I/O 根源。
+      suppressTyping: true,
       suppressToolErrorWarnings: true,
       onModelSelected: prefixContext.onModelSelected,
 
