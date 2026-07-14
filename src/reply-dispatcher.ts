@@ -96,6 +96,52 @@ async function sendRunCrossTaskResult(params: {
 }
 
 /**
+ * 流式文本增量合并，参考飞书 mergeStreamingText。
+ * 在 SDK text_delta 可能乱序到达的场景下，比简单的 startsWith 更鲁棒。
+ *
+ * @param previousText - 已累积发送的全文
+ * @param nextFullText - SDK 返回的当前全文快照
+ * @returns { delta: 应发送的增量文本, accumulated: 新的累积全文 }
+ */
+function resolveStreamingDelta(
+  previousText: string,
+  nextFullText: string,
+): { delta: string; accumulated: string } {
+  const prev = previousText;
+  const next = nextFullText;
+  if (!next) return { delta: "", accumulated: prev };
+  if (!prev || next === prev) return { delta: "", accumulated: next };
+
+  // 正常追加：新文本以旧文本开头 → 只取增量后缀
+  if (next.startsWith(prev)) {
+    return { delta: next.slice(prev.length), accumulated: next };
+  }
+  // 短文本晚到：旧文本已包含新文本全部内容
+  if (prev.startsWith(next)) {
+    return { delta: "", accumulated: prev };
+  }
+  // 新文本包含旧文本（可能是 SDK replace 事件或重算）
+  if (next.includes(prev)) {
+    const idx = next.indexOf(prev);
+    return { delta: next.slice(idx + prev.length), accumulated: next };
+  }
+  // 旧文本包含新文本（无新内容）
+  if (prev.includes(next)) {
+    return { delta: "", accumulated: prev };
+  }
+  // 部分重叠：合并 suffix/prefix 交集
+  const maxOverlap = Math.min(prev.length, next.length);
+  for (let overlap = maxOverlap; overlap > 0; overlap -= 1) {
+    if (prev.slice(-overlap) === next.slice(0, overlap)) {
+      const tail = next.slice(overlap);
+      return { delta: tail, accumulated: prev + tail };
+    }
+  }
+  // 兜底：视为新一轮输出（工具调用后模型重新开始生成等）
+  return { delta: next, accumulated: next };
+}
+
+/**
  * 清理 /tmp/xy_channel 目录中超过 24 小时的旧文件
  */
 export async function cleanupStaleTempFiles(tempDir: string = "/tmp/xy_channel"): Promise<void> {
@@ -179,6 +225,9 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
   let finalSent = false;
   let accumulatedText = "";
   let finalReplyText = "";
+  // 串行化 onPartialReply 的 sendA2AResponse 调用，避免 SDK fire-and-forget 模式下
+  // typingSignals.signalTextDelta 的异步 I/O 导致 ws.send 乱序。
+  let partialSendChain: Promise<void> = Promise.resolve();
   const initialRunCrossTaskContext = getCurrentSessionContext()?.runCrossTaskContext;
 
   const getRunCrossTaskContext = (): RunCrossTaskContext | undefined => {
@@ -380,6 +429,8 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
               scopedLog().log(`[ON-IDLE] Sent completion status update`);
 
               // 🔑 使用动态taskId发送最终响应（空字符串表示流结束）
+              // 确保在所有的 partial 都发送完之后再发送 final 帧
+              await partialSendChain;
               await sendA2AResponse({
                 config,
                 sessionId,
@@ -543,30 +594,36 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
       },
 
       onPartialReply: async (payload: ReplyPayload) => {
-        let text = payload.text ?? "";
+        const text = payload.text ?? "";
 
-        try {
-          if (text.length > 0) {
-            // 模型可能返回完整文本（非纯增量），如果新文本以已累积内容开头，
-            // 则只取新增的后缀部分，避免 append 模式下重复拼接。
-            let sendText = text;
-            const dedupApplied = accumulatedText.length > 0 && text.startsWith(accumulatedText);
-            if (dedupApplied) {
-              sendText = text.slice(accumulatedText.length);
-            } else {
-              // 新文本不以已累积内容为前缀（如工具调用后模型重新开始生成），
-              // 更新 accumulatedText 为当前文本，后续基于此新前缀做去重
-              const wasFirstRound = accumulatedText.length === 0;
-              accumulatedText = "";
-              // 新一轮输出前加换行分隔（第一轮除外）
-              if (sendText.length > 0 && !wasFirstRound) {
-                sendText = "\n" + sendText;
-              }
+        if (text.length === 0) return;
+
+        // SDK 的 onPartialReply 是 fire-and-forget（selection-BP0T9R9I.js:4952
+        // 不 await），经过 reply-turn-admission 层的 handlePartialForTyping
+        // 还会先 await typingSignals.signalTextDelta。如果 typing 未禁用，
+        // 这个异步 I/O 会导致多个 onPartialReply 调用并发进入本回调，
+        // 造成 accumulatedText 的 startsWith 去重和 ws.send 顺序都不可控。
+        //
+        // 通过 partialSendChain 把所有文本去重 + 发送串行化，从根本上杜绝乱序。
+
+        // 同步置位，防止 deliver 在链处理完成前重复发送
+        hasSentResponse = true;
+
+        const textCaptured = text;
+        partialSendChain = partialSendChain.then(async () => {
+          try {
+            if (textCaptured.length === 0) return;
+
+            const { delta, accumulated } = resolveStreamingDelta(accumulatedText, textCaptured);
+            let sendText = delta;
+
+            // 如果新旧文本没有任何关联（resolveStreamingDelta 兜底），
+            // 说明是工具调用后模型开始新一轮输出，加换行分隔
+            if (delta === textCaptured && accumulatedText.length > 0) {
+              sendText = "\n" + delta;
             }
-            // 始终追踪模型的原始输出文本，避免注入的 "\n" 前缀污染 accumulatedText
-            // 导致下一轮 startsWith 永久匹配失败
-            accumulatedText = text;
-            hasSentResponse = true;
+
+            accumulatedText = accumulated;
 
             if (sendText.length > 0) {
               await sendA2AResponse({
@@ -580,10 +637,13 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
                 log: false,
               });
             }
+          } catch (err) {
+            scopedLog().error(`[PARTIAL-REPLY] Chain send failed:`, err);
           }
-        } catch (err) {
-          scopedLog().error(`[PARTIAL-REPLY] Failed to send partial reply:`, err);
-        }
+        });
+
+        // 等待当前链完成，提供背压，防止回调过早返回
+        await partialSendChain;
       },
     },
     markDispatchIdle,
