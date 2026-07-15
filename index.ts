@@ -54,15 +54,16 @@ function extractSkillNameFromPath(filePath: unknown): string | null {
 function registerSkillsDiagnosticHook(api: OpenClawPluginApi) {
   // Tool name → skill name mapping for direct tool-based skill usage logging
   const TOOL_SKILL_MAP: Record<string, string> = {
-    getCurrentLocation: "定位服务",
-    schedule: "日历",
-    memorandum: "备忘录",
-    gallery: "图库",
-    contact: "联系人",
-    file: "文件管理",
-    clock: "闹钟",
+    get_user_location: "定位服务",
+    get_calendar_tool_schema: "日历",
+    get_note_tool_schema: "备忘录",
+    get_photo_tool_schema: "图库",
+    get_contact_tool_schema: "联系人",
+    get_device_file_tool_schema: "文件管理",
+    get_alarm_tool_schema: "闹钟",
     message: "短信",
-    phone: "电话",
+    get_phone_tool_schema: "电话",
+    get_collection_tool_schema: "小艺帮记",
   };
 
   api.on("after_tool_call", async (event, _ctx) => {
