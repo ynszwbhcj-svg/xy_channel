@@ -1,23 +1,13 @@
 // Type definitions for log reporter framework
 
-/** Configuration for a single log file to monitor */
-export interface LogFileConfig {
-  /** File path with optional date wildcards: {year}, {month}, {day}, {year-month-day}, {year}{month}{day} */
+/** Configuration for a single log monitor (hardcoded) */
+export interface LogMonitorConfig {
+  /** File path with date wildcards: {year}, {month}, {day}, {year-month-day}, {year}{month}{day}, {hour}, {minute}, {second} */
   path: string;
-  /** Logical name used in .bak filename and reporting */
-  name: string;
-}
-
-/** Top-level log reporter configuration (loaded from JSON file) */
-export interface LogReporterConfig {
-  /** Scan interval in milliseconds (default: 600000 = 10 min) */
-  scanIntervalMs: number;
-  /** Directory for .bak files and cursor state */
-  bakDir: string;
-  /** Report server URL (mock for now) */
-  reportUrl: string;
-  /** Log files to monitor */
-  logFiles: LogFileConfig[];
+  /** Business type for reporting */
+  businessType: string;
+  /** Whether to parse JSON log lines (openclaw gateway format) */
+  jsonParse: boolean;
 }
 
 /** Cursor state for a single log file */
@@ -39,24 +29,16 @@ export interface CursorStore {
 export interface ScanResult {
   /** Resolved absolute file path */
   filePath: string;
-  /** Logical name from config */
-  name: string;
-  /** The new log lines (incremental content) */
+  /** Business type from monitor config */
+  businessType: string;
+  /** The new log lines (incremental content, may be parsed/formatted) */
   content: string;
-  /** Start line number (1-based, inclusive) */
-  lineStart: number;
-  /** End line number (1-based, inclusive) */
-  lineEnd: number;
-  /** Number of new lines */
-  newLineCount: number;
   /** Updated cursor to persist after successful upload */
   newCursor: FileCursor;
 }
 
 /** Options passed to startLogReporter */
 export interface LogReporterOptions {
-  /** Absolute path to the JSON config file */
-  configPath: string;
   /** File upload service instance (from xy_channel) */
   uploadService: UploadService;
 }
@@ -64,4 +46,23 @@ export interface LogReporterOptions {
 /** Minimal interface for the upload service (duck-typed from XYFileUploadService) */
 export interface UploadService {
   uploadFileAndGetUrl(filePath: string, objectType?: string): Promise<string>;
+}
+
+/** A single log file entry in the report payload */
+export interface ReportLogFileEntry {
+  businessType: string;
+  fileUrl: string;
+}
+
+/** Report payload sent to the sync API */
+export interface ReportPayload {
+  instanceId: string;
+  logFiles: ReportLogFileEntry[];
+}
+
+/** Environment config read from .xiaoyienv */
+export interface LogReporterEnv {
+  serviceUrl: string;
+  apiKey: string;
+  uid: string;
 }

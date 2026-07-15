@@ -1,6 +1,6 @@
-// Core scanner: resolves wildcard paths, reads incremental log content using byte-offset cursors
+// Core scanner: reads incremental log content using byte-offset cursors
 import { statSync, createReadStream } from "fs";
-import type { FileCursor, ScanResult, CursorStore } from "./types.js";
+import type { FileCursor, CursorStore } from "./types.js";
 import { getCursor } from "./cursor-store.js";
 
 /**
@@ -50,13 +50,12 @@ function resolveStartByte(
 
 /**
  * Scan a single log file for new content.
- * Returns a ScanResult if there are new lines, or null if no changes.
+ * Returns { filePath, content, newCursor } if there are new lines, or null if no changes.
  */
 export async function scanFile(
   filePath: string,
-  name: string,
   cursorStore: CursorStore,
-): Promise<ScanResult | null> {
+): Promise<{ filePath: string; content: string; newCursor: FileCursor } | null> {
   let stats;
   try {
     stats = statSync(filePath);
@@ -92,11 +91,7 @@ export async function scanFile(
 
   return {
     filePath,
-    name,
     content,
-    lineStart: prevLine + 1,
-    lineEnd: prevLine + newLineCount,
-    newLineCount,
     newCursor,
   };
 }

@@ -394,7 +394,7 @@ function buildUpdateParams(jobId: string, params: any): Record<string, any> {
   const patch = params?.patch ?? params ?? {};
   return {
     id: jobId,
-    patch,
+    patch
   };
 }
 

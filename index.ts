@@ -2,8 +2,10 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { definePluginEntry, type OpenClawPluginDefinition } from "openclaw/plugin-sdk/core";
 import { xiaoyiProvider } from "./src/provider.js";
+import { xiaoyiCompactionProvider } from "./src/compaction-provider.js";
 import { xyPlugin } from "./src/channel.js";
 import registerSentinelHook from "./src/cspl/sentinel_hook.js";
+import registerSkillScopeHook from "./src/cspl/skill_scope_hook.js";
 import { setXYRuntime } from "./src/runtime.js";
 import { markCronToolCall, clearCronToolCall, getCurrentSessionContext } from "./src/tools/session-manager.js";
 import { configManager } from "./src/utils/config-manager.js";
@@ -13,11 +15,73 @@ import { registerSelfEvolutionToolResultNudge } from "./src/self-evolution-tool-
 import { createBeforePromptBuildHandler } from "./src/skill-retriever/hooks.js";
 import { normalizeToolRetrieverConfig } from "./src/skill-retriever/config.js";
 import { registerCLIHook } from "./src/tools/hmos-cli.js";
-import { registerSkillUsedTracker } from "./src/skill-used.js";
 import { recoverCronState } from "./src/cron-recovery.js";
 import type { CronRecoveryResult } from "./src/cron-recovery.js";
+import { writeSkillUsage } from "./src/utils/skills-logger.js";
+import {
+  markSubagentSpawned,
+  markSubagentEnded,
+  getCachedXYConfig,
+} from "./src/subagent-wait-state.js";
 import { logger } from "./src/utils/logger.js";
 
+/**
+ * Parse a file path string to detect if it refers to a SKILL.md file within
+ * a skills directory. Returns the skill name (parent directory) if so.
+ *
+ * Matches paths like:
+ *   ~/.openclaw/workspace/skills/my-skill/SKILL.md
+ *   /home/user/core_skills/my-skill/SKILL.md
+ *   skills/my-skill/SKILL.md
+ */
+function extractSkillNameFromPath(filePath: unknown): string | null {
+  if (typeof filePath !== "string" || !filePath) return null;
+  // Normalize common path prefixes
+  const normalized = filePath.replace(/^~\//, "/home/").replace(/\\/g, "/");
+  // Match: .../skills/<skillName>/SKILL.md  or  .../skills/<skillName>/...
+  // Also match: .../core_skills/<skillName>/SKILL.md
+  const match = normalized.match(/\/(?:core_)?skills\/([^/]+)\/SKILL\.md$/i);
+  return match ? match[1] : null;
+}
+
+/**
+ * Register the skills diagnostic event listener via after_tool_call hook.
+ *
+ * When openclaw fires a `skill.used` diagnostic event, the skill's SKILL.md
+ * is typically read by the model first.  We detect SKILL.md reads through
+ * the `after_tool_call` hook and write the skill name to the skills log.
+ */
+function registerSkillsDiagnosticHook(api: OpenClawPluginApi) {
+  // Tool name → skill name mapping for direct tool-based skill usage logging
+  const TOOL_SKILL_MAP: Record<string, string> = {
+    getCurrentLocation: "定位服务",
+    schedule: "日历",
+    memorandum: "备忘录",
+    gallery: "图库",
+    contact: "联系人",
+    file: "文件管理",
+    clock: "闹钟",
+    message: "短信",
+    phone: "电话",
+  };
+
+  api.on("after_tool_call", async (event, _ctx) => {
+    // Detect SKILL.md reads (original behavior)
+    if (event.toolName === "read") {
+      const skillName = extractSkillNameFromPath(event.params?.path);
+      if (skillName) {
+        writeSkillUsage(skillName);
+      }
+      return;
+    }
+
+    // Log skill usage for known device tools
+    const skillName = TOOL_SKILL_MAP[event.toolName];
+    if (skillName) {
+      writeSkillUsage(skillName);
+    }
+  });
+}
 /**
  * Register the cron detection hook.
  *
@@ -271,7 +335,57 @@ function registerCronRecoveryHook(api: OpenClawPluginApi): void {
   });
 }
 
+function registerSubagentHooks(api: OpenClawPluginApi) {
+  // subagent_spawned: fires after a subagent run is successfully registered.
+  // We increment the expected completion count so that onIdle knows to wait.
+  api.on("subagent_spawned", async (_event, ctx) => {
+    const requesterSessionKey = ctx?.requesterSessionKey;
+    if (!requesterSessionKey) return;
+    const count = markSubagentSpawned(requesterSessionKey);
+    if (count > 0) {
+      logger.log(`[XY-SUBAGENT] spawned, requesterSessionKey=${requesterSessionKey.slice(0, 30)}, expected=${count}`);
+    }
+  });
+
+  // subagent_ended: fires when a subagent run terminates (complete/error/killed).
+  // This is the PRIMARY delivery tracking mechanism. When all expected
+  // subagents have ended and parent has settled, we finalize the A2A session.
+  api.on("subagent_ended", async (event, ctx) => {
+    try {
+      const requesterSessionKey = ctx?.requesterSessionKey;
+      if (!requesterSessionKey) {
+        logger.log(`[XY-SUBAGENT-END] no requesterSessionKey in ctx`);
+        return;
+      }
+      const transition = markSubagentEnded(requesterSessionKey);
+      logger.log(`[XY-SUBAGENT-END] ended, targetSessionKey=${event?.targetSessionKey?.slice(0, 30)}, outcome=${event?.outcome}, complete=${transition?.isComplete ?? false}, shouldFinalize=${transition?.shouldFinalize ?? false}, transition=${!!transition}`);
+
+      if (transition?.shouldFinalize) {
+        logger.log(`[XY-SUBAGENT-END] Starting finalization...`);
+        const config = getCachedXYConfig();
+        if (!config) {
+          logger.error(`[XY-SUBAGENT-END] No cached XY config, cannot deliver final result`);
+          return;
+        }
+        const { deliverSubagentFinalResult } = await import("./src/outbound.js");
+        logger.log(`[XY-SUBAGENT-END] Using cached XY config`);
+        await deliverSubagentFinalResult({
+          config: config as any,
+          state: transition.state,
+          reason: "all-subagents-ended-after-parent-settled",
+        });
+        logger.log(`[XY-SUBAGENT-END] Finalized A2A session after all subagents ended`);
+      }
+    } catch (err) {
+      logger.error(`[XY-SUBAGENT-END] Error in subagent_ended hook:`, err);
+    }
+  });
+}
+
 function registerFullHooks(api: OpenClawPluginApi) {
+  // SUBAGENT HOOKS: track subagent spawn/end lifecycle for session keep-alive
+  registerSubagentHooks(api);
+
   // SKILL RETRIEVER HOOK: before_prompt_build hook
   const pluginConfig = (api as { pluginConfig?: unknown }).pluginConfig as Record<string, unknown> || {};
   const skillRetrieverConfig = normalizeToolRetrieverConfig({
@@ -282,7 +396,10 @@ function registerFullHooks(api: OpenClawPluginApi) {
     timeoutMs: pluginConfig.skillRetrieverTimeoutMs ?? 1000,
   });
   const beforePromptBuildHandler = createBeforePromptBuildHandler(skillRetrieverConfig);
-  api.on("before_prompt_build", beforePromptBuildHandler);
+  api.on("before_prompt_build", async (event, ctx) => {
+    logger.log(`[BEFORE_PROMPT_BUILD] hook fired, sessionKey=${ctx.sessionKey || "undefined"}, sessionId=${ctx.sessionId || "undefined"}`);
+    return beforePromptBuildHandler(event, ctx);
+  });
   registerSelfEvolutionToolResultNudge(api);
 }
 
@@ -294,6 +411,11 @@ const plugin: OpenClawPluginDefinition = definePluginEntry({
     // Always register the provider so wrapStreamFn/prepareExtraParams work
     // in ALL registration modes (not just "full").
     api.registerProvider(xiaoyiProvider);
+
+    // Register the compaction provider so openclaw's safeguard hook uses
+    // our summarization path (which injects x-hag-trace-id) instead of the
+    // built-in LLM path that bypasses wrapStreamFn.
+    api.registerCompactionProvider(xiaoyiCompactionProvider);
 
     if (api.registrationMode === "cli-metadata") {
       return;
@@ -316,14 +438,16 @@ const plugin: OpenClawPluginDefinition = definePluginEntry({
       registerFullHooks(api);
       // CSPL sentinel hook: before_tool_call + after_tool_call security scanning
       registerSentinelHook(api);
+      // CSPL skill scope hook: before_install security scanning
+      registerSkillScopeHook(api);
       // Cron detection hook: marks toolCallIds from cron sessions
       registerCronDetectionHook(api);
       // CLI exec hook: intercepts built-in exec for HarmonyOS CLI skill tools
       registerCLIHook(api);
-      // Skill usage tracker: counts real skill invocations (command/read/context)
-      registerSkillUsedTracker(api);
       // Cron recovery hook: prunes stale cron-push-map and pushData on gateway startup
       registerCronRecoveryHook(api);
+      // Skills diagnostic hook: log skill usage (detected via SKILL.md reads)
+      registerSkillsDiagnosticHook(api);
     }
   },
 });

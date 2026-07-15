@@ -12,7 +12,7 @@ import { logger } from "./utils/logger.js";
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 import { getCurrentSessionContext, setCurrentCronJobId } from "./tools/session-manager.js";
 import { selfEvolutionManager } from "./utils/self-evolution-manager.js";
-import { notifyModelStreaming } from "./bot.js";
+import { setCompactionConfig, setCompactionSessionSnapshot } from "./compaction-provider.js";
 
 // ── Retry config ──────────────────────────────────────────────
 const RETRY_DELAYS_MS = [10_000, 20_000, 40_000, 60_000, 60_000];
@@ -259,6 +259,15 @@ const HEADER_SESSION_ID = "x-session-id";
 const HEADER_INTERACTION_ID = "x-interaction-id";
 /** Internal key for passing fallback uid prefix from prepareExtraParams to wrapStreamFn. */
 const FALLBACK_PREFIX_KEY = "_xiaoyi_fallback_prefix";
+
+// Module-level cache of the most recent trace context.
+// resolveDynamicModel reads these so the LLM compaction path (which bypasses
+// wrapStreamFn) still gets x-hag-trace-id on model.headers.
+let globalTraceContext: {
+  traceId: string;
+  sessionId: string;
+  interactionId: string;
+} | null = null;
 const SELF_EVOLUTION_PROMPT_BEGIN = "<self_evolution_prompt>";
 const SELF_EVOLUTION_PROMPT_END = "</self_evolution_prompt>";
 const SELF_EVOLUTION_ENABLED_PROMPT_SECTION = `
@@ -486,8 +495,19 @@ export const xiaoyiProvider: ProviderPlugin = {
       contextWindow: 256_000,
       maxTokens: 8192,
       ...(ctx.providerConfig?.headers && typeof ctx.providerConfig.headers === "object"
-        ? { headers: ctx.providerConfig.headers as Record<string, string> }
-        : {}),
+        ? { headers: {
+            ...ctx.providerConfig.headers as Record<string, string>,
+            ...(globalTraceContext ? {
+              [HEADER_TRACE_ID]: globalTraceContext.traceId,
+              [HEADER_SESSION_ID]: globalTraceContext.sessionId,
+              [HEADER_INTERACTION_ID]: globalTraceContext.interactionId,
+            } : {}),
+          } }
+        : (globalTraceContext ? { headers: {
+            [HEADER_TRACE_ID]: globalTraceContext.traceId,
+            [HEADER_SESSION_ID]: globalTraceContext.sessionId,
+            [HEADER_INTERACTION_ID]: globalTraceContext.interactionId,
+          } } : {})),
     };
   },
 
@@ -500,6 +520,33 @@ export const xiaoyiProvider: ProviderPlugin = {
   prepareExtraParams: (ctx) => {
     const uid = getUidFromConfig(ctx.config);
     if (!uid) return undefined;
+
+    // Store config for CompactionProvider so it can make LLM calls
+    // with proper x-hag-trace-id headers during compaction summarization.
+    const cfg = ctx.config as Record<string, unknown> | undefined;
+    const modelsConfig = cfg?.models as Record<string, Record<string, unknown>> | undefined;
+    const xiaoyiProviderConfig = modelsConfig?.providers?.xiaoyiprovider as
+      | Record<string, unknown>
+      | undefined;
+    const zaiProviderConfig = modelsConfig?.providers?.zai as Record<string, unknown> | undefined;
+    const baseUrl =
+      (typeof xiaoyiProviderConfig?.baseUrl === "string"
+        ? xiaoyiProviderConfig.baseUrl
+        : undefined) ??
+      (typeof zaiProviderConfig?.baseUrl === "string" ? zaiProviderConfig.baseUrl : undefined);
+
+    if (baseUrl) {
+      setCompactionConfig({
+        uid,
+        baseUrl,
+        modelName: typeof ctx.modelId === "string" ? ctx.modelId : "LLM_DeepSeekV4_Think",
+        apiKey:
+          typeof xiaoyiProviderConfig?.apiKey === "string"
+            ? (xiaoyiProviderConfig.apiKey as string)
+            : undefined,
+      });
+    }
+
     return {
       ...ctx.extraParams,
       [FALLBACK_PREFIX_KEY]: encodeUid(uid),
@@ -615,20 +662,26 @@ export const xiaoyiProvider: ProviderPlugin = {
         }
       }
 
+      // Cache trace context globally so resolveDynamicModel can inject
+      // x-hag-trace-id into model.headers for the LLM compaction path.
+      if (dynamicHeaders[HEADER_TRACE_ID]) {
+        globalTraceContext = {
+          traceId: dynamicHeaders[HEADER_TRACE_ID],
+          sessionId: dynamicHeaders[HEADER_SESSION_ID] ?? dynamicHeaders[HEADER_TRACE_ID],
+          interactionId: dynamicHeaders[HEADER_INTERACTION_ID] ?? dynamicHeaders[HEADER_TRACE_ID],
+        };
+      }
+
       // 记录输入
       logger.log(`[xiaoyiprovider] input messages count: ${context.messages?.length ?? 0}`);
 
-      // 🔑 通知 steer 队列：模型 API 已被调用，此时 isStreaming 一定为 true
-      const sessionCtx = getCurrentSessionContext();
-      if (sessionCtx?.sessionId) {
-        notifyModelStreaming(sessionCtx.sessionId);
-      }
       if (context.systemPrompt) {
         logger.log(`[xiaoyiprovider] system prompt length: ${context.systemPrompt.length}`);
       }
       // deviceType: prefer text-extracted value, ALS as fallback.
+      const sessionCtx = getCurrentSessionContext();
       const deviceType = extractedDeviceType
-        ?? getCurrentSessionContext()?.deviceType;
+        ?? sessionCtx?.deviceType;
 
       // app_ver and sdk_api_version from session context (ALS)
       const appVer = sessionCtx?.appVer;
@@ -638,6 +691,51 @@ export const xiaoyiProvider: ProviderPlugin = {
       }
       if (sdkApiVersion) {
         logger.log(`[xiaoyiprovider] sdk_api_version: ${sdkApiVersion}`);
+      }
+
+      // Capture the resolved session snapshot for CompactionProvider.
+      // During compaction, getCurrentSessionContext() returns null because
+      // compaction runs outside the original A2A async scope. By storing
+      // the snapshot from the last normal request, the CompactionProvider
+      // can reuse the same A2A traceId/sessionId/devicetype and auth
+      // headers in its summarization API call.
+      if (dynamicHeaders[HEADER_TRACE_ID]) {
+        const requestHeaders: Record<string, string> = {};
+        if (options?.headers) {
+          for (const [key, value] of Object.entries(options.headers)) {
+            if (typeof value === "string") {
+              requestHeaders[key] = value;
+            }
+          }
+        }
+        // model.headers comes from resolveDynamicModel — streamSimple
+        // reads these directly when building the HTTP request.
+        const modelHeaders: Record<string, string> = {};
+        if (model?.headers) {
+          for (const [key, value] of Object.entries(model.headers as Record<string, unknown>)) {
+            if (typeof value === "string") {
+              modelHeaders[key] = value;
+            }
+          }
+        }
+        const apiKey = typeof options?.apiKey === "string" ? options.apiKey : undefined;
+        logger.log(
+          `[compaction-provider] capturing snapshot: hasApiKey=${!!apiKey} ` +
+            `requestHeaders=[${Object.keys(requestHeaders).join(",")}] ` +
+            `modelHeaders=[${Object.keys(modelHeaders).join(",")}] ` +
+            `traceId=${dynamicHeaders[HEADER_TRACE_ID]}`,
+        );
+        setCompactionSessionSnapshot({
+          traceId: dynamicHeaders[HEADER_TRACE_ID] ?? "",
+          sessionId: dynamicHeaders[HEADER_SESSION_ID] ?? "",
+          interactionId: dynamicHeaders[HEADER_INTERACTION_ID] ?? "",
+          deviceType: deviceType ?? undefined,
+          appVer: appVer ?? undefined,
+          sdkApiVersion: sdkApiVersion ?? undefined,
+          requestHeaders: Object.keys(requestHeaders).length > 0 ? requestHeaders : undefined,
+          modelHeaders: Object.keys(modelHeaders).length > 0 ? modelHeaders : undefined,
+          apiKey: apiKey ?? undefined,
+        });
       }
 
       // 在发送给模型前，优化 systemPrompt 结构

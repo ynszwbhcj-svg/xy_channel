@@ -15,7 +15,24 @@
 //
 // Registered as a gateway_start hook so migration runs automatically.
 
-import { DatabaseSync, type SQLInputValue } from "node:sqlite";
+import { createRequire } from "node:module";
+const nodeRequire = createRequire(import.meta.url);
+const { DatabaseSync } = nodeRequire("node:sqlite") as {
+  DatabaseSync: new (path: string) => SqliteDb;
+};
+
+// Minimal local interface for node:sqlite (avoiding missing type defs with @types/node@^20)
+interface SqliteDb {
+  exec(sql: string): void;
+  prepare(sql: string): SqliteStmt;
+  close(): void;
+}
+interface SqliteStmt {
+  run(...values: unknown[]): unknown;
+  all(...values: unknown[]): Array<Record<string, unknown>>;
+  get(...values: unknown[]): Record<string, unknown> | undefined;
+}
+
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
@@ -343,12 +360,12 @@ async function loadLegacyCronStore(): Promise<{
 /**
  * Open the shared state database.
  *
- * Returns a DatabaseSync handle or null if the database cannot be opened.
+ * Returns a SqliteDb handle or null if the database cannot be opened.
  * Distinguishes between "file not found" (returns null with clear diag) and
  * "database locked / busy" (retries up to 5 times with backoff, then returns
  * null with a distinct error message).
  */
-function openStateDb(): DatabaseSync | null {
+function openStateDb(): SqliteDb | null {
   const dbPath = STATE_DB_PATH;
   const dbDir = path.dirname(dbPath);
 
@@ -661,7 +678,7 @@ const CRON_JOB_COLUMNS = [
   "schedule_identity", "sort_order", "description",
 ];
 
-function insertCronJobs(db: DatabaseSync, storeKey: string, rows: CronJobRow[]): void {
+function insertCronJobs(db: SqliteDb, storeKey: string, rows: CronJobRow[]): void {
   if (rows.length === 0) return;
 
   // Delete existing rows for this store to allow idempotent re-import
@@ -673,7 +690,7 @@ function insertCronJobs(db: DatabaseSync, storeKey: string, rows: CronJobRow[]):
   );
 
   for (const row of rows) {
-    insert.run(...CRON_JOB_COLUMNS.map((col) => (row as unknown as Record<string, unknown>)[col] as SQLInputValue));
+    insert.run(...CRON_JOB_COLUMNS.map((col) => (row as unknown as Record<string, unknown>)[col]));
   }
 
   logger.log(

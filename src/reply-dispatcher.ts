@@ -5,6 +5,11 @@ import { sendA2AResponse, sendStatusUpdate, sendReasoningTextUpdate, sendCommand
 import { resolveXYConfig } from "./config.js";
 import type { A2ACommand, RunCrossTaskContext, XYChannelConfig } from "./types.js";
 import { clearRunCrossTaskSentFiles, getCurrentSessionContext } from "./tools/session-manager.js";
+import {
+  getWaitState,
+  clearWaitState,
+  attachHeartbeat,
+} from "./subagent-wait-state.js";
 import fs from "fs/promises";
 import path from "path";
 import { logger } from "./utils/logger.js";
@@ -91,6 +96,55 @@ async function sendRunCrossTaskResult(params: {
 }
 
 /**
+ * 流式文本增量合并，参考飞书 mergeStreamingText。
+ * 在 SDK text_delta 可能乱序到达的场景下，比简单的 startsWith 更鲁棒。
+ *
+ * @param previousText - 已累积发送的全文
+ * @param nextFullText - SDK 返回的当前全文快照
+ * @returns { delta: 应发送的增量文本, accumulated: 新的累积全文 }
+ */
+function resolveStreamingDelta(
+  previousText: string,
+  nextFullText: string,
+): { delta: string; accumulated: string } {
+  const prev = previousText;
+  const next = nextFullText;
+  if (!next) return { delta: "", accumulated: prev };
+  // 首次调用：全文即为增量
+  if (!prev) return { delta: next, accumulated: next };
+  // 完全重复：无需发送
+  if (next === prev) return { delta: "", accumulated: next };
+
+  // 正常追加：新文本以旧文本开头 → 只取增量后缀
+  if (next.startsWith(prev)) {
+    return { delta: next.slice(prev.length), accumulated: next };
+  }
+  // 短文本晚到：旧文本已包含新文本全部内容
+  if (prev.startsWith(next)) {
+    return { delta: "", accumulated: prev };
+  }
+  // 新文本包含旧文本（可能是 SDK replace 事件或重算）
+  if (next.includes(prev)) {
+    const idx = next.indexOf(prev);
+    return { delta: next.slice(idx + prev.length), accumulated: next };
+  }
+  // 旧文本包含新文本（无新内容）
+  if (prev.includes(next)) {
+    return { delta: "", accumulated: prev };
+  }
+  // 部分重叠：合并 suffix/prefix 交集
+  const maxOverlap = Math.min(prev.length, next.length);
+  for (let overlap = maxOverlap; overlap > 0; overlap -= 1) {
+    if (prev.slice(-overlap) === next.slice(0, overlap)) {
+      const tail = next.slice(overlap);
+      return { delta: tail, accumulated: prev + tail };
+    }
+  }
+  // 兜底：视为新一轮输出（工具调用后模型重新开始生成等）
+  return { delta: next, accumulated: next };
+}
+
+/**
  * 清理 /tmp/xy_channel 目录中超过 24 小时的旧文件
  */
 export async function cleanupStaleTempFiles(tempDir: string = "/tmp/xy_channel"): Promise<void> {
@@ -174,6 +228,10 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
   let finalSent = false;
   let accumulatedText = "";
   let finalReplyText = "";
+  // 串行化 onPartialReply 回调的进入，避免 SDK fire-and-forget 模式下
+  // typingSignals.signalTextDelta 的异步 I/O 导致多个回调并发执行，
+  // 进而造成 accumulatedText 错乱和 ws.send 乱序。
+  let processingLock: Promise<void> = Promise.resolve();
   const initialRunCrossTaskContext = getCurrentSessionContext()?.runCrossTaskContext;
 
   const getRunCrossTaskContext = (): RunCrossTaskContext | undefined => {
@@ -296,6 +354,47 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
           return;
         }
 
+        // ── Subagent wait state check ─────────────────────────────
+        // If this session has pending subagent completions, suppress final:true
+        // and keep the A2A session alive. The final response will be sent when
+        // all completions arrive via xyOutbound.sendText interception.
+        const waitState = getWaitState(sessionId, taskId);
+        if (
+          waitState &&
+          waitState.deliveredCompletions < waitState.expectedCompletions &&
+          !finalSent
+        ) {
+          scopedLog().log(
+            `[ON-IDLE] Waiting for subagent completions ${waitState.deliveredCompletions}/${waitState.expectedCompletions}, suppressing final:true`,
+          );
+          try {
+            await sendStatusUpdate({
+              config,
+              sessionId,
+              taskId,
+              messageId,
+              text: "子任务正在处理中，请稍候~",
+              state: "working",
+            });
+          } catch (err) {
+            scopedLog().error(`[ON-IDLE] Failed to send subagent waiting status:`, err);
+          }
+          // Attach heartbeat so the status interval stays alive during wait
+          attachHeartbeat(sessionId, taskId, stopStatusInterval);
+          return;
+        }
+        // If wait state exists and all subagents are already complete,
+        // let onSettled → markParentSettled → deliverSubagentFinalResult
+        // handle finalization. Don't send the normal final:true here,
+        // otherwise the mock server/client sees two final frames.
+        if (waitState && waitState.deliveredCompletions >= waitState.expectedCompletions) {
+          scopedLog().log(
+            `[ON-IDLE] Subagent completions all arrived (${waitState.deliveredCompletions}/${waitState.expectedCompletions}), deferring final to parent-settled path`,
+          );
+          return;
+        }
+        // ── End subagent wait state check ─────────────────────────
+
         // 🔑 用 try/finally 确保 cleanup 在 onIdle 的 async 工作全部完成后才执行。
         // openclaw 的 waitForIdle() 以 void options.onIdle?.() 调用 onIdle，
         // 不会 await 返回的 Promise，因此 onSettled 可能在 onIdle 中途触发。
@@ -334,6 +433,8 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
               scopedLog().log(`[ON-IDLE] Sent completion status update`);
 
               // 🔑 使用动态taskId发送最终响应（空字符串表示流结束）
+              // 确保在所有的 partial 都处理完之后再发送 final 帧
+              await processingLock;
               await sendA2AResponse({
                 config,
                 sessionId,
@@ -344,6 +445,9 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
                 final: true,
               });
               finalSent = true;
+              if (waitState) {
+                clearWaitState(sessionId, "main-final-delivered", taskId);
+              }
               scopedLog().log(`[ON-IDLE] Sent final response (empty, stream end)`);
             } catch (err) {
               scopedLog().error(`[ON-IDLE] Failed to send final response:`, err);
@@ -411,6 +515,10 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
     dispatcher,
     replyOptions: {
       ...replyOptions,
+      // A2A 通道无需 typing indicator，禁用 typing 可让
+      // reply-turn-admission 层中的 signalTextDelta 变为 no-op，
+      // 从而消除导致 onPartialReply 回调乱序的异步 I/O 根源。
+      suppressTyping: true,
       suppressToolErrorWarnings: true,
       onModelSelected: prefixContext.onModelSelected,
 
@@ -494,44 +602,61 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
       },
 
       onPartialReply: async (payload: ReplyPayload) => {
-        let text = payload.text ?? "";
+        const text = payload.text ?? "";
+
+        if (text.length === 0) return;
+
+        // SDK 的 onPartialReply 是 fire-and-forget（selection-BP0T9R9I.js:4952
+        // 不 await），经过 reply-turn-admission 层的 handlePartialForTyping
+        // 还会先 await typingSignals.signalTextDelta。如果 typing 未禁用，
+        // 这个异步 I/O 会导致多个 onPartialReply 调用并发进入本回调，
+        // 造成 accumulatedText 错乱和 ws.send 乱序。
+        //
+        // 通过 processingLock 串行化回调的进入（类似飞书的 partialUpdateQueue），
+        // 确保同一时刻只有一个回调在操作 accumulatedText 和发送。
+        // 注意：不能用 Promise 链（.then），因为链只串行化发送，
+        // 不串行化回调本身——如果回调乱序到达，链上的 accumulatedText 就已经是错的。
+
+        hasSentResponse = true;
+
+        const textCaptured = text;
+        const prevLock = processingLock;
+        let releaseLock: () => void;
+        processingLock = new Promise<void>((resolve) => {
+          releaseLock = resolve;
+        });
 
         try {
-          if (text.length > 0) {
-            // 模型可能返回完整文本（非纯增量），如果新文本以已累积内容开头，
-            // 则只取新增的后缀部分，避免 append 模式下重复拼接。
-            let sendText = text;
-            const dedupApplied = accumulatedText.length > 0 && text.startsWith(accumulatedText);
-            if (dedupApplied) {
-              sendText = text.slice(accumulatedText.length);
-            } else {
-              // 新文本不以已累积内容为前缀（如工具调用后模型重新开始生成），
-              // 更新 accumulatedText 为当前文本，后续基于此新前缀做去重
-              const wasFirstRound = accumulatedText.length === 0;
-              accumulatedText = "";
-              // 新一轮输出前加换行分隔（第一轮除外）
-              if (sendText.length > 0 && !wasFirstRound) {
-                sendText = "\n" + sendText;
-              }
-            }
-            accumulatedText += sendText;
-            hasSentResponse = true;
+          await prevLock;
 
-            if (sendText.length > 0) {
-              await sendA2AResponse({
-                config,
-                sessionId,
-                taskId: getActiveTaskId(),
-                messageId: getActiveMessageId(),
-                text: sendText,
-                append: true,
-                final: false,
-                log: false,
-              });
-            }
+          if (textCaptured.length === 0) return;
+
+          const { delta, accumulated } = resolveStreamingDelta(accumulatedText, textCaptured);
+          let sendText = delta;
+
+          // 新旧文本无关联（工具调用后的新一轮输出），加换行分隔。
+          if (delta === textCaptured && accumulatedText.length > 0) {
+            sendText = "\n" + delta;
+          }
+
+          accumulatedText = accumulated;
+
+          if (sendText.length > 0) {
+            await sendA2AResponse({
+              config,
+              sessionId,
+              taskId: getActiveTaskId(),
+              messageId: getActiveMessageId(),
+              text: sendText,
+              append: true,
+              final: false,
+              log: false,
+            });
           }
         } catch (err) {
           scopedLog().error(`[PARTIAL-REPLY] Failed to send partial reply:`, err);
+        } finally {
+          releaseLock!();
         }
       },
     },

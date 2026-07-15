@@ -15,7 +15,7 @@ import type { A2ADataEvent } from "../types.js";
 export const callPhoneTool = {
   name: "call_phone",
   label: "Call Phone",
-  description: "拨打电话。需要提供要拨打的电话号码。slotId参数可选，默认为0（主卡），如果用户明确要求使用副卡则设置为1。注意:操作超时时间为60秒,请勿重复调用此工具,如果超时或失败,最多重试一次。回复约束：如果工具返回没有授权或者其他报错，只需要完整描述没有授权或者其他报错内容即可，不需要主动给用户提供解决方案，例如告诉用户如何授权，如何解决报错等都是不需要的，请严格遵守。",
+  description: "拨打电话。需要提供要拨打的电话号码。slotId参数可选，如果用户明确指定为主卡为0（主卡），如果用户明确要求使用副卡则设置为1，如果用户没有指定使用哪张卡，则此参数不填。注意:操作超时时间为60秒,请勿重复调用此工具,如果超时或失败,最多重试一次。回复约束：如果工具返回没有授权或者其他报错，只需要完整描述没有授权或者其他报错内容即可，不需要主动给用户提供解决方案，例如告诉用户如何授权，如何解决报错等都是不需要的，请严格遵守。",
   parameters: {
     type: "object",
     properties: {
@@ -25,8 +25,7 @@ export const callPhoneTool = {
       },
       slotId: {
         type: "number",
-        description: "SIM卡槽ID，默认为0（主卡），设置为1表示副卡。仅当用户明确要求使用副卡时才设置为1",
-        default: 0,
+        description: "SIM卡槽ID，仅当用户明确指定主卡/副卡时才设置，否则不传",
       },
     },
     required: ["phoneNumber"],
@@ -42,11 +41,8 @@ export const callPhoneTool = {
       throw new Error("Missing required parameter: phoneNumber must be a non-empty string");
     }
 
-    // Set default slotId if not provided
-    const slotId = params.slotId !== undefined && params.slotId !== null ? params.slotId : 0;
-
-    // Validate slotId (must be 0 or 1)
-    if (slotId !== 0 && slotId !== 1) {
+    // Validate slotId if provided (must be 0 or 1)
+    if (params.slotId !== undefined && params.slotId !== null && params.slotId !== 0 && params.slotId !== 1) {
       throw new Error("Invalid slotId: must be 0 (primary SIM) or 1 (secondary SIM)");
     }
 
@@ -72,7 +68,7 @@ export const callPhoneTool = {
           timeOut: 5,
           intentParam: {
             phoneNumber: params.phoneNumber.trim(),
-            slotId: slotId,
+            ...(params.slotId !== undefined && params.slotId !== null ? { slotId: params.slotId } : {}),
           },
           permissionId: [],
           achieveType: "INTENT",

@@ -5,17 +5,24 @@
 import https from 'https';
 import http from 'http';
 import {URL} from 'url';
-import crypto from 'crypto';
+import * as fs from 'fs';
+import * as path from 'path';
+import {fileURLToPath} from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+import type {OpenClawPluginApi} from 'openclaw/plugin-sdk';
 
 import {getConfig} from './config.js';
 import {
-    ApiPayload,
     ApiResponse,
     HttpHeaders,
     DEFAULT_HTTPS_PORT,
-    HTTP_STATUS_BAD_REQUEST, API_URL_SUFFIX
+    DEFAULT_HTTP_PORT,
+    HTTP_STATUS_BAD_REQUEST,
+    API_URL_SUFFIX
 } from './constants.js';
-import { logger } from '../utils/logger.js';
 
 function buildHeadersForCelia(config: { uid: string; apiKey: string; skillId: string; requestFrom: string }, sessionId: string): HttpHeaders {
     if (!config.uid || !config.apiKey || !config.skillId || !config.requestFrom) {
@@ -35,7 +42,7 @@ function buildRequestOptions(url: string, headers: HttpHeaders, timeout: number)
     const urlObj = new URL(url);
     return {
         hostname: urlObj.hostname,
-        port: urlObj.port || DEFAULT_HTTPS_PORT,
+        port: urlObj.port || (urlObj.protocol === 'https:' ? DEFAULT_HTTPS_PORT : DEFAULT_HTTP_PORT),
         path: urlObj.pathname,
         method: "POST",
         headers: headers,
@@ -99,26 +106,26 @@ function handleResponse(
     });
 }
 
-export async function callApi(questionText: string, api, sessionId: string, action: string): Promise<ApiResponse> {
+export interface CallApiPayload {
+    sceneID: string;
+    [key: string]: unknown;
+}
+
+export async function callApi(payload: CallApiPayload, api: OpenClawPluginApi, sessionId: string): Promise<ApiResponse> {
     const config = getConfig(api);
 
     const headersForCelia = buildHeadersForCelia(config, sessionId);
 
-    const payload: ApiPayload = {
-        questionText: questionText,
-        textSource: config.textSource,
-        action: action,
-        extra: `${JSON.stringify({userId: config.uid})}`
-    };
+    // 确保 uid 存在于消息体中（从 config 注入）
+    const payloadWithUid = { ...payload, uid: config.uid , action:payload.sceneID,packageName:"com.huawei.hmos.vassistant",ansDone:false,userId:config.uid};
+    const httpBody = JSON.stringify(payloadWithUid);
 
-    const httpBody = JSON.stringify(payload);
     const apiUrl = `${config.api.url}${API_URL_SUFFIX}`;
-    logger.log(`[SENTINEL HOOK] callApi: action=${action}, x-hag-trace-id=${sessionId}, url=${apiUrl}`);
 
     return new Promise((resolve, reject) => {
         const options = buildRequestOptions(apiUrl, headersForCelia as HttpHeaders, config.api.timeout);
-
-        const req = https.request(options as any, (res) => {
+        const protocol = apiUrl.startsWith('https://') ? https : http;
+        const req = protocol.request(options, (res) => {
             handleResponse(res, resolve, reject);
         });
 
@@ -129,6 +136,56 @@ export async function callApi(questionText: string, api, sessionId: string, acti
         req.on('timeout', () => {
             req.destroy();
             reject(new Error('[SENTINEL HOOK] Request timeout'));
+        });
+
+        req.write(httpBody);
+        req.end();
+    });
+}
+
+export async function callSkillScanApi(url_suffix: string, payload: object, api: OpenClawPluginApi, sessionId: string): Promise<ApiResponse> {
+    const config = getConfig(api);
+
+    const headersForCelia = buildHeadersForCelia(config, sessionId);
+
+    // 确保 uid 存在于消息体中（从 config 注入）
+    const payloadWithUid = { ...payload, uid: config.uid, packageName:"com.huawei.hmos.vassistant", ansDone:false, userId:config.uid};
+    const httpBody = JSON.stringify(payloadWithUid);
+    console.log(`TOOL_input headersForCelia: ${JSON.stringify(headersForCelia)}`)
+    console.log(`TOOL_input httpBody: ${JSON.stringify(httpBody)}`)
+
+    // 将headersForCelia和httpBody写入当前目录的txt文件
+    const logFile = path.join(__dirname, 'api_request_log.txt');
+    const logContent = [
+        `==============================`,
+        `Timestamp: ${new Date().toISOString()}`,
+        `Session ID: ${sessionId}`,
+        ``,
+        `--- headersForCelia ---`,
+        JSON.stringify(headersForCelia, null, 2),
+        ``,
+        `--- httpBody ---`,
+        JSON.stringify(httpBody, null, 2),
+        `==============================`
+    ].join('\n');
+    fs.writeFileSync(logFile, logContent, 'utf8');
+    api.logger.info(`[ai-security-plugin][skill_scope_hook] Request log written to ${logFile}`);
+
+    return new Promise((resolve, reject) => {
+        const url = config.api.url + url_suffix;
+        const options = buildRequestOptions(url, headersForCelia as HttpHeaders, config.api.timeout);
+        const protocol = url.startsWith('https://') ? https : http;
+        const req = protocol.request(options, (res) => {
+            handleResponse(res, resolve, reject);
+        });
+
+        req.on('error', (error) => {
+            reject(error);
+        });
+
+        req.on('timeout', () => {
+            req.destroy();
+            reject(new Error('[ai-security-plugin][skill_scope_hook] Request timeout'));
         });
 
         req.write(httpBody);

@@ -151,13 +151,23 @@ export async function monitorXYProvider(opts: MonitorXYOpts = {}): Promise<void>
         }
       };
 
-      // 🔑 核心改造：检测steer模式
-      // clearContext / tasks/cancel 没有 params，跳过 parseA2AMessage 直接入队
+      // Steer detection: when queue mode is "steer" and the session has an active
+      // run, process the message concurrently (skip the per-session serial queue).
+      // This prevents the steer message from waiting behind the first message's
+      // completion. The actual steer injection is handled by OpenClaw's auto-reply
+      // pipeline (agent-runner.ts), not by the channel itself.
       const messageMethod = message.method;
-      if (messageMethod === "clearContext" || messageMethod === "clear_context"
-        || messageMethod === "tasks/cancel" || messageMethod === "tasks_cancel") {
+      if (messageMethod === "clearContext" || messageMethod === "clear_context") {
         void enqueue(sessionId, task).catch((err) => {
           logger.error(`XY gateway: queue processing failed: ${String(err)}`);
+          activeMessages.delete(messageKey);
+        });
+      } else if (messageMethod === "tasks/cancel" || messageMethod === "tasks_cancel") {
+        // tasks/cancel 仅发送一个简单的响应，不涉及复杂的任务状态变更，
+        // 因此无需排队等待，直接并发执行以确保客户端及时收到 canceled 响应。
+        logger.log(`[MONITOR] CANCEL: executing concurrently, messageKey=${messageKey}`);
+        void task().catch((err) => {
+          logger.error(`XY gateway: concurrent cancel task failed for ${messageKey}: ${String(err)}`);
           activeMessages.delete(messageKey);
         });
       } else {
@@ -167,22 +177,18 @@ export async function monitorXYProvider(opts: MonitorXYOpts = {}): Promise<void>
           const hasActiveRun = hasActiveTask(parsed.sessionId);
 
           if (steerMode && hasActiveRun) {
-            // Steer模式且有活跃任务：不入队列，直接并发执行
-            logger.log(`[MONITOR-HANDLER] STEER MODE: Executing concurrently for messageKey=${messageKey}`);
+            logger.log(`[MONITOR] STEER MODE: executing concurrently, sessionId=${parsed.sessionId}, messageKey=${messageKey}`);
             void task().catch((err) => {
               logger.error(`XY gateway: concurrent steer task failed for ${messageKey}: ${String(err)}`);
               activeMessages.delete(messageKey);
             });
           } else {
-            // 正常模式：入队列串行执行
             void enqueue(sessionId, task).catch((err) => {
               logger.error(`XY gateway: queue processing failed: ${String(err)}`);
               activeMessages.delete(messageKey);
             });
           }
-        } catch (parseErr) {
-          // 解析失败，回退到正常队列模式
-          logger.error(`[MONITOR-HANDLER] Failed to parse message for steer detection: ${String(parseErr)}`);
+        } catch {
           void enqueue(sessionId, task).catch((err) => {
             logger.error(`XY gateway: queue processing failed: ${String(err)}`);
             activeMessages.delete(messageKey);
@@ -388,7 +394,6 @@ export async function monitorXYProvider(opts: MonitorXYOpts = {}): Promise<void>
         logger.log("XY gateway: started successfully");
         // Start log reporter (independent periodic scanner + uploader)
         startLogReporter({
-          configPath: "/home/ynhcj/.openclaw/log-reporter-config.json",
           uploadService: new XYFileUploadService(account.fileUploadUrl, account.apiKey, account.uid),
         }).then((stop) => {
           stopLogReporter = stop;
