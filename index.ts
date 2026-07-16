@@ -52,11 +52,35 @@ function extractSkillNameFromPath(filePath: unknown): string | null {
  * the `after_tool_call` hook and write the skill name to the skills log.
  */
 function registerSkillsDiagnosticHook(api: OpenClawPluginApi) {
-  api.on("after_tool_call", async (event, _ctx) => {
-    if (event.toolName !== "read") return;
-    const skillName = extractSkillNameFromPath(event.params?.path);
+  // Tool name → skill name mapping for direct tool-based skill usage logging
+  const TOOL_SKILL_MAP: Record<string, string> = {
+    get_user_location: "GetCurrentLocation",
+    get_calendar_tool_schema: "Schedule",
+    get_note_tool_schema: "memorandum",
+    get_photo_tool_schema: "gallery",
+    get_contact_tool_schema: "contact",
+    get_device_file_tool_schema: "file",
+    get_alarm_tool_schema: "clock",
+    message: "message",
+    get_phone_tool_schema: "phone",
+    get_collection_tool_schema: "xiaoyi-collection",
+  };
+
+  // Log skill usage for known device tools on before_tool_call
+  api.on("before_tool_call", async (event, _ctx) => {
+    const skillName = TOOL_SKILL_MAP[event.toolName];
     if (skillName) {
       writeSkillUsage(skillName);
+    }
+  });
+
+  // Detect SKILL.md reads on after_tool_call (original behavior)
+  api.on("after_tool_call", async (event, _ctx) => {
+    if (event.toolName === "read") {
+      const skillName = extractSkillNameFromPath(event.params?.path);
+      if (skillName) {
+        writeSkillUsage(skillName);
+      }
     }
   });
 }
