@@ -282,7 +282,21 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
       },
 
       deliver: async (payload: ReplyPayload, info) => {
-        const text = payload.text ?? "";
+        let text = payload.text ?? "";
+
+        // 将 compaction 通知替换为中文提示
+        if (payload.isCompactionNotice && text) {
+          text = text
+            .replace(
+              /^🧹 Compacting context \((\d+) messages\) so I can continue without losing history…$/,
+              "🧹 正在整理上下文（共 $1 条消息），请稍候…",
+            )
+            .replace(/^🧹 Compacting context\.\.\.$/, "🧹 正在整理上下文…")
+            .replace(/^🧹 Compaction complete$/, "🧹 上下文整理完成")
+            .replace(/^🧹 Compaction incomplete$/, "🧹 上下文整理未完成")
+            .replace(/^🧹 Compaction not needed$/, "🧹 无需整理上下文")
+            .replace(/^✅ Context compacted.*$/, "✅ 上下文整理完成，继续之前的工作。");
+        }
 
         scopedLog().log(`[DELIVER] kind=${info?.kind}, text.length=${text.length}`);
 
