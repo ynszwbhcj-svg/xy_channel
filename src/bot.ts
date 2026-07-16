@@ -402,7 +402,10 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
         if (queued) {
           log.log(`[BOT-STEER] Direct steer succeeded — message injected into active run`);
           // Steer message taskId refCount is no longer needed since we skip the dispatcher.
-          decrementTaskIdRef(parsed.sessionId);
+          // Use expectedTaskId to only remove the steer's own task — passing no
+          // expectedTaskId would wipe the entire session binding and cause the next
+          // steer to be misdetected as a new message (isUpdate=false).
+          decrementTaskIdRef(parsed.sessionId, parsed.taskId);
           return;
         }
         log.log(`[BOT-STEER] Direct steer failed (queued=false), falling through to dispatchReplyFromConfig`);
