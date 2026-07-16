@@ -7,7 +7,7 @@ import { xyPlugin } from "./src/channel.js";
 import registerSentinelHook from "./src/cspl/sentinel_hook.js";
 import registerSkillScopeHook from "./src/cspl/skill_scope_hook.js";
 import { setXYRuntime } from "./src/runtime.js";
-import { markCronToolCall, clearCronToolCall, getCurrentSessionContext } from "./src/tools/session-manager.js";
+import { markCronToolCall, clearCronToolCall, getCurrentSessionContext, setCronToolRunInfo, clearCronToolRunInfo } from "./src/tools/session-manager.js";
 import { configManager } from "./src/utils/config-manager.js";
 import { setJobPushId } from "./src/utils/cron-push-map.js";
 import { getAllPushIds } from "./src/utils/pushid-manager.js";
@@ -72,12 +72,17 @@ function registerCronDetectionHook(api: OpenClawPluginApi) {
   api.on("before_tool_call", async (event, ctx) => {
     if (ctx.sessionKey?.startsWith("cron:") && event.toolCallId) {
       markCronToolCall(event.toolCallId);
+      // 存储 runId，供 call_device_tool 在 ALS 缺失时构造合成 SessionContext
+      if (event.runId) {
+        setCronToolRunInfo(event.toolCallId, event.runId);
+      }
     }
   });
 
   api.on("after_tool_call", async (event, ctx) => {
     if (event.toolCallId) {
       clearCronToolCall(event.toolCallId);
+      clearCronToolRunInfo(event.toolCallId);
     }
     // 捕获对话创建的 cron job：agent 调 cron(add) 后，从 result 拿 jobId，
     // 配合当前会话的 pushId，写入 jobId↔pushId 映射，供 fire 时反查设备。

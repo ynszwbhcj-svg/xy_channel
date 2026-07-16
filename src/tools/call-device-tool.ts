@@ -24,7 +24,8 @@ import { sendEmailTool } from "./send-email-tool.js";
 import { searchEmailTool } from "./search-email-tool.js";
 import { getCachedXYWebSocketManager } from "../client.js";
 import { sendStatusUpdate } from "../formatter.js";
-import { getCurrentSessionContext } from './session-manager.js';
+import { getCurrentSessionContext, runWithSessionContext, isCronToolCall, getCronToolRunInfo } from './session-manager.js';
+import type { SessionContext } from './session-manager.js';
 
 
 /**
@@ -80,9 +81,28 @@ export const callDeviceTool = {
     required: ["toolName", "arguments"],
   },
   async execute(toolCallId: string, params: any) {
-    const ctx = getCurrentSessionContext();
+    let ctx = getCurrentSessionContext();
     const wsManager = getCachedXYWebSocketManager();
     const config = wsManager.config;
+
+    // Cron mode: ALS is not available (cron does not go through bot.ts →
+    // runWithSessionContext).  Build a synthetic SessionContext so that
+    // sub-tools don't crash on null ALS and sendCommand() can route
+    // through sendCommandViaPush.
+    let isSyntheticCtx = false;
+    if (!ctx && isCronToolCall(toolCallId)) {
+      const runInfo = getCronToolRunInfo(toolCallId);
+      ctx = {
+        config,
+        sessionId: `cron-${(runInfo?.runId ?? toolCallId).replace(/-/g, "")}`,
+        taskId: runInfo?.runId ?? toolCallId,
+        messageId: "",
+        agentId: config.agentId,
+        isCron: true,
+      };
+      isSyntheticCtx = true;
+    }
+
     const sessionId = ctx?.sessionId ?? "";
     const taskId = ctx?.taskId ?? "";
     const messageId = ctx?.messageId ?? "";
@@ -116,6 +136,13 @@ export const callDeviceTool = {
     }
 
     try {
+      // Wrap sub-tool with synthetic ALS context so getCurrentSessionContext()
+      // returns non-null inside the sub-tool's execute().
+      if (isSyntheticCtx) {
+        return await runWithSessionContext(ctx as SessionContext, () =>
+          tool.execute(toolCallId, toolArgs),
+        );
+      }
       return await tool.execute(toolCallId, toolArgs);
     } catch (error: any) {
       // ToolInputError (.name === "ToolInputError") 或其他参数校验错误

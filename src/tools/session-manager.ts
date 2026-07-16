@@ -66,6 +66,33 @@ export function clearCronToolCall(toolCallId: string): void {
   cronToolCallMap.delete(toolCallId);
 }
 
+// ── Cron tool run info ─────────────────────────────────────────────
+// When a cron-triggered tool executes, ALS is not available (cron does
+// not go through bot.ts → runWithSessionContext).  We store the runId
+// from the before_tool_call event so call_device_tool can construct a
+// synthetic SessionContext for sub-tool execution.
+if (!_g.__xyCronToolRunInfo) {
+  _g.__xyCronToolRunInfo = new Map<string, { runId: string }>();
+}
+const cronToolRunInfoMap = _g.__xyCronToolRunInfo as Map<string, { runId: string }>;
+
+/** Store the openclaw runId for a cron-triggered tool call. */
+export function setCronToolRunInfo(toolCallId: string, runId: string): void {
+  if (toolCallId && runId) {
+    cronToolRunInfoMap.set(toolCallId, { runId });
+  }
+}
+
+/** Get the stored runId for a cron-triggered tool call. */
+export function getCronToolRunInfo(toolCallId: string): { runId: string } | undefined {
+  return cronToolRunInfoMap.get(toolCallId);
+}
+
+/** Clean up cron tool run info after use. */
+export function clearCronToolRunInfo(toolCallId: string): void {
+  cronToolRunInfoMap.delete(toolCallId);
+}
+
 // ── Cron session ↔ jobId bridge ────────────────────────────────────
 // fire 期 jobId 传递桥。provider.ts 在 isCron 分支从首条消息
 // `[cron:<jobId> ...]` 解析出真实 jobId，写入合成 cron sessionId；
