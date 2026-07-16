@@ -605,18 +605,9 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
 
         hasSentResponse = true;
 
-        // 检测新模型调用：同一模型调用内 text 是递增的（"好的"→"好的，已查到"），
-        // 跨模型调用时 text 会刷新，此时 !text.startsWith(currentModelText) 为 true
-        if (currentModelText && !text.startsWith(currentModelText)) {
-          // 锁存上一个模型调用的完整文本
-          prevModelText += currentModelText;
-        }
-        currentModelText = text;
-
-        const sep = prevModelText ? "\n" : "";
-        const fullText = crossTurnPrefix + prevModelText + sep + text;
-
-        // 串行化发送，避免 ws.send 乱序
+        // 串行化回调进入：SDK fire-and-forget 模式下多个 onPartialReply
+        // 可能并发执行，processingLock 保证 currentModelText/prevModelText
+        // 的读写和 ws.send 都在互斥临界区内。
         const prevLock = processingLock;
         let releaseLock: () => void;
         processingLock = new Promise<void>((resolve) => {
@@ -625,6 +616,18 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
 
         try {
           await prevLock;
+
+          // 检测新模型调用：同一模型调用内 text 是递增的（"好的"→"好的，已查到"），
+          // 跨模型调用时 text 会刷新，此时 !text.startsWith(currentModelText) 为 true
+          if (currentModelText && !text.startsWith(currentModelText)) {
+            // 锁存上一个模型调用的完整文本
+            prevModelText += currentModelText;
+          }
+          currentModelText = text;
+
+          const sep = prevModelText ? "\n" : "";
+          const fullText = crossTurnPrefix + prevModelText + sep + text;
+
           await sendA2AResponse({
             config,
             sessionId,
