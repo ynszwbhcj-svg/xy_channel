@@ -64,6 +64,7 @@ function registerSkillsDiagnosticHook(api: OpenClawPluginApi) {
     message: "message",
     get_phone_tool_schema: "phone",
     get_collection_tool_schema: "xiaoyi-collection",
+    image_reading: "xiaoyi-image-understanding"
   };
 
   // Log skill usage for known device tools on before_tool_call

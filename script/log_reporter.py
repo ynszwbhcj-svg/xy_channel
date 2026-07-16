@@ -72,6 +72,7 @@ MONITORS = [
         "path": "/home/sandbox/.openclaw/workspace/logs/init_{year}{month}{day}_{hour}{minute}{second}.log",
         "business_type": "openclaw-init",
         "json_parse": False,
+        "latest_only": True,
     },
     {
         "path": "/tmp/openclaw/skills-{year}{month}{day}.log",
@@ -108,6 +109,36 @@ MONITORS = [
         "business_type": "proxy-watchdog",
         "json_parse": False,
     },
+    {
+        "path": "/home/sandbox/.openclaw/logs/celia_memory/celia_memory.log",
+        "business_type": "celia-memory",
+        "json_parse": False,
+    },
+    {
+        "path": "/home/sandbox/.openclaw/logs/supervisord.log",
+        "business_type": "supervisord",
+        "json_parse": False,
+    },
+    {
+        "path": "/home/sandbox/.openclaw/logs/stability/openclaw-stability-{year}-{month}-{day}T{hour}-{minute}-{second}-{any}.json",
+        "business_type": "stability",
+        "json_parse": False,
+    },
+    {
+        "path": "/tmp/logs/delete_cloud_file.log",
+        "business_type": "delete-cloud-file",
+        "json_parse": False,
+    },
+    {
+        "path": "/tmp/logs/read_file.log",
+        "business_type": "read-file",
+        "json_parse": False,
+    },
+    {
+        "path": "/tmp/logs/restart.log",
+        "business_type": "restart",
+        "json_parse": False,
+    },
 ]
 
 
@@ -140,7 +171,7 @@ def fetch_remote_monitors(config_url: str) -> Optional[List[Dict[str, Any]]]:
                 return None
         logger.info(f"Loaded {len(monitors)} monitor(s) from remote config")
         return monitors
-    except (URLError, HTTPError, json.JSONDecodeError, ValueError) as e:
+    except Error as e:
         logger.warning(f"Failed to fetch remote monitors config: {e}")
         return None
 
@@ -152,8 +183,8 @@ def read_env_file(env_path: str) -> Dict[str, str]:
     try:
         with open(env_path, "r") as f:
             raw = f.read()
-    except FileNotFoundError:
-        raise FileNotFoundError(f"Environment file not found: {env_path}")
+    except FileNotFoundError as e:
+        raise FileNotFoundError(f"Environment file not found: {env_path}") from e
 
     env: Dict[str, str] = {}
     for line in raw.split("\n"):
@@ -191,13 +222,15 @@ WILDCARD_TOKENS = [
     ("{hour}", r"\d{2}"),
     ("{minute}", r"\d{2}"),
     ("{second}", r"\d{2}"),
+    ("{any}", ".*"),
 ]
 
 
-def resolve_log_files(template_path: str) -> List[str]:
+def resolve_log_files(template_path: str, latest_only: bool = False) -> List[str]:
     """
     Convert a path template with date wildcards to actual files on disk.
     Scans the directory and returns all files matching the pattern, sorted.
+    If latest_only is True, returns only the last (most recent) file.
     """
     directory = os.path.dirname(template_path)
     basename_pattern = os.path.basename(template_path)
@@ -215,6 +248,8 @@ def resolve_log_files(template_path: str) -> List[str]:
 
     matching = [f for f in entries if regex.match(f)]
     matching.sort()
+    if latest_only and matching:
+        matching = [matching[-1]]
     return [os.path.join(directory, f) for f in matching]
 
 
@@ -245,7 +280,7 @@ def save_cursor_store(store_path: str, store: Dict[str, Any]) -> None:
         os.makedirs(os.path.dirname(store_path), exist_ok=True)
         with open(store_path, "w") as f:
             json.dump(store, f, indent=2)
-    except (PermissionError, OSError) as e:
+    except Error as e:
         logger.warning(f"Cannot save cursor store: {e}")
 
 
@@ -443,7 +478,7 @@ def upload_file_and_get_url(
         with urlopen(req, timeout=30) as resp:
             prepare_data = json.loads(resp.read().decode("utf-8"))
     except HTTPError as e:
-        raise RuntimeError(f"Prepare failed: HTTP {e.code} - {e.reason}")
+        raise RuntimeError(f"Prepare failed: HTTP {e.code} - {e.reason}") from e
 
     if prepare_data.get("code") != "0":
         raise RuntimeError(f"Prepare failed: {prepare_data.get('desc', 'Unknown error')}")
@@ -468,7 +503,7 @@ def upload_file_and_get_url(
         with urlopen(upload_req, timeout=60) as resp:
             pass  # success, status check handled by urlopen
     except HTTPError as e:
-        raise RuntimeError(f"Upload failed: HTTP {e.code}")
+        raise RuntimeError(f"Upload failed: HTTP {e.code}") from e
 
     logger.info("Upload complete")
 
@@ -489,7 +524,7 @@ def upload_file_and_get_url(
         with urlopen(req, timeout=30) as resp:
             complete_data = json.loads(resp.read().decode("utf-8"))
     except HTTPError as e:
-        raise RuntimeError(f"CompleteAndQuery failed: HTTP {e.code}")
+        raise RuntimeError(f"CompleteAndQuery failed: HTTP {e.code}") from e
 
     file_url = (complete_data.get("fileDetailInfo") or {}).get("url", "")
     if not file_url:
@@ -521,11 +556,12 @@ def upload_content(
         f.write(content)
 
     last_error = None
+    url = ""
     try:
         for attempt in range(MAX_RETRIES + 1):
             try:
                 url = upload_file_and_get_url(bak_path, base_url, api_key, uid)
-                return url
+                break
             except Exception as e:
                 last_error = e
                 if attempt < MAX_RETRIES:
@@ -535,7 +571,9 @@ def upload_content(
                         f"{e}. Retrying in {delay}s..."
                     )
                     time.sleep(delay)
-        raise last_error  # type: ignore[misc]
+        else:
+            raise last_error  # type: ignore[misc]
+        return url
     finally:
         try:
             os.remove(bak_path)
@@ -645,7 +683,7 @@ def do_scan(
     cursor_map: Dict[str, Dict[str, Dict[str, Any]]] = {}  # business_type → {file_path → cursor}
 
     for monitor in monitors:
-        resolved_files = resolve_log_files(monitor["path"])
+        resolved_files = resolve_log_files(monitor["path"], latest_only=monitor.get("latest_only", False))
         logger.info(
             f'Scanning "{monitor["business_type"]}": pattern={monitor["path"]}, '
             f"resolved {len(resolved_files)} file(s)"
