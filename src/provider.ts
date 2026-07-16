@@ -10,7 +10,7 @@
 import { createHash } from "crypto";
 import { logger } from "./utils/logger.js";
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
-import { getCurrentSessionContext, setCurrentCronJobId } from "./tools/session-manager.js";
+import { getCurrentSessionContext, setCurrentCronJobId, markCronDetected } from "./tools/session-manager.js";
 import { selfEvolutionManager } from "./utils/self-evolution-manager.js";
 import { setCompactionConfig, setCompactionSessionSnapshot } from "./compaction-provider.js";
 
@@ -607,6 +607,10 @@ export const xiaoyiProvider: ProviderPlugin = {
       const isCron = isCronTriggered(context.messages);
 
       if (isCron) {
+        // 通知 before_tool_call hook：当前请求是 cron 触发。
+        // 不依赖 openclaw 的 sessionKey 前缀（部分版本可能不设置）。
+        markCronDetected();
+
         // fire 期 jobId 桥：把首条消息 `[cron:<jobId> ...]` 解析出的真实 jobId
         // 绑定到本次 cron run 的合成 sessionId。sendCommand 凭同一 sessionId
         // 反查 jobId → cron-push-map → 正确设备的 pushId（多设备路由）。

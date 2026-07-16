@@ -7,7 +7,7 @@ import { xyPlugin } from "./src/channel.js";
 import registerSentinelHook from "./src/cspl/sentinel_hook.js";
 import registerSkillScopeHook from "./src/cspl/skill_scope_hook.js";
 import { setXYRuntime } from "./src/runtime.js";
-import { markCronToolCall, clearCronToolCall, getCurrentSessionContext, setCronToolRunInfo, clearCronToolRunInfo } from "./src/tools/session-manager.js";
+import { markCronToolCall, clearCronToolCall, getCurrentSessionContext, setCronToolRunInfo, clearCronToolRunInfo, isCronActive } from "./src/tools/session-manager.js";
 import { configManager } from "./src/utils/config-manager.js";
 import { setJobPushId } from "./src/utils/cron-push-map.js";
 import { getAllPushIds } from "./src/utils/pushid-manager.js";
@@ -70,7 +70,9 @@ function registerSkillsDiagnosticHook(api: OpenClawPluginApi) {
  */
 function registerCronDetectionHook(api: OpenClawPluginApi) {
   api.on("before_tool_call", async (event, ctx) => {
-    if (ctx.sessionKey?.startsWith("cron:") && event.toolCallId) {
+    // sessionKey 前缀依赖 openclaw 版本行为，不一定可靠；
+    // isCronActive() 由 provider.ts 根据消息内容 [cron:...] 设置，更可靠。
+    if ((ctx.sessionKey?.startsWith("cron:") || isCronActive()) && event.toolCallId) {
       markCronToolCall(event.toolCallId);
       // 存储 runId，供 call_device_tool 在 ALS 缺失时构造合成 SessionContext
       if (event.runId) {

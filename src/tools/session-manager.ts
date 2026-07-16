@@ -38,6 +38,23 @@ export interface SessionContext {
 
 const _g = globalThis as Record<string, unknown>;
 
+// ── Cron request detection ──────────────────────────────────────────
+// The provider detects cron from [cron:...] in message text and sets
+// this timestamp.  The before_tool_call hook checks it as a fallback
+// when openclaw's sessionKey does not have the "cron:" prefix.
+// Timestamp-based so it self-expires and requires no explicit cleanup.
+let __xyCronDetectedTs = 0;
+
+/** Mark that the current request is cron-triggered (called by provider). */
+export function markCronDetected(): void {
+  __xyCronDetectedTs = Date.now();
+}
+
+/** Check whether a cron request was recently detected. */
+export function isCronActive(ttlMs = 120_000): boolean {
+  return Date.now() - __xyCronDetectedTs < ttlMs;
+}
+
 // ── Cron tool-call tracking ─────────────────────────────────────────
 // Global Map keyed by toolCallId to track whether a specific tool call
 // originated from a cron/scheduled task.  Populated by the
