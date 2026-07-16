@@ -192,7 +192,10 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
   // ── append: false streaming state ─────────────────────────────
   // Instead of computing deltas, we always send the full text with
   // append: false.  Model-call boundaries are detected via startsWith.
-  let crossTurnPrefix = sessionFullTextMap.get(sessionId) ?? "";
+  // crossTurnPrefix: 仅在 steer 时继承上一轮内容，新消息从空开始。
+  let crossTurnPrefix = steerState.steered
+    ? (sessionFullTextMap.get(sessionId) ?? "")
+    : "";
   let prevModelText = "";     // completed model calls within this turn
   let currentModelText = "";  // current model call's full accumulated text
   // ──────────────────────────────────────────────────────────────
