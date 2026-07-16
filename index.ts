@@ -66,20 +66,21 @@ function registerSkillsDiagnosticHook(api: OpenClawPluginApi) {
     get_collection_tool_schema: "小艺帮记",
   };
 
+  // Log skill usage for known device tools on before_tool_call
+  api.on("before_tool_call", async (event, _ctx) => {
+    const skillName = TOOL_SKILL_MAP[event.toolName];
+    if (skillName) {
+      writeSkillUsage(skillName);
+    }
+  });
+
+  // Detect SKILL.md reads on after_tool_call (original behavior)
   api.on("after_tool_call", async (event, _ctx) => {
-    // Detect SKILL.md reads (original behavior)
     if (event.toolName === "read") {
       const skillName = extractSkillNameFromPath(event.params?.path);
       if (skillName) {
         writeSkillUsage(skillName);
       }
-      return;
-    }
-
-    // Log skill usage for known device tools
-    const skillName = TOOL_SKILL_MAP[event.toolName];
-    if (skillName) {
-      writeSkillUsage(skillName);
     }
   });
 }
