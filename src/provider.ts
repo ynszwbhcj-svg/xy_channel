@@ -539,7 +539,9 @@ export const xiaoyiProvider: ProviderPlugin = {
       setCompactionConfig({
         uid,
         baseUrl,
-        modelName: typeof ctx.modelId === "string" ? ctx.modelId : "LLM_DeepSeekV4_Think",
+        modelName:
+          ctx.config?.channels?.["xiaoyi-channel"]?.compactionModelName ||
+          "LLM_DeepSeekV4",
         apiKey:
           typeof xiaoyiProviderConfig?.apiKey === "string"
             ? (xiaoyiProviderConfig.apiKey as string)

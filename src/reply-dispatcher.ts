@@ -31,6 +31,16 @@ export interface CreateXYReplyDispatcherParams {
 const TEMP_FILE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 const RUN_CROSS_TASK_LOG_TAG = "[RunCrossTask]";
 
+// Module-level storage for cross-turn full text. Needed because the /steer
+// fallback path creates a new dispatcher with a fresh closure, which would
+// otherwise lose text accumulated from previous turns.
+const sessionFullTextMap = new Map<string, string>();
+
+/** Clear saved full text for a session (call when session is fully done). */
+export function clearSessionFullText(sessionId: string): void {
+  sessionFullTextMap.delete(sessionId);
+}
+
 function buildDistributionStatusCommand(context: RunCrossTaskContext): A2ACommand {
   return {
     header: {
@@ -93,55 +103,6 @@ async function sendRunCrossTaskResult(params: {
     clearRunCrossTaskSentFiles(context);
     logger.log(`${RUN_CROSS_TASK_LOG_TAG} cleared cross-task sentFiles, sessionId=${sessionId}, taskId=${taskId}, clearedFileCardCount=${fileCardCount}`);
   }
-}
-
-/**
- * 流式文本增量合并，参考飞书 mergeStreamingText。
- * 在 SDK text_delta 可能乱序到达的场景下，比简单的 startsWith 更鲁棒。
- *
- * @param previousText - 已累积发送的全文
- * @param nextFullText - SDK 返回的当前全文快照
- * @returns { delta: 应发送的增量文本, accumulated: 新的累积全文 }
- */
-function resolveStreamingDelta(
-  previousText: string,
-  nextFullText: string,
-): { delta: string; accumulated: string } {
-  const prev = previousText;
-  const next = nextFullText;
-  if (!next) return { delta: "", accumulated: prev };
-  // 首次调用：全文即为增量
-  if (!prev) return { delta: next, accumulated: next };
-  // 完全重复：无需发送
-  if (next === prev) return { delta: "", accumulated: next };
-
-  // 正常追加：新文本以旧文本开头 → 只取增量后缀
-  if (next.startsWith(prev)) {
-    return { delta: next.slice(prev.length), accumulated: next };
-  }
-  // 短文本晚到：旧文本已包含新文本全部内容
-  if (prev.startsWith(next)) {
-    return { delta: "", accumulated: prev };
-  }
-  // 新文本包含旧文本（可能是 SDK replace 事件或重算）
-  if (next.includes(prev)) {
-    const idx = next.indexOf(prev);
-    return { delta: next.slice(idx + prev.length), accumulated: next };
-  }
-  // 旧文本包含新文本（无新内容）
-  if (prev.includes(next)) {
-    return { delta: "", accumulated: prev };
-  }
-  // 部分重叠：合并 suffix/prefix 交集
-  const maxOverlap = Math.min(prev.length, next.length);
-  for (let overlap = maxOverlap; overlap > 0; overlap -= 1) {
-    if (prev.slice(-overlap) === next.slice(0, overlap)) {
-      const tail = next.slice(overlap);
-      return { delta: tail, accumulated: prev + tail };
-    }
-  }
-  // 兜底：视为新一轮输出（工具调用后模型重新开始生成等）
-  return { delta: next, accumulated: next };
 }
 
 /**
@@ -226,11 +187,20 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
   let statusUpdateInterval: NodeJS.Timeout | null = null;
   let hasSentResponse = false;
   let finalSent = false;
-  let accumulatedText = "";
   let finalReplyText = "";
-  // 串行化 onPartialReply 回调的进入，避免 SDK fire-and-forget 模式下
-  // typingSignals.signalTextDelta 的异步 I/O 导致多个回调并发执行，
-  // 进而造成 accumulatedText 错乱和 ws.send 乱序。
+
+  // ── append: false streaming state ─────────────────────────────
+  // Instead of computing deltas, we always send the full text with
+  // append: false.  Model-call boundaries are detected via startsWith.
+  let crossTurnPrefix = sessionFullTextMap.get(sessionId) ?? "";
+  let prevModelText = "";     // completed model calls within this turn
+  let currentModelText = "";  // current model call's full accumulated text
+  // ──────────────────────────────────────────────────────────────
+
+  // 串行化 onPartialReply 回调的发送，避免 SDK fire-and-forget 模式下
+  // 多个回调并发执行造成 ws.send 乱序。
+  // 注意：append:false 发送全量文本，即使偶有乱序也会被下一次全量覆盖修复，
+  // 此处锁主要避免客户端短暂出现文本回退的闪烁。
   let processingLock: Promise<void> = Promise.resolve();
   const initialRunCrossTaskContext = getCurrentSessionContext()?.runCrossTaskContext;
 
@@ -282,7 +252,21 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
       },
 
       deliver: async (payload: ReplyPayload, info) => {
-        const text = payload.text ?? "";
+        let text = payload.text ?? "";
+
+        // 将 compaction 通知替换为中文提示
+        if (payload.isCompactionNotice && text) {
+          text = text
+            .replace(
+              /^🧹 Compacting context \((\d+) messages\) so I can continue without losing history…$/,
+              "🧹 正在整理上下文（共 $1 条消息），请稍候…",
+            )
+            .replace(/^🧹 Compacting context\.\.\.$/, "🧹 正在整理上下文…")
+            .replace(/^🧹 Compaction complete$/, "🧹 上下文整理完成")
+            .replace(/^🧹 Compaction incomplete$/, "🧹 上下文整理未完成")
+            .replace(/^🧹 Compaction not needed$/, "🧹 无需整理上下文")
+            .replace(/^✅ Context compacted.*$/, "✅ 上下文整理完成，继续之前的工作。");
+        }
 
         scopedLog().log(`[DELIVER] kind=${info?.kind}, text.length=${text.length}`);
 
@@ -297,23 +281,22 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
             scopedLog().log(`[DELIVER] Captured final reply text, length=${finalReplyText.length}`);
           }
 
-          // 🔑 如果 onPartialReply 已经流式发送过文本，deliver 不再重复发送
+          // onPartialReply 已经通过 append:false 全量发送了所有文本，deliver 不再重复发送
           if (hasSentResponse) {
             scopedLog().log(`[DELIVER SKIP] Already sent via onPartialReply`);
             return;
           }
 
-          accumulatedText += text;
           hasSentResponse = true;
 
-          // 🔑 使用动态taskId发送A2A响应（流式append）
+          // 非流式回退路径（onPartialReply 未触发时）
           await sendA2AResponse({
             config,
             sessionId,
             taskId: getActiveTaskId(),
             messageId: getActiveMessageId(),
-            text,
-            append: true,
+            text: crossTurnPrefix + text,
+            append: false,
             final: false,
           });
         } catch (deliverError) {
@@ -402,10 +385,22 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
         try {
           // 正常模式（或未被steer的dispatch）
           if (hasSentResponse && !finalSent) {
+            // 保存本轮完整文本，供后续 steer/fallback 的 dispatcher 读取
+            const sep = prevModelText ? "\n" : "";
+            crossTurnPrefix = crossTurnPrefix + prevModelText + sep + currentModelText;
+            sessionFullTextMap.set(sessionId, crossTurnPrefix);
+
+            // 先用后清：crossTaskResultMessage 需要 currentModelText
             const trimmedFinalReplyText = finalReplyText.trim();
-            const trimmedAccumulatedText = accumulatedText.trim();
-            const crossTaskResultMessage = trimmedFinalReplyText || trimmedAccumulatedText;
-            const crossTaskResultSource = trimmedFinalReplyText ? "final" : "accumulated";
+            const trimmedCurrentModelText = currentModelText.trim();
+            const crossTaskResultMessage = trimmedFinalReplyText || trimmedCurrentModelText;
+            const crossTaskResultSource = trimmedFinalReplyText ? "final" : "currentModel";
+
+            // 重置当前 turn 状态，为下一轮 steer 做准备
+            prevModelText = "";
+            currentModelText = "";
+
+            scopedLog().log(`[ON-IDLE] Saved cross-turn prefix, length=${crossTurnPrefix.length}`);
             scopedLog().log(`[ON-IDLE] [SendCrossResult]Sending cross-task result, source=${crossTaskResultSource}, resultMessage.length=${crossTaskResultMessage.length}`);
             try {
               const runCrossTaskContext = getRunCrossTaskContext();
@@ -485,7 +480,7 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
                 taskId: getActiveTaskId(),
                 messageId: getActiveMessageId(),
                 text: "任务执行异常，请重试~",
-                append: true,
+                append: false,
                 final: true,
                 errorCode: 99921111,
                 errorMessage: "任务执行异常，请重试",
@@ -603,23 +598,22 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
 
       onPartialReply: async (payload: ReplyPayload) => {
         const text = payload.text ?? "";
-
         if (text.length === 0) return;
-
-        // SDK 的 onPartialReply 是 fire-and-forget（selection-BP0T9R9I.js:4952
-        // 不 await），经过 reply-turn-admission 层的 handlePartialForTyping
-        // 还会先 await typingSignals.signalTextDelta。如果 typing 未禁用，
-        // 这个异步 I/O 会导致多个 onPartialReply 调用并发进入本回调，
-        // 造成 accumulatedText 错乱和 ws.send 乱序。
-        //
-        // 通过 processingLock 串行化回调的进入（类似飞书的 partialUpdateQueue），
-        // 确保同一时刻只有一个回调在操作 accumulatedText 和发送。
-        // 注意：不能用 Promise 链（.then），因为链只串行化发送，
-        // 不串行化回调本身——如果回调乱序到达，链上的 accumulatedText 就已经是错的。
 
         hasSentResponse = true;
 
-        const textCaptured = text;
+        // 检测新模型调用：同一模型调用内 text 是递增的（"好的"→"好的，已查到"），
+        // 跨模型调用时 text 会刷新，此时 !text.startsWith(currentModelText) 为 true
+        if (currentModelText && !text.startsWith(currentModelText)) {
+          // 锁存上一个模型调用的完整文本
+          prevModelText += currentModelText;
+        }
+        currentModelText = text;
+
+        const sep = prevModelText ? "\n" : "";
+        const fullText = crossTurnPrefix + prevModelText + sep + text;
+
+        // 串行化发送，避免 ws.send 乱序
         const prevLock = processingLock;
         let releaseLock: () => void;
         processingLock = new Promise<void>((resolve) => {
@@ -628,33 +622,18 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
 
         try {
           await prevLock;
-
-          if (textCaptured.length === 0) return;
-
-          const { delta, accumulated } = resolveStreamingDelta(accumulatedText, textCaptured);
-          let sendText = delta;
-
-          // 新旧文本无关联（工具调用后的新一轮输出），加换行分隔。
-          if (delta === textCaptured && accumulatedText.length > 0) {
-            sendText = "\n" + delta;
-          }
-
-          accumulatedText = accumulated;
-
-          if (sendText.length > 0) {
-            await sendA2AResponse({
-              config,
-              sessionId,
-              taskId: getActiveTaskId(),
-              messageId: getActiveMessageId(),
-              text: sendText,
-              append: true,
-              final: false,
-              log: false,
-            });
-          }
+          await sendA2AResponse({
+            config,
+            sessionId,
+            taskId: getActiveTaskId(),
+            messageId: getActiveMessageId(),
+            text: fullText,
+            append: false,
+            final: false,
+            log: false,
+          });
         } catch (err) {
-          scopedLog().error(`[PARTIAL-REPLY] Failed to send partial reply:`, err);
+          scopedLog().error(`[PARTIAL-REPLY] Failed to send:`, err);
         } finally {
           releaseLock!();
         }
