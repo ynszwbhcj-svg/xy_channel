@@ -54,16 +54,16 @@ function extractSkillNameFromPath(filePath: unknown): string | null {
 function registerSkillsDiagnosticHook(api: OpenClawPluginApi) {
   // Tool name → skill name mapping for direct tool-based skill usage logging
   const TOOL_SKILL_MAP: Record<string, string> = {
-    get_user_location: "定位服务",
-    get_calendar_tool_schema: "日历",
-    get_note_tool_schema: "备忘录",
-    get_photo_tool_schema: "图库",
-    get_contact_tool_schema: "联系人",
-    get_device_file_tool_schema: "文件管理",
-    get_alarm_tool_schema: "闹钟",
-    message: "短信",
-    get_phone_tool_schema: "电话",
-    get_collection_tool_schema: "小艺帮记",
+    get_user_location: "GetCurrentLocation",
+    get_calendar_tool_schema: "Schedule",
+    get_note_tool_schema: "memorandum",
+    get_photo_tool_schema: "gallery",
+    get_contact_tool_schema: "contact",
+    get_device_file_tool_schema: "file",
+    get_alarm_tool_schema: "clock",
+    message: "message",
+    get_phone_tool_schema: "phone",
+    get_collection_tool_schema: "xiaoyi-collection",
   };
 
   // Log skill usage for known device tools on before_tool_call
