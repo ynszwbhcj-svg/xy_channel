@@ -14,8 +14,6 @@ import { handleCronQueryEvent } from "./cron-query-handler.js";
 import { handleMemoryQueryEvent } from "./memory-query-handler.js";
 import { cleanupStaleTempFiles } from "./reply-dispatcher.js";
 import { logger } from "./utils/logger.js";
-import { XYFileUploadService } from "./file-upload.js";
-import { startLogReporter } from "./log-reporter/index.js";
 
 export type MonitorXYOpts = {
   config?: any;
@@ -101,9 +99,6 @@ export async function monitorXYProvider(opts: MonitorXYOpts = {}): Promise<void>
 
   // Health check interval
   let healthCheckInterval: NodeJS.Timeout | null = null;
-
-  // Log reporter stop handle
-  let stopLogReporter: (() => void) | null = null;
 
   return new Promise<void>((resolve, reject) => {
     // Event handlers (defined early so they can be referenced in cleanup)
@@ -264,12 +259,6 @@ export async function monitorXYProvider(opts: MonitorXYOpts = {}): Promise<void>
     const cleanup = () => {
       logger.log("XY gateway: cleaning up...");
 
-      // Stop log reporter
-      if (stopLogReporter) {
-        stopLogReporter();
-        stopLogReporter = null;
-      }
-
       // 🔍 Diagnose before cleanup
       logger.log("[DIAGNOSTICS] Checking WebSocket managers before cleanup...");
       diagnoseAllManagers();
@@ -392,14 +381,6 @@ export async function monitorXYProvider(opts: MonitorXYOpts = {}): Promise<void>
     wsManager.connect()
       .then(() => {
         logger.log("XY gateway: started successfully");
-        // Start log reporter (independent periodic scanner + uploader)
-        startLogReporter({
-          uploadService: new XYFileUploadService(account.fileUploadUrl, account.apiKey, account.uid),
-        }).then((stop) => {
-          stopLogReporter = stop;
-        }).catch((err) => {
-          logger.warn(`Log reporter not started: ${String(err)}`);
-        });
       })
       .catch((err) => {
         // Connection failed but don't reject - continue monitoring for reconnection

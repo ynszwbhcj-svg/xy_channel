@@ -28,8 +28,10 @@ import re
 import sys
 import json
 import time
+import random
 import hashlib
 import logging
+import tempfile
 import argparse
 from pathlib import Path
 from typing import Optional, Dict, List, Any
@@ -48,6 +50,7 @@ logger = logging.getLogger("log-reporter")
 # ── Constants ────────────────────────────────────────────────────────────────
 
 DEFAULT_SCAN_INTERVAL = 300  # 5 minutes
+SCAN_JITTER = 30  # ±30 seconds random jitter to avoid thundering herd
 DEFAULT_CURSOR_PATH = "/home/sandbox/.openclaw/.xiaoyilogging/.log-reporter-cursor.json"
 DEFAULT_BAK_DIR = "/tmp/openclaw"
 DEFAULT_ENV_FILE = "/home/sandbox/.openclaw/.xiaoyienv"
@@ -143,7 +146,8 @@ MONITORS = [
 
 
 # Remote monitors config URL — set to a JSON file URL to override built-in MONITORS
-REMOTE_MONITORS_CONFIG_URL = ""
+# Can also be set via LOG_REPORTER_REMOTE_CONFIG_URL environment variable.
+REMOTE_MONITORS_CONFIG_URL = os.environ.get("LOG_REPORTER_REMOTE_CONFIG_URL", "")
 
 
 def fetch_remote_monitors(config_url: str) -> Optional[List[Dict[str, Any]]]:
@@ -171,7 +175,7 @@ def fetch_remote_monitors(config_url: str) -> Optional[List[Dict[str, Any]]]:
                 return None
         logger.info(f"Loaded {len(monitors)} monitor(s) from remote config")
         return monitors
-    except Error as e:
+    except Exception as e:
         logger.warning(f"Failed to fetch remote monitors config: {e}")
         return None
 
@@ -278,9 +282,23 @@ def load_cursor_store(store_path: str) -> Dict[str, Any]:
 def save_cursor_store(store_path: str, store: Dict[str, Any]) -> None:
     try:
         os.makedirs(os.path.dirname(store_path), exist_ok=True)
-        with open(store_path, "w") as f:
-            json.dump(store, f, indent=2)
-    except Error as e:
+        # Atomic write: write to temp file first, then rename
+        tmp_fd, tmp_path = tempfile.mkstemp(
+            dir=os.path.dirname(store_path),
+            prefix=".log-reporter-cursor-",
+            suffix=".tmp",
+        )
+        try:
+            with os.fdopen(tmp_fd, "w") as f:
+                json.dump(store, f, indent=2)
+            os.replace(tmp_path, store_path)  # atomic on Linux
+        except Exception:
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+            raise
+    except OSError as e:
         logger.warning(f"Cannot save cursor store: {e}")
 
 
@@ -297,6 +315,7 @@ def set_cursor(store: Dict[str, Any], file_path: str, cursor: Dict[str, Any]) ->
 def scan_file(file_path: str, cursor_store: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """
     Read incremental content from a log file using byte-offset cursor.
+    Reads in binary mode to avoid text-mode seek issues and encoding drift.
     Returns {file_path, content, new_cursor} or None if no new content.
     """
     try:
@@ -316,25 +335,41 @@ def scan_file(file_path: str, cursor_store: Dict[str, Any]) -> Optional[Dict[str
         start_byte = 0  # New file, read from beginning
     elif current_size > last_size:
         start_byte = last_size  # File grew, read from where we left off
-    elif current_size < last_size and current_mtime_ms > last_modified:
+    elif current_size < last_size and current_mtime_ms >= last_modified:
         start_byte = 0  # File rotated (truncated + rewritten)
     else:
         return None  # No change
 
-    # Read from offset
-    with open(file_path, "r", encoding="utf-8", errors="replace") as f:
+    # Read in binary mode — byte offset from cursor is always valid for binary seek
+    with open(file_path, "rb") as f:
         if start_byte > 0:
             f.seek(start_byte)
-        content = f.read()
+        raw_bytes = f.read()
 
-    # Count new lines
-    new_line_count = content.count("\n") if content else 0
-    if new_line_count == 0:
-        return None  # No complete lines yet (partial write)
+    if not raw_bytes:
+        return None
+
+    # Find the last complete line in binary (lines end with \n = 0x0a)
+    last_newline = raw_bytes.rfind(b"\n")
+    if last_newline == -1:
+        return None  # No complete lines yet (all partial writes)
+
+    # Separate complete content from incomplete suffix
+    complete_bytes = raw_bytes[: last_newline + 1]
+
+    # Decode only the complete portion for text output
+    content = complete_bytes.decode("utf-8", errors="replace")
+    if not content:
+        return None
+
+    new_line_count = content.count("\n")
+
+    # Cursor uses actual binary bytes consumed — no encoding drift
+    new_last_size = start_byte + len(complete_bytes)
 
     prev_line = cursor["last_line"] if cursor else 0
     new_cursor = {
-        "last_size": current_size,
+        "last_size": new_last_size,
         "last_line": prev_line + new_line_count,
         "last_modified": current_mtime_ms,
     }
@@ -402,6 +437,14 @@ def parse_log_line(raw: str) -> Optional[Dict[str, Any]]:
     }
 
 
+def _clean_surrogates(text: str) -> str:
+    """
+    Replace lone surrogate characters that cannot be encoded to UTF-8.
+    JSON-decoded emoji can leave unpaired surrogates like \\ud83d in strings.
+    """
+    return text.encode("utf-8", errors="surrogateescape").decode("utf-8", errors="replace")
+
+
 def format_parsed_log_line(parsed: Dict[str, Any]) -> str:
     """Format a parsed log line as 'time LEVEL subsystem message'."""
     parts = []
@@ -417,16 +460,42 @@ def format_parsed_log_line(parsed: Dict[str, Any]) -> str:
 
 
 def parse_and_format_log_content(raw_content: str) -> str:
-    """Parse and format all lines — JSON lines are parsed, non-JSON pass through."""
+    """
+    Parse and format all lines — JSON lines are parsed, non-JSON pass through.
+    Surrogate characters from JSON-escaped emoji are sanitized to avoid UTF-8
+    encoding failures downstream.
+    """
     lines = raw_content.split("\n")
     formatted = []
     for line in lines:
         parsed = parse_log_line(line)
         if parsed:
-            formatted.append(format_parsed_log_line(parsed))
+            formatted.append(_clean_surrogates(format_parsed_log_line(parsed)))
         elif line:
-            formatted.append(line)
+            formatted.append(_clean_surrogates(line))
     return "\n".join(formatted)
+
+
+# Patterns that identify log entries produced by the log reporter's own API calls.
+# Filtering these prevents a self-amplifying feedback loop where uploading/reporting
+# generates new access logs that get picked up in the next scan cycle.
+_SELF_REFERENCE_PATTERNS = [
+    "/fulfillment/v1/claw/log-file/sync",
+    "/osms/v1/file/manager/prepare",
+    "/osms/v1/file/manager/completeAndQuery",
+    "log-reporter",
+]
+
+
+def filter_self_referencing(content: str) -> str:
+    """Remove lines that reference the log reporter's own activity."""
+    lines = content.split("\n")
+    filtered = [
+        line
+        for line in lines
+        if not any(pattern in line for pattern in _SELF_REFERENCE_PATTERNS)
+    ]
+    return "\n".join(filtered)
 
 
 # ── File Upload (three-phase: prepare → upload → completeAndQuery) ───────────
@@ -553,7 +622,7 @@ def upload_content(
     bak_path = os.path.join(bak_dir, bak_file_name)
 
     with open(bak_path, "w", encoding="utf-8") as f:
-        f.write(content)
+        f.write(_clean_surrogates(content))
 
     last_error = None
     url = ""
@@ -671,12 +740,10 @@ def do_scan(
     """
     Execute one full scan cycle:
     1. Scan all monitors for new log content
-    2. Upload content per business type
+    2. Upload content per business type, persist cursors immediately
     3. Send report to sync API
-    4. Persist cursors
     """
     cursor_store = load_cursor_store(cursor_path)
-    pending_cursors: Dict[str, Dict[str, Any]] = {}
 
     # Phase 1: Scan all monitors
     content_map: Dict[str, str] = {}  # business_type → accumulated content
@@ -715,12 +782,18 @@ def do_scan(
 
         if bt_parts:
             bt = monitor["business_type"]
+            combined = "\n".join(bt_parts)
             existing = content_map.get(bt)
             content_map[bt] = (
-                existing + "\n" + "\n".join(bt_parts)
-                if existing
-                else "\n".join(bt_parts)
+                existing + "\n" + combined if existing else combined
             )
+            # Apply self-referencing filter to prevent feedback loop:
+            # log reporter's own API calls should not be re-collected
+            if bt == "xiaoyi-channel":
+                content_map[bt] = filter_self_referencing(content_map[bt])
+                if not content_map[bt].strip():
+                    del content_map[bt]
+                    continue
             cursor_map[bt] = bt_cursors
 
     # Phase 2: Skip if no content
@@ -730,7 +803,10 @@ def do_scan(
         return
 
     # Phase 3: Upload each business type's content → get URL
+    # Cursors are persisted immediately after each successful upload so that
+    # a subsequent report failure does not cause content re-upload (duplication).
     log_files: List[Dict[str, str]] = []
+    cursor_dirty = False
     for business_type, content in content_map.items():
         try:
             if dry_run:
@@ -742,13 +818,18 @@ def do_scan(
 
             log_files.append({"businessType": business_type, "fileUrl": url})
 
-            # Merge cursors for successful uploads
+            # Persist cursors immediately for successfully uploaded content
             bt_cursors = cursor_map.get(business_type)
             if bt_cursors:
                 for fp, cursor in bt_cursors.items():
-                    pending_cursors[fp] = cursor
+                    set_cursor(cursor_store, fp, cursor)
+                cursor_dirty = True
         except Exception as e:
             logger.error(f'Upload failed for "{business_type}": {e}')
+
+    # Save cursors now — before report — so that upload progress is never lost
+    if cursor_dirty:
+        save_cursor_store(cursor_path, cursor_store)
 
     if not log_files:
         logger.info("All uploads failed, skipping report")
@@ -764,12 +845,6 @@ def do_scan(
             send_report(log_files, env)
     except Exception as e:
         logger.error(f"Report failed: {e}")
-        return  # Don't persist cursors on report failure
-
-    # Phase 5: Persist cursors
-    for fp, cursor in pending_cursors.items():
-        set_cursor(cursor_store, fp, cursor)
-    save_cursor_store(cursor_path, cursor_store)
 
 
 # ── Entry Point ──────────────────────────────────────────────────────────────
@@ -836,7 +911,16 @@ Examples:
     if args.dry_run:
         logger.info("DRY-RUN mode: no upload or report will be performed")
 
-    # Run first scan immediately
+    # Delay first scan by a random amount (0 ~ interval) so that instances
+    # started simultaneously (e.g. mass upgrade) don't all scan at once.
+    if args.once:
+        initial_delay = 0
+    else:
+        initial_delay = random.randint(0, interval)
+        logger.info(f"First scan in {initial_delay}s (jitter to avoid thundering herd)")
+        time.sleep(initial_delay)
+
+    # Run first scan
     try:
         do_scan(cursor_path, bak_dir, env, monitors, dry_run=args.dry_run)
     except Exception as e:
@@ -846,10 +930,13 @@ Examples:
         logger.info("Single scan complete, exiting")
         return
 
-    # Schedule periodic scans
-    logger.info(f"Next scan in {interval}s...")
+    # Schedule periodic scans with jitter
     while True:
-        time.sleep(interval)
+        # Apply random jitter: interval ± SCAN_JITTER (clamped to min 10s)
+        jitter = random.randint(-SCAN_JITTER, SCAN_JITTER)
+        sleep_time = max(interval + jitter, 10)
+        logger.info(f"Next scan in {sleep_time}s...")
+        time.sleep(sleep_time)
         # Re-fetch remote monitors config each cycle so it can be updated dynamically
         if REMOTE_MONITORS_CONFIG_URL:
             new_monitors = fetch_remote_monitors(REMOTE_MONITORS_CONFIG_URL)
@@ -859,7 +946,6 @@ Examples:
             do_scan(cursor_path, bak_dir, env, monitors, dry_run=args.dry_run)
         except Exception as e:
             logger.error(f"Scan failed: {e}")
-        logger.info(f"Next scan in {interval}s...")
 
 
 if __name__ == "__main__":
