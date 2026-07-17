@@ -829,6 +829,29 @@ export const xiaoyiProvider: ProviderPlugin = {
         model = { ...model, id: modelNameOverride };
       }
 
+      // ── Debug: reasoning_content diagnostics ──────────────────
+      logger.log(`[DEBUG-REASONING] model.id=${model.id} reasoning=${model.reasoning} provider=${model.provider}`);
+      logger.log(`[DEBUG-REASONING] model.compat=${JSON.stringify((model as any).compat)}`);
+      logger.log(`[DEBUG-REASONING] options.reasoningEffort=${options?.reasoningEffort}`);
+      const firstAssistant = context.messages?.find(
+        (m: any) => m.role === "assistant" && Array.isArray(m.content),
+      );
+      if (firstAssistant) {
+        logger.log(
+          `[DEBUG-REASONING] first assistant msg blocks: ${JSON.stringify(
+            (firstAssistant.content as any[]).map((b: any) => ({
+              type: b.type,
+              sig: b.thinkingSignature,
+              hasText: typeof b.text === "string" ? b.text.slice(0, 80) : undefined,
+              hasThinking: typeof b.thinking === "string" ? b.thinking.slice(0, 80) : undefined,
+            })),
+          )}`,
+        );
+      } else {
+        logger.log("[DEBUG-REASONING] no assistant message in context.messages");
+      }
+      // ── End debug ─────────────────────────────────────────────
+
       // ── Retry-capable streaming ──────────────────────────────
       const cronJob = isCronTriggered(context.messages);
       if (cronJob) logger.log("[xiaoyiprovider] detected cron-triggered request, using extended retry delays");
