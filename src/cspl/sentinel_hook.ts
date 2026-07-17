@@ -35,7 +35,7 @@ export default function register(api: OpenClawPluginApi) {
         logger.log(`[SENTINEL HOOK] before_tool_call_event toolName: ${event.toolName}`);
         // 获取真实sessionID：优先使用ALS中的A2A sessionId，降级到OpenClaw runId或随机值
         const sessionCtx = getCurrentSessionContext();
-        const sessionId = sessionCtx?.sessionId || (event.runId?.replace(/-/g, '') || crypto.randomBytes(16).toString('hex'));
+        const sessionId = sessionCtx?.sessionId || event.runId || crypto.randomBytes(16).toString('hex');
         const taskId = sessionCtx?.taskId || event.runId;
         logger.log(`[SENTINEL HOOK] Session ID: ${sessionId}, Task ID: ${taskId} (fromALS: ${!!sessionCtx?.sessionId})`);
         // 请求体中的sessionID从taskId中提取（第一个&之前的内容）
@@ -67,7 +67,7 @@ export default function register(api: OpenClawPluginApi) {
             logger.log(`[SENTINEL HOOK] after_tool_call_event toolName: ${event.toolName}`);
             // 获取真实sessionID：优先使用ALS中的A2A sessionId，降级到OpenClaw runId或随机值
             const sessionCtx = getCurrentSessionContext();
-            const sessionId = sessionCtx?.sessionId || (event.runId?.replace(/-/g, '') || crypto.randomBytes(16).toString('hex'));
+            const sessionId = sessionCtx?.sessionId || event.runId || crypto.randomBytes(16).toString('hex');
             const taskId = sessionCtx?.taskId || event.runId;
             logger.log(`[SENTINEL HOOK] Session ID: ${sessionId}, Task ID: ${taskId} (fromALS: ${!!sessionCtx?.sessionId})`);
             // 请求体中的sessionID从taskId中提取（第一个&之前的内容）
