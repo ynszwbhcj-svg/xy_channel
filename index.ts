@@ -52,19 +52,24 @@ function extractSkillNameFromPath(filePath: unknown): string | null {
  * the `after_tool_call` hook and write the skill name to the skills log.
  */
 function registerSkillsDiagnosticHook(api: OpenClawPluginApi) {
-  // Tool name → skill name mapping for direct tool-based skill usage logging
-  const TOOL_SKILL_MAP: Record<string, string> = {
-    get_user_location: "GetCurrentLocation",
-    get_calendar_tool_schema: "Schedule",
-    get_note_tool_schema: "memorandum",
-    get_photo_tool_schema: "gallery",
-    get_contact_tool_schema: "contact",
-    get_device_file_tool_schema: "file",
-    get_alarm_tool_schema: "clock",
-    message: "message",
-    get_phone_tool_schema: "phone",
-    get_collection_tool_schema: "xiaoyi-collection",
+  // Skill name → tool names mapping for direct tool-based skill usage logging
+  const SKILL_TOOLS: Record<string, string[]> = {
+    GetCurrentLocation: ["get_user_location"],
+    Schedule: ["create_calendar_event", "search_calendar_event"],
+    memorandum: ["create_note", "search_notes", "modify_note"],
+    gallery: ["search_photo_gallery", "upload_photo", "save_media_to_gallery"],
+    contact: ["search_contact"],
+    file: ["search_file", "upload_file", "save_file_to_file_manager"],
+    clock: ["create_alarm", "delete_alarm", "search_alarm", "modify_alarm"],
+    message: ["search_message", "send_message"],
+    phone: ["call_phone"],
+    "xiaoyi-collection": ["add_collection", "query_collection", "delete_collection"],
+    "xiaoyi-image-understanding": ["image_reading"],
   };
+  // Inverted to tool name → skill name for lookup
+  const TOOL_SKILL_MAP: Record<string, string> = Object.fromEntries(
+    Object.entries(SKILL_TOOLS).flatMap(([skill, tools]) => tools.map((t) => [t, skill])),
+  );
 
   // Log skill usage for known device tools on before_tool_call
   api.on("before_tool_call", async (event, _ctx) => {
