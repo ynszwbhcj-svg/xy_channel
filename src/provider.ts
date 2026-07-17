@@ -832,7 +832,7 @@ export const xiaoyiProvider: ProviderPlugin = {
       // ── Debug: reasoning_content diagnostics ──────────────────
       logger.log(`[DEBUG-REASONING] model.id=${model.id} reasoning=${model.reasoning} provider=${model.provider}`);
       logger.log(`[DEBUG-REASONING] model.compat=${JSON.stringify((model as any).compat)}`);
-      logger.log(`[DEBUG-REASONING] options.reasoningEffort=${options?.reasoningEffort}`);
+      logger.log(`[DEBUG-REASONING] options.reasoningEffort=${(options as any)?.reasoningEffort}`);
       const firstAssistant = context.messages?.find(
         (m: any) => m.role === "assistant" && Array.isArray(m.content),
       );
