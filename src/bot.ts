@@ -392,7 +392,7 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
     // per-session ReplyOperation lock in admitReplyTurn which would otherwise
     // block the steer message until the first message completes — making steer
     // indistinguishable from a followup.
-    if (isUpdate && !skipReg && route.sessionKey) {
+    if (isUpdate && route.sessionKey) {
       const activeSessionId = resolveActiveEmbeddedRunSessionId(route.sessionKey);
       if (activeSessionId) {
         log.log(`[BOT-STEER] Direct steer attempt: activeSessionId=${activeSessionId}, textLen=${textForAgent.length}`);
@@ -579,7 +579,7 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
         // signal init complete to release the global dispatch gate
         // for the next session.
         const dispatchPromise = runWithSessionContext(sessionContext, async () => {
-          const isSteerDispatch = isUpdate && !skipReg;
+          const isSteerDispatch = isUpdate;
           log.log(`[ALS-PROOF] bot entered dispatch scope sessionId=${(sessionContext as any).sessionId} taskId=${(sessionContext as any).taskId} isSteer=${isSteerDispatch}`);
           log.log(`[BOT-DISPATCH] dispatchReplyFromConfig starting, body.length=${(ctxPayload.Body as string)?.length ?? 0}`);
           try {
