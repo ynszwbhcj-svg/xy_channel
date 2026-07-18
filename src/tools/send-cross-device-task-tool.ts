@@ -1,7 +1,7 @@
 import os from "os";
 import type { SessionContext } from './session-manager.js';
 import { sendCommand, sendStatusUpdate } from "../formatter.js";
-import { getCachedXYWebSocketManager } from "../client.js";
+import { getCachedXYWebSocketManager } from "../transport/client.js";
 import type { A2ACommand, CrossDeviceTaskResultEvent, OutboundWebSocketMessage, SentFileCard } from "../types.js";
 import { logger } from "../utils/logger.js";
 import { getCurrentSessionContext } from './session-manager.js';

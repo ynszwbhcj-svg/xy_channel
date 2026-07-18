@@ -1,5 +1,5 @@
 import { sendCommand, sendStatusUpdate } from "../formatter.js";
-import { getCachedXYWebSocketManager } from "../client.js";
+import { getCachedXYWebSocketManager } from "../transport/client.js";
 import type { A2ACommand, A2ADataEvent } from "../types.js";
 import type { SessionContext } from "./session-manager.js";
 import { logger } from "../utils/logger.js";

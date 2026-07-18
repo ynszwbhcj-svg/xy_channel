@@ -28,9 +28,9 @@ import WebSocket from "ws";
 import type { SessionContext } from "./session-manager.js";
 import type { A2ADataEvent } from "../types.js";
 import { logger } from "../utils/logger.js";
-import { getXYWebSocketManager } from "../client.js";
+import { getXYWebSocketManager } from "../transport/client.js";
 import { sendCommand } from "../formatter.js";
-import { getCurrentTaskId } from "../task-manager.js";
+import { getCurrentTaskId } from "../conversation/conversation-manager.js";
 import { getCurrentSessionContext } from "./session-manager.js";
 
 // ═══════════════════════════════════════════════════════════════════════════

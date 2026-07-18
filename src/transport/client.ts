@@ -1,9 +1,9 @@
 // WebSocket client cache management
 // Follows feishu/client.ts pattern for caching client instances
 import { XYWebSocketManager } from "./websocket.js";
-import type { XYChannelConfig } from "./types.js";
+import type { XYChannelConfig } from "../types.js";
 import type { RuntimeEnv } from "openclaw/plugin-sdk";
-import { logger } from "./utils/logger.js";
+import { logger } from "../utils/logger.js";
 
 /**
  * Global cache for WebSocket managers.

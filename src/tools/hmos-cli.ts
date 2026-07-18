@@ -19,9 +19,9 @@ import { InvokeError, invokeErrorToResult } from "./invoke.js";
 import type { XYChannelConfig, A2ACommand } from "../types.js";
 import type { SessionContext } from "./session-manager.js";
 import { getCurrentSessionContext } from "./session-manager.js";
-import { getXYWebSocketManager } from "../client.js";
+import { getXYWebSocketManager } from "../transport/client.js";
 import { sendCommand } from "../formatter.js";
-import { getCurrentTaskId } from "../task-manager.js";
+import { getCurrentTaskId } from "../conversation/conversation-manager.js";
 
 // ═══════════════════════════════════════════════════════════════════════════
 // §1  Types

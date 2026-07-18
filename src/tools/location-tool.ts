@@ -1,7 +1,7 @@
 import { getCurrentSessionContext } from './session-manager.js';
 // Location tool implementation
 import type { ChannelAgentTool } from "openclaw/plugin-sdk";
-import { getCachedXYWebSocketManager } from "../client.js";
+import { getCachedXYWebSocketManager } from "../transport/client.js";
 import { sendCommand } from "../formatter.js";
 
 import { logger } from "../utils/logger.js";

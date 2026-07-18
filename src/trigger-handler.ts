@@ -1,7 +1,7 @@
 // Trigger 事件处理器
 import type { ClawdbotConfig, RuntimeEnv } from "openclaw/plugin-sdk";
 import type { A2AJsonRpcRequest } from "./types.js";
-import { handleXYMessage } from "./bot.js";
+import { handleXYMessage } from "./dispatch/bot.js";
 import { logger } from "./utils/logger.js";
 
 /**

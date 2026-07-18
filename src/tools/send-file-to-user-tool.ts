@@ -1,6 +1,6 @@
 // Send File to User tool implementation
 import type { ChannelAgentTool } from "openclaw/plugin-sdk";
-import { getCachedXYWebSocketManager } from "../client.js";
+import { getCachedXYWebSocketManager } from "../transport/client.js";
 import { XYFileUploadService } from "../file-upload.js";
 import os from "os";
 import { appendRunCrossTaskSentFiles, type SessionContext, getCurrentSessionContext } from './session-manager.js';

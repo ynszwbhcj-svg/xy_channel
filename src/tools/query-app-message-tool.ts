@@ -1,5 +1,5 @@
 // QueryAppMessage tool implementation
-import { getCachedXYWebSocketManager } from "../client.js";
+import { getCachedXYWebSocketManager } from "../transport/client.js";
 import { sendCommand } from "../formatter.js";
 import type { SessionContext } from "./session-manager.js";
 import { getCurrentSessionContext } from './session-manager.js';

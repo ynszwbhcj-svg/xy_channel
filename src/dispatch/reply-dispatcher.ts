@@ -1,19 +1,22 @@
 // Reply dispatcher - completely following feishu/reply-dispatcher.ts pattern
 import type { ClawdbotConfig, RuntimeEnv, ReplyPayload } from "openclaw/plugin-sdk";
-import { getXYRuntime } from "./runtime.js";
-import { sendA2AResponse, sendStatusUpdate, sendReasoningTextUpdate, sendCommand } from "./formatter.js";
-import { resolveXYConfig } from "./config.js";
-import type { A2ACommand, RunCrossTaskContext, XYChannelConfig } from "./types.js";
-import { clearRunCrossTaskSentFiles, getCurrentSessionContext } from "./tools/session-manager.js";
+import { getXYRuntime } from "../runtime.js";
+import { sendA2AResponse, sendStatusUpdate, sendReasoningTextUpdate, sendCommand } from "../formatter.js";
+import { resolveXYConfig } from "../config.js";
+import type { A2ACommand, RunCrossTaskContext, XYChannelConfig } from "../types.js";
+import { clearRunCrossTaskSentFiles, getCurrentSessionContext } from "../tools/session-manager.js";
+import fs from "fs/promises";
+import path from "path";
+import { logger } from "../utils/logger.js";
 import {
   getWaitState,
   clearWaitState,
-  attachHeartbeat,
-} from "./subagent-wait-state.js";
-import fs from "fs/promises";
-import path from "path";
-import { logger } from "./utils/logger.js";
-import { getCurrentTaskId, getCurrentMessageId } from "./task-manager.js";
+  getCurrentTaskId,
+  getCurrentMessageId,
+  startStatusHeartbeat,
+  stopStatusHeartbeat,
+  setSessionState,
+} from "../conversation/conversation-manager.js";
 
 export interface CreateXYReplyDispatcherParams {
   cfg: ClawdbotConfig;
@@ -22,7 +25,6 @@ export interface CreateXYReplyDispatcherParams {
   taskId: string;
   messageId: string;
   accountId: string;
-  steerState: { steered: boolean };  // Dynamic flag set when dispatchReplyFromConfig steers
   /** Called at end of onIdle, after final frame is sent. openclaw's waitForIdle() does
    *  not await the async onIdle, so cleanup must happen inside onIdle itself. */
   onIdleComplete?: () => void | Promise<void>;
@@ -30,16 +32,6 @@ export interface CreateXYReplyDispatcherParams {
 
 const TEMP_FILE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 const RUN_CROSS_TASK_LOG_TAG = "[RunCrossTask]";
-
-// Module-level storage for cross-turn full text. Needed because the /steer
-// fallback path creates a new dispatcher with a fresh closure, which would
-// otherwise lose text accumulated from previous turns.
-const sessionFullTextMap = new Map<string, string>();
-
-/** Clear saved full text for a session (call when session is fully done). */
-export function clearSessionFullText(sessionId: string): void {
-  sessionFullTextMap.delete(sessionId);
-}
 
 function buildDistributionStatusCommand(context: RunCrossTaskContext): A2ACommand {
   return {
@@ -146,27 +138,19 @@ export async function cleanupStaleTempFiles(tempDir: string = "/tmp/xy_channel")
  * Runtime is expected to be validated before calling this function.
  */
 export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): any {
-  const { cfg, runtime, sessionId, taskId, messageId, accountId, steerState, onIdleComplete } = params;
+  const { cfg, runtime, sessionId, taskId, messageId, accountId, onIdleComplete } = params;
 
-  // fallback taskId/messageId（当 task-manager 返回 null 时使用）
-  // steer 触发时会通过 updateFallbackTaskId() 更新为最新的 taskId
-  let currentFallbackTaskId = taskId;
-  let currentFallbackMessageId = messageId;
+  // fallback taskId/messageId（当对话管理层任务链为空时使用）
+  const currentFallbackTaskId = taskId;
+  const currentFallbackMessageId = messageId;
 
-  // 跨链读取：steer 消息通过 registerTaskId 更新 Map，这里读取最新 taskId
+  // 跨链读取：steer 消息通过对话管理层更新任务链，这里读取最新 taskId
   const getActiveTaskId = (): string => {
     return getCurrentTaskId(sessionId) ?? currentFallbackTaskId;
   };
 
   const getActiveMessageId = (): string => {
     return getCurrentMessageId(sessionId) ?? currentFallbackMessageId;
-  };
-
-  /** steer 触发时调用，同步 fallback taskId/messageId 到最新值 */
-  const updateFallbackTaskId = (newTaskId: string, newMessageId: string) => {
-    currentFallbackTaskId = newTaskId;
-    currentFallbackMessageId = newMessageId;
-    logger.log(`[DISPATCHER-UPDATE] Updated fallback taskId: ${newTaskId}`);
   };
 
   // Create a scoped logger that always uses this session's sessionId
@@ -184,7 +168,6 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
     onModelSelected: undefined,
   };
 
-  let statusUpdateInterval: NodeJS.Timeout | null = null;
   let hasSentResponse = false;
   let finalSent = false;
   let finalReplyText = "";
@@ -192,10 +175,6 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
   // ── append: false streaming state ─────────────────────────────
   // Instead of computing deltas, we always send the full text with
   // append: false.  Model-call boundaries are detected via startsWith.
-  // crossTurnPrefix: 仅在 steer 时继承上一轮内容，新消息从空开始。
-  let crossTurnPrefix = steerState.steered
-    ? (sessionFullTextMap.get(sessionId) ?? "")
-    : "";
   let prevModelText = "";     // completed model calls within this turn
   let currentModelText = "";  // current model call's full accumulated text
   // ──────────────────────────────────────────────────────────────
@@ -212,36 +191,16 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
   };
 
   /**
-   * Start the status update interval
+   * 30s 状态心跳由对话管理层拥有（manager-owned），dispatcher 仅做委托。
+   * 心跳独立于 dispatcher 生命周期：subagent 等待期间 dispatcher 销毁后
+   * 心跳仍由 manager 维持。
    */
   const startStatusInterval = () => {
-    scopedLog().log(`[STATUS-INTERVAL] Starting interval`);
-
-    statusUpdateInterval = setInterval(() => {
-      // 🔑 使用动态taskId
-
-      const currentTaskId = getActiveTaskId();
-      scopedLog().log(`[STATUS-INTERVAL] Triggering status update, taskId=${currentTaskId}`);
-
-      void sendStatusUpdate({
-        config,
-        sessionId,
-        taskId: currentTaskId,
-        messageId: getActiveMessageId(),
-        text: "任务正在处理中，请稍候~",
-        state: "working",
-      }).catch((err) => {
-        scopedLog().error(`Failed to send status update:`, err);
-      });
-    }, 30000); // 30 seconds
+    startStatusHeartbeat(sessionId);
   };
 
   const stopStatusInterval = () => {
-    if (statusUpdateInterval) {
-      scopedLog().log(`[STATUS-INTERVAL] Stopping interval`);
-      clearInterval(statusUpdateInterval);
-      statusUpdateInterval = null;
-    }
+    stopStatusHeartbeat(sessionId);
   };
 
   const { dispatcher, replyOptions, markDispatchIdle } =
@@ -251,7 +210,7 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
       humanDelay: core.channel.reply.resolveHumanDelayConfig(cfg, accountId),
 
       onReplyStart: () => {
-        scopedLog().log(`[REPLY-START] Reply started, taskId=${taskId}, steered=${steerState.steered}`);
+        scopedLog().log(`[REPLY-START] Reply started, taskId=${taskId}`);
       },
 
       deliver: async (payload: ReplyPayload, info) => {
@@ -298,7 +257,7 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
             sessionId,
             taskId: getActiveTaskId(),
             messageId: getActiveMessageId(),
-            text: crossTurnPrefix + text,
+            text,
             append: false,
             final: false,
           });
@@ -330,15 +289,7 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
 
       onIdle: async () => {
 
-        scopedLog().log(`[ON-IDLE] Reply idle, steered=${steerState.steered}, hasSentResponse=${hasSentResponse}, finalSent=${finalSent}`);
-
-        // 🔑 steered dispatch without response — steer was injected into active run,
-        // no reply generated. Skip final response without sending error.
-        if (steerState.steered && !hasSentResponse) {
-          scopedLog().log(`[ON-IDLE] Steered dispatch, no response generated, skipping`);
-          stopStatusInterval();
-          return;
-        }
+        scopedLog().log(`[ON-IDLE] Reply idle, hasSentResponse=${hasSentResponse}, finalSent=${finalSent}`);
 
         // ── Subagent wait state check ─────────────────────────────
         // If this session has pending subagent completions, suppress final:true
@@ -353,6 +304,8 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
           scopedLog().log(
             `[ON-IDLE] Waiting for subagent completions ${waitState.deliveredCompletions}/${waitState.expectedCompletions}, suppressing final:true`,
           );
+          // 会话不结束：转入 waiting-subagent，心跳由对话管理层继续维持
+          setSessionState(sessionId, "waiting-subagent");
           try {
             await sendStatusUpdate({
               config,
@@ -365,8 +318,7 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
           } catch (err) {
             scopedLog().error(`[ON-IDLE] Failed to send subagent waiting status:`, err);
           }
-          // Attach heartbeat so the status interval stays alive during wait
-          attachHeartbeat(sessionId, taskId, stopStatusInterval);
+          // 心跳由对话管理层拥有，subagent 等待期间自动存活，无需附加到等待态
           return;
         }
         // If wait state exists and all subagents are already complete,
@@ -386,24 +338,18 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
         // 不会 await 返回的 Promise，因此 onSettled 可能在 onIdle 中途触发。
         // 所有清理逻辑必须放在 finally 块中，不要依赖 onSettled。
         try {
-          // 正常模式（或未被steer的dispatch）
+          // 正常模式
           if (hasSentResponse && !finalSent) {
-            // 保存本轮完整文本，供后续 steer/fallback 的 dispatcher 读取
-            const sep = prevModelText ? "\n" : "";
-            crossTurnPrefix = crossTurnPrefix + prevModelText + sep + currentModelText;
-            sessionFullTextMap.set(sessionId, crossTurnPrefix);
-
             // 先用后清：crossTaskResultMessage 需要 currentModelText
             const trimmedFinalReplyText = finalReplyText.trim();
             const trimmedCurrentModelText = currentModelText.trim();
             const crossTaskResultMessage = trimmedFinalReplyText || trimmedCurrentModelText;
             const crossTaskResultSource = trimmedFinalReplyText ? "final" : "currentModel";
 
-            // 重置当前 turn 状态，为下一轮 steer 做准备
+            // 重置当前 turn 状态
             prevModelText = "";
             currentModelText = "";
 
-            scopedLog().log(`[ON-IDLE] Saved cross-turn prefix, length=${crossTurnPrefix.length}`);
             scopedLog().log(`[ON-IDLE] [SendCrossResult]Sending cross-task result, source=${crossTaskResultSource}, resultMessage.length=${crossTaskResultMessage.length}`);
             try {
               const runCrossTaskContext = getRunCrossTaskContext();
@@ -446,12 +392,13 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
               if (waitState) {
                 clearWaitState(sessionId, "main-final-delivered", taskId);
               }
+              setSessionState(sessionId, "completed");
               scopedLog().log(`[ON-IDLE] Sent final response (empty, stream end)`);
             } catch (err) {
               scopedLog().error(`[ON-IDLE] Failed to send final response:`, err);
             }
           } else {
-            // 正常失败场景（非steered）
+            // 正常失败场景
             scopedLog().log(`[ON-IDLE] Skipping final message: hasSentResponse=${hasSentResponse}, finalSent=${finalSent}`);
             try {
               const runCrossTaskContext = getRunCrossTaskContext();
@@ -489,6 +436,7 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
                 errorMessage: "任务执行异常，请重试",
               });
               finalSent = true;
+              setSessionState(sessionId, "failed");
               scopedLog().log(`[ON-IDLE] Sent error response, code=99921111`);
             } catch (err) {
               scopedLog().error(`[ON-IDLE] Failed to send error response:`, err);
@@ -505,7 +453,7 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
       },
 
       onCleanup: () => {
-        scopedLog().log(`[ON-CLEANUP] Reply cleanup, steered=${steerState.steered}`);
+        scopedLog().log(`[ON-CLEANUP] Reply cleanup`);
       },
     });
 
@@ -626,7 +574,7 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
           currentModelText = text;
 
           const sep = prevModelText ? "\n" : "";
-          const fullText = crossTurnPrefix + prevModelText + sep + text;
+          const fullText = prevModelText + sep + text;
 
           await sendA2AResponse({
             config,
@@ -648,6 +596,5 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
     markDispatchIdle,
     startStatusInterval,
     stopStatusInterval,
-    updateFallbackTaskId,
   };
 }

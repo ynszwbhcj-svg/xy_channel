@@ -13,7 +13,7 @@
 import { AsyncLocalStorage } from "async_hooks";
 import type { RunCrossTaskContext, SentFileCard, XYChannelConfig } from "../types.js";
 import { logger } from "../utils/logger.js";
-import { getCurrentTaskId, getCurrentMessageId } from "../task-manager.js";
+import { getCurrentTaskId, getCurrentMessageId } from "../conversation/conversation-manager.js";
 
 export interface SessionContext {
   config: XYChannelConfig;

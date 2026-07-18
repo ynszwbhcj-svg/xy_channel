@@ -2,42 +2,36 @@
 import type { ClawdbotConfig, RuntimeEnv, ReplyPayload } from "openclaw/plugin-sdk";
 import { resolveRuntimeConversationBindingRoute } from "openclaw/plugin-sdk/conversation-runtime";
 import { updateSessionStoreEntry, updateSessionStore, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
-import { getXYRuntime } from "./runtime.js";
+import { getXYRuntime } from "../runtime.js";
 import { createXYReplyDispatcher } from "./reply-dispatcher.js";
-import { parseA2AMessage, extractTextFromParts, extractFileParts, extractPushId, extractDeviceType, extractAppVer, extractSdkApiVersion, extractModelName, extractTriggerData, extractRunCrossTaskContext, isClearContextMessage, isTasksCancelMessage } from "./parser.js";
-import { downloadFilesFromParts } from "./file-download.js";
-import { resolveXYConfig } from "./config.js";
-import { sendStatusUpdate, sendClearContextResponse, sendTasksCancelResponse, sendA2AResponse } from "./formatter.js";
+import { parseA2AMessage, extractTextFromParts, extractFileParts, extractPushId, extractDeviceType, extractAppVer, extractSdkApiVersion, extractModelName, extractTriggerData, extractRunCrossTaskContext, isClearContextMessage, isTasksCancelMessage } from "../parser.js";
+import { downloadFilesFromParts } from "../file-download.js";
+import { resolveXYConfig } from "../config.js";
+import { sendStatusUpdate, sendClearContextResponse, sendTasksCancelResponse, sendA2AResponse } from "../formatter.js";
 import {
   appendSelfEvolutionKeywordNudge,
   shouldNudgeForSelfEvolutionKeyword,
-} from "./self-evolution-keyword.js";
-import { runWithSessionContext } from "./tools/session-manager.js";
-import { configManager } from "./utils/config-manager.js";
-import { addPushId } from "./utils/pushid-manager.js";
-import { getPushDataById } from "./utils/pushdata-manager.js";
-import { selfEvolutionManager } from "./utils/self-evolution-manager.js";
-import { saveRuntimeInfo } from "./utils/runtime-manager.js";
-import { toolCallNudgeManager } from "./utils/tool-call-nudge-manager.js";
-import { setCsplSteerContext } from "./cspl/steer-context.js";
+} from "../self-evolution-keyword.js";
+import { runWithSessionContext } from "../tools/session-manager.js";
+import { configManager } from "../utils/config-manager.js";
+import { addPushId } from "../utils/pushid-manager.js";
+import { getPushDataById } from "../utils/pushdata-manager.js";
+import { selfEvolutionManager } from "../utils/self-evolution-manager.js";
+import { saveRuntimeInfo } from "../utils/runtime-manager.js";
+import { toolCallNudgeManager } from "../utils/tool-call-nudge-manager.js";
+import { tryDirectSteer } from "../conversation/steer-service.js";
 import {
-  resolveActiveEmbeddedRunSessionId,
-  queueAgentHarnessMessage,
-} from "openclaw/plugin-sdk/agent-harness-runtime";
-import {
-  registerTaskId,
-  decrementTaskIdRef,
+  registerTask,
+  completeTask,
   hasActiveTask,
-} from "./task-manager.js";
-import {
-  registerSessionKeyMapping,
+  bindSessionKey,
   getWaitState,
   hasWaitState,
   markParentSettled,
   cacheXYConfig,
-} from "./subagent-wait-state.js";
-import type { A2AJsonRpcRequest } from "./types.js";
-import { logger } from "./utils/logger.js";
+} from "../conversation/conversation-manager.js";
+import type { A2AJsonRpcRequest } from "../types.js";
+import { logger } from "../utils/logger.js";
 
 /**
  * Parameters for handling an XY message.
@@ -50,12 +44,6 @@ export interface HandleXYMessageParams {
   webSocketSessionId?: string; // 可选：WebSocket 层级的 sessionId，用于保存 .xiaoyiruntime
   /** Called after dispatch init is complete (agentTools/wrapStreamFn done). */
   onInitComplete?: () => void;
-  /**
-   * When true, skip taskId/session registration. Used by tryInjectSteer to
-   * inject a steer message without overwriting the active taskId or leaking
-   * session refCount.
-   */
-  skipRegistration?: boolean;
 }
 
 /**
@@ -69,9 +57,6 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
     typeof (message as any)?.sessionId === "string" && (message as any).sessionId.length > 0
       ? (message as any).sessionId
       : undefined;
-
-  // Cache context for CSPL steer injection (after_tool_call hook)
-  setCsplSteerContext(cfg, runtime);
 
   // Get runtime (already validated in monitor.ts, but get reference for use)
   const core = getXYRuntime() as any;
@@ -163,47 +148,35 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
 
     // 🔑 注册taskId（检测是否是已有活跃任务的 session）
     const isUpdate = hasActiveTask(parsed.sessionId);
-    const skipReg = params.skipRegistration === true;
 
     if (isUpdate) {
       log.log(`[BOT] STEER MODE - Second message detected, new taskId=${parsed.taskId}`);
     }
 
-    // Steer injections skip taskId registration to avoid overwriting the active taskId
-    if (!skipReg) {
-      registerTaskId(parsed.sessionId, parsed.taskId, parsed.messageId);
+    registerTask(parsed.sessionId, parsed.taskId, parsed.messageId);
 
-      // 🔑 steer 场景：同步更新活跃 dispatcher 的 fallback taskId/messageId
-      if (isUpdate) {
-        const updater = dispatcherUpdaters.get(parsed.sessionId);
-        if (updater) {
-          updater(parsed.taskId, parsed.messageId);
-        }
-      }
+    // Extract and update push_id if present
+    const pushId = extractPushId(parsed.parts);
+    if (pushId) {
+      log.log(`[BOT] Extracted push_id from user message`);
+      configManager.updatePushId(parsed.sessionId, pushId);
 
-      // Extract and update push_id if present
-      const pushId = extractPushId(parsed.parts);
-      if (pushId) {
-        log.log(`[BOT] Extracted push_id from user message`);
-        configManager.updatePushId(parsed.sessionId, pushId);
-
-        // 持久化 pushId 到本地文件（异步，不阻塞主流程）
-        addPushId(pushId).catch((err) => {
-          log.error(`[BOT] Failed to persist pushId:`, err);
-        });
-      } else {
-        log.log(`[BOT] No push_id found in message, using config default`);
-      }
-
-      // 保存 runtime 信息到 .xiaoyiruntime 文件（异步，不阻塞主流程）
-      saveRuntimeInfo(
-        webSocketSessionId || parsed.sessionId, // SESSION_ID (WebSocket 层级，如果没有则 fallback)
-        parsed.sessionId, // CONVERSATION_ID (param 里的 sessionId)
-        parsed.taskId // TASK_ID (param.id)
-      ).catch((err) => {
-        log.error(`[BOT] Failed to save runtime info:`, err);
+      // 持久化 pushId 到本地文件（异步，不阻塞主流程）
+      addPushId(pushId).catch((err) => {
+        log.error(`[BOT] Failed to persist pushId:`, err);
       });
+    } else {
+      log.log(`[BOT] No push_id found in message, using config default`);
     }
+
+    // 保存 runtime 信息到 .xiaoyiruntime 文件（异步，不阻塞主流程）
+    saveRuntimeInfo(
+      webSocketSessionId || parsed.sessionId, // SESSION_ID (WebSocket 层级，如果没有则 fallback)
+      parsed.sessionId, // CONVERSATION_ID (param 里的 sessionId)
+      parsed.taskId // TASK_ID (param.id)
+    ).catch((err) => {
+      log.error(`[BOT] Failed to save runtime info:`, err);
+    });
 
     // Extract deviceType if present (always parse — used in ctxPayload.MessageSid)
     const deviceType = extractDeviceType(parsed.parts);
@@ -255,7 +228,7 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
     // different taskId — overwriting the mapping would break subagent wait
     // state tracking for the original message's subagents.
     if (!isUpdate) {
-      registerSessionKeyMapping(route.sessionKey, parsed.sessionId, parsed.taskId, parsed.messageId);
+      bindSessionKey(route.sessionKey, parsed.sessionId, parsed.taskId, parsed.messageId);
     }
 
     // Check for ACP runtime binding on this A2A conversation
@@ -277,72 +250,70 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
     // ALS only: no registerSession. The sessionContext built below is handed
     // to runWithSessionContext() inside withReplyDispatcher.run, which is the
     // single wrap point for the whole agent turn.
-    if (!skipReg) {
-      // 🔑 Sync A2A modelName to OpenClaw session store so that session_status
-      // reports the correct model. Without this, session_status returns the
-      // configured default model instead of the A2A-specified one.
-      if (modelName && modelName.trim() !== "" && modelName.toLowerCase() !== "none") {
-        try {
-          const storePath = resolveStorePath();
-          const result = await updateSessionStoreEntry({
-            storePath,
-            sessionKey: route.sessionKey,
-            update: async () => ({
-              providerOverride: "xiaoyiprovider",
-              modelOverride: modelName,
-              modelOverrideSource: "user",
-              model: "",
-              modelProvider: "",
-              contextTokens: 256_000,
-            }),
+    // 🔑 Sync A2A modelName to OpenClaw session store so that session_status
+    // reports the correct model. Without this, session_status returns the
+    // configured default model instead of the A2A-specified one.
+    if (modelName && modelName.trim() !== "" && modelName.toLowerCase() !== "none") {
+      try {
+        const storePath = resolveStorePath();
+        const result = await updateSessionStoreEntry({
+          storePath,
+          sessionKey: route.sessionKey,
+          update: async () => ({
+            providerOverride: "xiaoyiprovider",
+            modelOverride: modelName,
+            modelOverrideSource: "user",
+            model: "",
+            modelProvider: "",
+            contextTokens: 256_000,
+          }),
+        });
+        if (!result) {
+          // Session entry doesn't exist yet (first message, xy_channel
+          // bypasses the standard turn kernel). Create a minimal entry
+          // with the override via updateSessionStore.
+          await updateSessionStore(storePath, (store) => {
+            if (!store[route.sessionKey]) {
+              store[route.sessionKey] = {
+                // sessionId must pass validateSessionId regex /^[a-z0-9][a-z0-9._-]{0,127}$/i
+                // route.sessionKey like "agent:main:direct:xxx" contains colons which are invalid.
+                // Use parsed.sessionId (raw UUID from A2A) which is always safe.
+                sessionId: parsed.sessionId,
+                updatedAt: Date.now(),
+                providerOverride: "xiaoyiprovider",
+                modelOverride: modelName,
+                modelOverrideSource: "user",
+                contextTokens: 256_000,
+              } as any;
+            }
           });
-          if (!result) {
-            // Session entry doesn't exist yet (first message, xy_channel
-            // bypasses the standard turn kernel). Create a minimal entry
-            // with the override via updateSessionStore.
-            await updateSessionStore(storePath, (store) => {
-              if (!store[route.sessionKey]) {
-                store[route.sessionKey] = {
-                  // sessionId must pass validateSessionId regex /^[a-z0-9][a-z0-9._-]{0,127}$/i
-                  // route.sessionKey like "agent:main:direct:xxx" contains colons which are invalid.
-                  // Use parsed.sessionId (raw UUID from A2A) which is always safe.
-                  sessionId: parsed.sessionId,
-                  updatedAt: Date.now(),
-                  providerOverride: "xiaoyiprovider",
-                  modelOverride: modelName,
-                  modelOverrideSource: "user",
-                  contextTokens: 256_000,
-                } as any;
-              }
-            });
-            log.log(`[BOT] Created session entry with model override: xiaoyiprovider/${modelName}`);
-          } else {
-            log.log(`[BOT] Patched session store model override: xiaoyiprovider/${modelName}`);
-          }
-        } catch (patchErr) {
-          log.error(`[BOT] Failed to patch session model override:`, patchErr);
+          log.log(`[BOT] Created session entry with model override: xiaoyiprovider/${modelName}`);
+        } else {
+          log.log(`[BOT] Patched session store model override: xiaoyiprovider/${modelName}`);
         }
+      } catch (patchErr) {
+        log.error(`[BOT] Failed to patch session model override:`, patchErr);
       }
-
-      // 🔑 发送初始状态更新
-      log.log(`[BOT] Sending initial status update`);
-      void sendStatusUpdate({
-        config,
-        sessionId: parsed.sessionId,
-        taskId: parsed.taskId,
-        messageId: parsed.messageId,
-        text: "任务正在处理中，请稍候~",
-        state: "working",
-      }).catch((err) => {
-        log.error(`Failed to send initial status update:`, err);
-      });
     }
+
+    // 🔑 发送初始状态更新
+    log.log(`[BOT] Sending initial status update`);
+    void sendStatusUpdate({
+      config,
+      sessionId: parsed.sessionId,
+      taskId: parsed.taskId,
+      messageId: parsed.messageId,
+      text: "任务正在处理中，请稍候~",
+      state: "working",
+    }).catch((err) => {
+      log.error(`Failed to send initial status update:`, err);
+    });
 
     // Extract text and files from parts
     const text = extractTextFromParts(parsed.parts);
     let textForAgent = text || "";
-    // Self-evolution keyword nudge — only for real user messages, not steer injections
-    if (!skipReg && route.sessionKey && textForAgent) {
+    // Self-evolution keyword nudge — only for real user messages
+    if (route.sessionKey && textForAgent) {
       try {
         const selfEvolutionEnabled = await selfEvolutionManager.isEnabled();
         if (selfEvolutionEnabled && shouldNudgeForSelfEvolutionKeyword(textForAgent)) {
@@ -369,14 +340,12 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
     // ── Build message and dispatch via auto-reply pipeline ──────────
     // 首条消息和 steer 回退都走此统一 dispatch 路径。
 
-    // File download — for both first message and steer fallthrough
+    // File download — for both first message and steer messages
     let mediaPayload: ReturnType<typeof buildXYMediaPayload> = {};
-    if (!skipReg || isUpdate) {
-      const fileParts = extractFileParts(parsed.parts);
-      const downloadedFiles = await downloadFilesFromParts(fileParts);
-      log.log(`[BOT] Downloaded ${downloadedFiles.length} file(s)`);
-      mediaPayload = buildXYMediaPayload(downloadedFiles);
-    }
+    const fileParts = extractFileParts(parsed.parts);
+    const downloadedFiles = await downloadFilesFromParts(fileParts);
+    log.log(`[BOT] Downloaded ${downloadedFiles.length} file(s)`);
+    mediaPayload = buildXYMediaPayload(downloadedFiles);
 
     // 🔑 对于 steer 消息，将文件路径附加到消息文本中。
     // auto-reply 管道的 steer 注入只携带 prompt 文本（followupRun.prompt），
@@ -388,29 +357,31 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
     }
 
     // 🔑 Direct steer: bypass dispatchReplyFromConfig entirely and inject the
-    // message directly into the active embedded agent run. This avoids the
-    // per-session ReplyOperation lock in admitReplyTurn which would otherwise
-    // block the steer message until the first message completes — making steer
-    // indistinguishable from a followup.
-    if (isUpdate && !skipReg && route.sessionKey) {
-      const activeSessionId = resolveActiveEmbeddedRunSessionId(route.sessionKey);
-      if (activeSessionId) {
-        log.log(`[BOT-STEER] Direct steer attempt: activeSessionId=${activeSessionId}, textLen=${textForAgent.length}`);
-        const queued = queueAgentHarnessMessage(activeSessionId, textForAgent, {
-          steeringMode: "all",
-        });
-        if (queued) {
-          log.log(`[BOT-STEER] Direct steer succeeded — message injected into active run`);
-          // Steer message taskId stays in the binding so getActiveTaskId()
-          // resolves to the latest taskId for onPartialReply replies.
-          // Cleanup happens via the original dispatcher's onIdleComplete →
-          // decrementTaskIdRef(sessionId) which removes the entire binding.
-          return;
-        }
-        log.log(`[BOT-STEER] Direct steer failed (queued=false), falling through to dispatchReplyFromConfig`);
-      } else {
-        log.log(`[BOT-STEER] No active embedded run session for key=${route.sessionKey}, falling through to dispatchReplyFromConfig`);
+    // message directly into the active embedded agent run (via 对话管理层
+    // steer 服务). This avoids the per-session ReplyOperation lock in
+    // admitReplyTurn which would otherwise block the steer message until the
+    // first message completes — making steer indistinguishable from a followup.
+    //
+    // 直接注入失败时，落回普通 tasks/send 派发作为全新 turn（不再使用
+    // /steer 命令体 + steered dispatcher 兜底）：此时旧 run 已结束，用户侧
+    // 感知对话连续（新 turn 立即发送自己的 working 状态帧）。
+    if (isUpdate && route.sessionKey) {
+      const steerResult = tryDirectSteer({
+        sessionId: parsed.sessionId,
+        sessionKey: route.sessionKey,
+        text: textForAgent,
+        source: "user",
+      });
+      if (steerResult.ok) {
+        log.log(`[BOT-STEER] Direct steer succeeded — message injected into active run`);
+        // Steer message taskId stays in the binding so getActiveTaskId()
+        // resolves to the latest taskId for onPartialReply replies.
+        // Cleanup happens via the original dispatcher's onIdleComplete →
+        // completeTask(sessionId) which removes the entire binding.
+        return;
       }
+      const steerFailReason = (steerResult as { reason: string }).reason;
+      log.log(`[BOT-STEER] Direct steer failed (${steerFailReason}), re-dispatching as a new turn`);
     }
 
     // Resolve envelope format options (following feishu pattern)
@@ -429,22 +400,12 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
       body: messageBody,
     });
 
-    // 🔑 Steer messages use /steer prefix + CommandSource "native" to trigger
-    // the native slash command fast path, which calls handleSteerCommand →
-    // queueEmbeddedAgentMessageWithOutcomeAsync before admitReplyTurn blocks.
-    const steerCommandBody = isUpdate ? `/steer ${textForAgent}` : textForAgent;
-
-    if (isUpdate) {
-      log.log(`[BOT-STEER] Dispatching via /steer fast path, sessionKey=${route.sessionKey}, cmdLen=${steerCommandBody.length}`);
-    }
-
     // ✅ Finalize inbound context (following feishu pattern)
     // Use route.accountId and route.sessionKey instead of parsed fields
     const ctxPayload = core.channel.reply.finalizeInboundContext({
       Body: body,
-      RawBody: steerCommandBody,
-      CommandBody: steerCommandBody,
-      ...(isUpdate ? { CommandSource: "native" as const } : {}),
+      RawBody: textForAgent,
+      CommandBody: textForAgent,
       From: parsed.sessionId,
       To: parsed.sessionId,  // ✅ Simplified: use sessionId as target (context is managed by SessionKey)
       SessionKey: route.sessionKey,  // ✅ Use route.sessionKey
@@ -465,53 +426,37 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
       ...mediaPayload,
     });
 
-    // 🔑 For steer messages, pre-set steered=true so the dispatcher skips final
-    // response and cleanup — the first message's dispatcher handles those.
-    const steerState = { steered: isUpdate };
-
     // 🔑 创建dispatcher
     log.log(`[BOT-DISPATCHER] Creating reply dispatcher, isSteer=${isUpdate}, sessionKey=${route.sessionKey}`);
 
     // Cleanup: 必须在 onIdle 内部执行（参见 reply-dispatcher.ts 中 onIdleComplete 的注释）
-    // CSPL steer injections (skipRegistration=true) do NOT call registerTaskId,
-    // so they must skip decrementTaskIdRef. All other paths (original message +
-    // WebSocket steer that fell through to the /steer fast path) DO increment
-    // refCount and must decrement here.
     let cleaned = false;
     const cleanup = () => {
       if (cleaned) return;
       cleaned = true;
-      log.log(`[BOT] Cleanup started, steered=${steerState.steered}, skipReg=${skipReg}`);
-      if (!skipReg) {
-        // Check for pending subagent wait on this session
-        const pendingWait = getWaitState(parsed.sessionId, parsed.taskId) ??
-          (hasWaitState(parsed.sessionId) ? { deliveredCompletions: 0, expectedCompletions: 1 } : null);
-        if (pendingWait && pendingWait.deliveredCompletions < pendingWait.expectedCompletions) {
-          // Subagent wait active — skip cleanup, session stays alive
-          log.log(`[BOT] Cleanup suppressed — subagent wait active on session, taskId=${parsed.taskId}`);
-          cleaned = false;
-          return;
-        }
-        decrementTaskIdRef(parsed.sessionId);
-      } else {
-        log.log(`[BOT] CSPL steer cleanup, skipping decrementTaskIdRef (never incremented)`);
+      log.log(`[BOT] Cleanup started`);
+      // Check for pending subagent wait on this session
+      const pendingWait = getWaitState(parsed.sessionId, parsed.taskId) ??
+        (hasWaitState(parsed.sessionId) ? { deliveredCompletions: 0, expectedCompletions: 1 } : null);
+      if (pendingWait && pendingWait.deliveredCompletions < pendingWait.expectedCompletions) {
+        // Subagent wait active — skip cleanup, session stays alive
+        log.log(`[BOT] Cleanup suppressed — subagent wait active on session, taskId=${parsed.taskId}`);
+        cleaned = false;
+        return;
       }
+      completeTask(parsed.sessionId);
       log.log(`[BOT] Cleanup completed`);
     };
 
-    const { dispatcher, replyOptions, markDispatchIdle, startStatusInterval, updateFallbackTaskId } = createXYReplyDispatcher({
+    const { dispatcher, replyOptions, markDispatchIdle, startStatusInterval } = createXYReplyDispatcher({
       cfg,
       runtime,
       sessionId: parsed.sessionId,
       taskId: parsed.taskId,
       messageId: parsed.messageId,
       accountId: route.accountId,
-      steerState,
       onIdleComplete: cleanup,
     });
-
-    // 🔑 注册 dispatcher 的 fallback taskId 更新函数，供 steer 路径调用
-    dispatcherUpdaters.set(parsed.sessionId, updateFallbackTaskId);
 
     // Steer messages don't need a status interval — the first message's
     // dispatcher already has one running.
@@ -539,13 +484,7 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
     await core.channel.reply.withReplyDispatcher({
       dispatcher,
       onSettled: async () => {
-        log.log(`[BOT] onSettled, steered=${steerState.steered}`);
-
-        // 🔑 When steered, skip cleanup — the first message's dispatcher is still running
-        if (steerState.steered) {
-          log.log(`[BOT] Steered dispatch settled, skipping cleanup`);
-          return;
-        }
+        log.log(`[BOT] onSettled`);
 
         // Subagent wait state: if parent has pending subagents, mark settled
         // and defer finalization. Cleanup is suppressed so the session stays alive.
@@ -554,9 +493,8 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
           const transition = markParentSettled(parsed.sessionId, parsed.taskId);
           if (transition?.shouldFinalize) {
             // All completions arrived before parent settled → finalize now
-            const { deliverSubagentFinalResult } = await import("./outbound.js");
+            const { deliverSubagentFinalResult } = await import("../conversation/conversation-manager.js");
             await deliverSubagentFinalResult({
-              config,
               state: transition.state,
               reason: "all-subagent-results-delivered-before-parent-settled",
             });
@@ -564,13 +502,11 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
           } else {
             log.log(`[BOT] Subagent wait active, preserving session context for completion`);
           }
-          dispatcherUpdaters.delete(parsed.sessionId);
           return;
         }
 
         // cleanup 已由 onIdleComplete 在 onIdle 的 finally 中执行。
         // onSettled 不做任何清理（直接在这里清理会发生 race condition）。
-        dispatcherUpdaters.delete(parsed.sessionId);
       },
       run: () => {
         // 🔐 Use AsyncLocalStorage to provide session context to tools.
@@ -579,8 +515,7 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
         // signal init complete to release the global dispatch gate
         // for the next session.
         const dispatchPromise = runWithSessionContext(sessionContext, async () => {
-          const isSteerDispatch = isUpdate && !skipReg;
-          log.log(`[ALS-PROOF] bot entered dispatch scope sessionId=${(sessionContext as any).sessionId} taskId=${(sessionContext as any).taskId} isSteer=${isSteerDispatch}`);
+          log.log(`[ALS-PROOF] bot entered dispatch scope sessionId=${(sessionContext as any).sessionId} taskId=${(sessionContext as any).taskId} isSteer=${isUpdate}`);
           log.log(`[BOT-DISPATCH] dispatchReplyFromConfig starting, body.length=${(ctxPayload.Body as string)?.length ?? 0}`);
           try {
             const result = await core.channel.reply.dispatchReplyFromConfig({
@@ -627,7 +562,7 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
         errLog.log(`[BOT] Cleaning up after error`);
 
         // 清理 taskId
-        decrementTaskIdRef(sessionId);
+        completeTask(sessionId);
 
         errLog.log(`[BOT] Cleanup completed after error`);
       }
@@ -669,14 +604,3 @@ function buildXYMediaPayload(
     MediaTypes: mediaTypes.length > 0 ? mediaTypes : undefined,
   };
 }
-
-// ─────────────────────────────────────────────────────────────
-// Dispatcher updaters (cross-chain taskId bridging)
-// ─────────────────────────────────────────────────────────────
-
-// Use globalThis to survive module deduplication
-const _g = globalThis as Record<string, unknown>;
-
-if (!_g.__xyDispatcherUpdaters) _g.__xyDispatcherUpdaters = new Map<string, (taskId: string, messageId: string) => void>();
-
-const dispatcherUpdaters = _g.__xyDispatcherUpdaters as Map<string, (taskId: string, messageId: string) => void>;

@@ -6,10 +6,8 @@
 // results through the normal WebSocket connection, so response listening
 // works the same as for regular tool calls.
 
-import { randomUUID } from "crypto";
 import type { XYChannelConfig, A2ACommand } from "./types.js";
-import { XYPushService } from "./push.js";
-import { getAllPushIds } from "./utils/pushid-manager.js";
+import { pushCommand } from "./conversation/outbound-gateway.js";
 import { logger } from "./utils/logger.js";
 
 export interface SendCommandViaPushParams {
@@ -38,32 +36,8 @@ export async function sendCommandViaPush(params: SendCommandViaPushParams): Prom
 
   logger.log(`[CRON-CMD] Sending command via push, intent=${intentName}`);
 
-  // 1. 选 pushId：优先用调用方解析出的设备 pushId（多设备路由正确）；
-  //    未提供时回退到 getAllPushIds()[0]（单设备兼容旧行为）。
-  let pushId: string = config.pushId;
-  if (params.pushId) {
-    pushId = params.pushId;
-  } else {
-    try {
-      const pushIdList = await getAllPushIds();
-      if (pushIdList.length > 0) {
-        pushId = pushIdList[0];
-      }
-    } catch (error) {
-      logger.error("[CRON-CMD] Failed to load pushIds:", error);
-    }
-  }
-
-  // 2. Build and send push notification with command in directives
-  const pushService = new XYPushService(config);
-  const sessionId = randomUUID();
-
   try {
-    await pushService.sendPushWithDirectives(
-      pushId,
-      sessionId,
-      [command],
-    );
+    await pushCommand({ config, command, pushId: params.pushId });
     logger.log(`[CRON-CMD] Push sent successfully, intent=${intentName}`);
   } catch (error) {
     logger.error(`[CRON-CMD] Failed to send push`, error);

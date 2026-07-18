@@ -1,6 +1,6 @@
 // Search File tool implementation
 import type { ChannelAgentTool } from "openclaw/plugin-sdk";
-import { getCachedXYWebSocketManager } from "../client.js";
+import { getCachedXYWebSocketManager } from "../transport/client.js";
 import { sendCommand } from "../formatter.js";
 import type { SessionContext } from "./session-manager.js";
 import { getCurrentSessionContext } from './session-manager.js';

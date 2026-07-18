@@ -3,7 +3,7 @@
 import type { ChannelPlugin } from "openclaw/plugin-sdk";
 import { resolveXYConfig, listXYAccountIds, getDefaultXYAccountId } from "./config.js";
 import { xyConfigSchema } from "./config-schema.js";
-import { xyOutbound } from "./outbound.js";
+import { xyOutbound } from "./dispatch/outbound.js";
 import { xyOnboardingAdapter } from "./onboarding.js";
 import { filterToolsByDevice } from "./tools/device-tool-map.js";
 import { getCurrentSessionContext } from "./tools/session-manager.js";
@@ -172,7 +172,7 @@ export const xyPlugin: ChannelPlugin = {
 
   gateway: {
     async startAccount(context: any) {
-      const { monitorXYProvider } = await import("./monitor.js");
+      const { monitorXYProvider } = await import("./dispatch/monitor.js");
       const { createXyAcpBindingManager } = await import("./acp-session-binding.js");
       const account = resolveXYConfig(context.cfg);
       context.setStatus?.({

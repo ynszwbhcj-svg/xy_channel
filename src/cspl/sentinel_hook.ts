@@ -27,7 +27,7 @@ import {
     STEER_ABORT_MESSAGE
 } from './constants.js';
 import { getCurrentSessionContext } from '../tools/session-manager.js';
-import { tryInjectSteer } from './steer-context.js';
+import { steer } from '../conversation/steer-service.js';
 
 // 主入口模块
 export default function register(api: OpenClawPluginApi) {
@@ -121,13 +121,10 @@ export default function register(api: OpenClawPluginApi) {
                 logger.log(`[SENTINEL HOOK] TOOL_OUTPUT response: status=${result.status}.`);
                 if (result.status === 'REJECT') {
                     logger.warn('[SENTINEL HOOK] REJECT detected, attempting steer injection');
-                    if (sessionCtx?.sessionId && sessionCtx?.taskId) {
-                        await tryInjectSteer({
-                            sessionId: sessionCtx.sessionId,
-                            taskId: sessionCtx.taskId,
-                            message: STEER_ABORT_MESSAGE,
-                            source: 'cspl',
-                        });
+                    if (sessionCtx?.sessionId) {
+                        // CSPL steer：经对话管理层直接 steer 当前会话；
+                        // 注入失败即失败，仅记录日志，不做兜底（不新建 dispatcher）
+                        await steer(sessionCtx.sessionId, STEER_ABORT_MESSAGE, 'cspl');
                     } else {
                         logger.warn(`[SENTINEL HOOK] Cannot inject steer: sessionKey=${ctx.sessionKey}, sessionCtx found=${!!sessionCtx}`);
                     }

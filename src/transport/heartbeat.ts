@@ -1,6 +1,6 @@
 // Heartbeat management for WebSocket connections
 import WebSocket from "ws";
-import { logger } from "./utils/logger.js";
+import { logger } from "../utils/logger.js";
 
 export interface HeartbeatConfig {
   interval: number; // Heartbeat interval in milliseconds

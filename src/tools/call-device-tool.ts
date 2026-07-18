@@ -22,7 +22,7 @@ import { uploadFileTool } from "./upload-file-tool.js";
 import { saveFileToPhoneTool } from "./save-file-to-phone-tool.js";
 import { sendEmailTool } from "./send-email-tool.js";
 import { searchEmailTool } from "./search-email-tool.js";
-import { getCachedXYWebSocketManager } from "../client.js";
+import { getCachedXYWebSocketManager } from "../transport/client.js";
 import { sendStatusUpdate } from "../formatter.js";
 import { getCurrentSessionContext, runWithSessionContext, isCronToolCall, getCronToolRunInfo } from './session-manager.js';
 import type { SessionContext } from './session-manager.js';

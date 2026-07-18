@@ -21,8 +21,9 @@ import { writeSkillUsage } from "./src/utils/skills-logger.js";
 import {
   markSubagentSpawned,
   markSubagentEnded,
-  getCachedXYConfig,
-} from "./src/subagent-wait-state.js";
+  deliverSubagentFinalResult,
+} from "./src/conversation/conversation-manager.js";
+import { notifyCronAgentEnd } from "./src/conversation/cron-buffer.js";
 import { logger } from "./src/utils/logger.js";
 
 /**
@@ -372,15 +373,8 @@ function registerSubagentHooks(api: OpenClawPluginApi) {
 
       if (transition?.shouldFinalize) {
         logger.log(`[XY-SUBAGENT-END] Starting finalization...`);
-        const config = getCachedXYConfig();
-        if (!config) {
-          logger.error(`[XY-SUBAGENT-END] No cached XY config, cannot deliver final result`);
-          return;
-        }
-        const { deliverSubagentFinalResult } = await import("./src/outbound.js");
-        logger.log(`[XY-SUBAGENT-END] Using cached XY config`);
+        // 最终交付由对话管理层统一负责（含 config 解析、final 帧、清理）
         await deliverSubagentFinalResult({
-          config: config as any,
           state: transition.state,
           reason: "all-subagents-ended-after-parent-settled",
         });
@@ -395,6 +389,32 @@ function registerSubagentHooks(api: OpenClawPluginApi) {
 function registerFullHooks(api: OpenClawPluginApi) {
   // SUBAGENT HOOKS: track subagent spawn/end lifecycle for session keep-alive
   registerSubagentHooks(api);
+
+  // CRON AGGREGATION: 通过 agent 事件总线感知 cron isolated run 结束。
+  // 注意：agent_end 插件 hook 只在 dispatch-from-config 路径触发，cron
+  // isolated run 不会触发它；embedded run 的 lifecycle 事件才是可靠信号。
+  // phase=end/error 后到达的 sendText 即为 announce 最终结果（放行）。
+  api.agent.events.registerAgentEventSubscription({
+    id: "xy-cron-turn-tracker",
+    description: "Track cron isolated run completion for sendText aggregation",
+    streams: ["lifecycle"],
+    handle: (event) => {
+      try {
+        const phase = event?.data?.phase;
+        // 仅 phase=end 是 run 级终态信号；phase=error 可能是单次模型调用
+        // 失败（后续还有重试/start），不能据此放行 announce。
+        // 真正失败的 run（无 end）由 120s 安全超时兜底 flush 缓冲文本。
+        if (phase !== "end") return;
+        const sessionKey = event?.sessionKey ?? "";
+        if (sessionKey.startsWith("cron:") || sessionKey.includes(":cron:") || isCronActive()) {
+          logger.log(`[XY-CRON] Cron run lifecycle end, sessionKey=${sessionKey || "unknown"}`);
+          notifyCronAgentEnd();
+        }
+      } catch (err) {
+        logger.error(`[XY-CRON] Error in cron lifecycle subscription:`, err);
+      }
+    },
+  });
 
   // SKILL RETRIEVER HOOK: before_prompt_build hook
   const pluginConfig = (api as { pluginConfig?: unknown }).pluginConfig as Record<string, unknown> || {};

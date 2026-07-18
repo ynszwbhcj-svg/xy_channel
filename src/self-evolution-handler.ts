@@ -1,7 +1,7 @@
 import os from "os";
 import { readFileSync, writeFileSync } from "fs";
 import { v4 as uuidv4 } from "uuid";
-import type { XYWebSocketManager } from "./websocket.js";
+import type { XYWebSocketManager } from "./transport/websocket.js";
 import type { OutboundWebSocketMessage } from "./types.js";
 import { resolveXYConfig } from "./config.js";
 import { sendA2AResponse } from "./formatter.js";

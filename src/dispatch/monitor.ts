@@ -1,19 +1,19 @@
 // Monitor for XY channel WebSocket connections
 // Follows feishu/monitor.account.ts and feishu/monitor.transport.ts pattern
 import type { RuntimeEnv } from "openclaw/plugin-sdk";
-import { resolveXYConfig } from "./config.js";
-import { getXYWebSocketManager, diagnoseAllManagers, cleanupOrphanConnections, removeXYWebSocketManager } from "./client.js";
+import { resolveXYConfig } from "../config.js";
+import { getXYWebSocketManager, diagnoseAllManagers, cleanupOrphanConnections, removeXYWebSocketManager } from "../transport/client.js";
 import { handleXYMessage } from "./bot.js";
-import { parseA2AMessage } from "./parser.js";
-import { hasActiveTask, getAllActiveTaskBindings } from "./task-manager.js";
-import { sendA2AResponse } from "./formatter.js";
-import { handleTriggerEvent } from "./trigger-handler.js";
-import { handleSelfEvolutionEvent, handleSelfEvolutionStateGetEvent } from "./self-evolution-handler.js";
-import { handleLoginTokenEvent } from "./login-token-handler.js";
-import { handleCronQueryEvent } from "./cron-query-handler.js";
-import { handleMemoryQueryEvent } from "./memory-query-handler.js";
+import { parseA2AMessage } from "../parser.js";
+import { hasActiveTask, listActiveTaskBindings } from "../conversation/conversation-manager.js";
+import { sendA2AResponse } from "../formatter.js";
+import { handleTriggerEvent } from "../trigger-handler.js";
+import { handleSelfEvolutionEvent, handleSelfEvolutionStateGetEvent } from "../self-evolution-handler.js";
+import { handleLoginTokenEvent } from "../login-token-handler.js";
+import { handleCronQueryEvent } from "../cron-query-handler.js";
+import { handleMemoryQueryEvent } from "../memory-query-handler.js";
 import { cleanupStaleTempFiles } from "./reply-dispatcher.js";
-import { logger } from "./utils/logger.js";
+import { logger } from "../utils/logger.js";
 
 export type MonitorXYOpts = {
   config?: any;
@@ -305,7 +305,7 @@ export async function monitorXYProvider(opts: MonitorXYOpts = {}): Promise<void>
 
       // 📤 Send restart notification to all active sessions before disconnecting
       try {
-        const activeBindings = getAllActiveTaskBindings();
+        const activeBindings = listActiveTaskBindings();
         if (activeBindings.length > 0) {
           const config = resolveXYConfig(cfg);
           const notificationText = "Gateway即将重启，重启期间可能短暂出现\u201c环境异常\u201d提示，请稍候并耐心重试~";

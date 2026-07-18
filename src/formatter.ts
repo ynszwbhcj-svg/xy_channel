@@ -1,7 +1,7 @@
 // OpenClaw → A2A format conversion
-import os from "os";
+// 纯 A2A 帧构建器：只负责组帧，最后一跳统一走 conversation/outbound-gateway。
 import { v4 as uuidv4 } from "uuid";
-import { getXYWebSocketManager } from "./client.js";
+import { sendWsFrame } from "./conversation/outbound-gateway.js";
 import { logger } from "./utils/logger.js";
 import { redactSensitiveText, containsSensitiveInfo } from "./sensitive-redactor.js";
 import { rewriteOutboundApprovalText } from "./approval-bridge.js";
@@ -11,10 +11,8 @@ import { getPushIdByJobId } from "./utils/cron-push-map.js";
 import { getAllPushIds } from "./utils/pushid-manager.js";
 import type {
   XYChannelConfig,
-  A2AJsonRpcResponse,
   A2ATaskArtifactUpdateEvent,
   A2ATaskStatusUpdateEvent,
-  OutboundWebSocketMessage,
   A2ACommand,
 } from "./types.js";
 
@@ -129,22 +127,13 @@ export async function sendA2AResponse(params: SendA2AResponseParams): Promise<vo
     log.log(`[A2A_RESPONSE] Including error code: ${errorCode}`);
   }
 
-  // Send via WebSocket
-  const wsManager = getXYWebSocketManager(config);
-  const outboundMessage: OutboundWebSocketMessage = {
-    msgType: "agent_response",
-    agentId: config.agentId,
-    sessionId,
-    taskId,
-    msgDetail: JSON.stringify({ ...jsonRpcResponse, hostname: os.hostname() }),
-  };
-
+  // Send via WebSocket（经 outbound-gateway 收口）
   if (shouldLog) {
     const redactedText = redactSensitiveText(bridgedText ?? "");
     log.log(`[A2A_RESPONSE] Sending artifact-update, append=${append}, final=${final}, text=${buildTextPreview(redactedText)}, files=${files?.length ?? 0}, sensitive=${containsSensitiveInfo(bridgedText ?? "")}`);
   }
 
-  await wsManager.sendMessage(sessionId, outboundMessage);
+  await sendWsFrame({ config, sessionId, taskId, payload: jsonRpcResponse });
   if (shouldLog) {
     log.log(`[A2A_RESPONSE] Message sent successfully`);
   }
@@ -200,15 +189,7 @@ export async function sendReasoningTextUpdate(params: SendReasoningTextUpdatePar
     result: artifact,
   };
 
-  const wsManager = getXYWebSocketManager(config);
-  const outboundMessage: OutboundWebSocketMessage = {
-    msgType: "agent_response",
-    agentId: config.agentId,
-    sessionId,
-    taskId,
-    msgDetail: JSON.stringify({ ...jsonRpcResponse, hostname: os.hostname() }),
-  };
-  await wsManager.sendMessage(sessionId, outboundMessage);
+  await sendWsFrame({ config, sessionId, taskId, payload: jsonRpcResponse });
 }
 
 /**
@@ -264,20 +245,10 @@ export async function sendStatusUpdate(params: SendStatusUpdateParams): Promise<
     result: statusUpdate,
   };
 
-  // Send via WebSocket
-  const wsManager = getXYWebSocketManager(config);
-  const outboundMessage: OutboundWebSocketMessage = {
-    msgType: "agent_response",
-    agentId: config.agentId,
-    sessionId,
-    taskId,
-    msgDetail: JSON.stringify({ ...jsonRpcResponse, hostname: os.hostname() }),
-  };
-
   // Log complete response body
   log.log(`[A2A_STATUS] Sending status-update, text="${redactedText}"`);
 
-  await wsManager.sendMessage(sessionId, outboundMessage);
+  await sendWsFrame({ config, sessionId, taskId, payload: jsonRpcResponse });
 }
 
 /**
@@ -401,19 +372,9 @@ export async function sendCommand(params: SendCommandParams): Promise<void> {
     result: artifact,
   };
 
-  // Send via WebSocket
-  const wsManager = getXYWebSocketManager(config);
-  const outboundMessage: OutboundWebSocketMessage = {
-    msgType: "agent_response",
-    agentId: config.agentId,
-    sessionId,
-    taskId,
-    msgDetail: JSON.stringify({ ...jsonRpcResponse, hostname: os.hostname() }),
-  };
-
   // Log complete response body
   log.log(`[A2A_COMMAND] Sending command`);
-  await wsManager.sendMessage(sessionId, outboundMessage);
+  await sendWsFrame({ config, sessionId, taskId, payload: jsonRpcResponse });
   log.log(`[A2A_COMMAND] Command sent successfully`);
 }
 
@@ -485,18 +446,8 @@ export async function sendCard(params: SendCardParams): Promise<void> {
     result: artifact,
   };
 
-  // Send via WebSocket
-  const wsManager = getXYWebSocketManager(config);
-  const outboundMessage: OutboundWebSocketMessage = {
-    msgType: "agent_response",
-    agentId: config.agentId,
-    sessionId,
-    taskId,
-    msgDetail: JSON.stringify({ ...jsonRpcResponse, hostname: os.hostname() }),
-  };
-
   log.log(`[A2A_CARD] Sending card`);
-  await wsManager.sendMessage(sessionId, outboundMessage);
+  await sendWsFrame({ config, sessionId, taskId, payload: jsonRpcResponse });
   log.log(`[A2A_CARD] Card sent successfully`);
 }
 
@@ -598,18 +549,8 @@ export async function sendReference(params: SendReferenceParams): Promise<void> 
     result: artifact,
   };
 
-  // Send via WebSocket
-  const wsManager = getXYWebSocketManager(config);
-  const outboundMessage: OutboundWebSocketMessage = {
-    msgType: "agent_response",
-    agentId: config.agentId,
-    sessionId,
-    taskId,
-    msgDetail: JSON.stringify({ ...jsonRpcResponse, hostname: os.hostname() }),
-  };
-
   log.log(`[A2A_REFERENCE] Sending reference, items=${referenceItems.length}`);
-  await wsManager.sendMessage(sessionId, outboundMessage);
+  await sendWsFrame({ config, sessionId, taskId, payload: jsonRpcResponse });
   log.log(`[A2A_REFERENCE] Reference sent successfully`);
 }
 
@@ -646,17 +587,8 @@ export async function sendClearContextResponse(params: SendClearContextResponseP
     },
   };
 
-  // Send via WebSocket
-  const wsManager = getXYWebSocketManager(config);
-  const outboundMessage: OutboundWebSocketMessage = {
-    msgType: "agent_response",
-    agentId: config.agentId,
-    sessionId,
-    taskId: sessionId, // Use sessionId as taskId for clearContext
-    msgDetail: JSON.stringify({ ...jsonRpcResponse, hostname: os.hostname() }),
-  };
-
-  await wsManager.sendMessage(sessionId, outboundMessage);
+  // Send via WebSocket（clearContext 使用 sessionId 作为 taskId）
+  await sendWsFrame({ config, sessionId, taskId: sessionId, payload: jsonRpcResponse });
   log.log(`[CLEAR_CONTEXT] Sent clearContext response`);
 }
 
@@ -695,17 +627,7 @@ export async function sendTasksCancelResponse(params: SendTasksCancelResponsePar
     },
   };
 
-  // Send via WebSocket
-  const wsManager = getXYWebSocketManager(config);
-  const outboundMessage: OutboundWebSocketMessage = {
-    msgType: "agent_response",
-    agentId: config.agentId,
-    sessionId,
-    taskId,
-    msgDetail: JSON.stringify({ ...jsonRpcResponse, hostname: os.hostname() }),
-  };
-
-  await wsManager.sendMessage(sessionId, outboundMessage);
+  await sendWsFrame({ config, sessionId, taskId, payload: jsonRpcResponse });
   log.log(`[TASKS_CANCEL] Sent tasks/cancel response`);
 }
 
@@ -760,17 +682,7 @@ export async function sendTriggerResponse(params: SendTriggerResponseParams): Pr
     },
   };
 
-  // Send via WebSocket
-  const wsManager = getXYWebSocketManager(config);
-  const outboundMessage: OutboundWebSocketMessage = {
-    msgType: "agent_response",
-    agentId: config.agentId,
-    sessionId,
-    taskId,
-    msgDetail: JSON.stringify({ ...jsonRpcResponse, hostname: os.hostname() }),
-  };
-
   log.log(`[TRIGGER_RESPONSE] Sending Trigger response, text=${buildTextPreview(redactedContent)}`);
-  await wsManager.sendMessage(sessionId, outboundMessage);
+  await sendWsFrame({ config, sessionId, taskId, payload: jsonRpcResponse });
   log.log(`[TRIGGER_RESPONSE] Trigger response sent successfully`);
 }

@@ -1,9 +1,9 @@
 // Push message service for scheduled tasks
 import fetch from "node-fetch";
 import { randomUUID } from "crypto";
-import { logger } from "./utils/logger.js";
-import { configManager } from "./utils/config-manager.js";
-import type { XYChannelConfig } from "./types.js";
+import { logger } from "../utils/logger.js";
+import { configManager } from "../utils/config-manager.js";
+import type { XYChannelConfig } from "../types.js";
 
 /**
  * JSON-RPC 2.0 Push Request (outbound to user)

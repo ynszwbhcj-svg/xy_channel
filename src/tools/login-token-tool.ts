@@ -1,6 +1,6 @@
 // Login Token tool - 自动获取用户授权信息
 import { v4 as uuidv4 } from "uuid";
-import { getCachedXYWebSocketManager } from "../client.js";
+import { getCachedXYWebSocketManager } from "../transport/client.js";
 import type { SessionContext } from "./session-manager.js";
 import { getCurrentSessionContext } from './session-manager.js';
 

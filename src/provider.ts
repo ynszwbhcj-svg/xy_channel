@@ -11,6 +11,7 @@ import { createHash } from "crypto";
 import { logger } from "./utils/logger.js";
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 import { getCurrentSessionContext, setCurrentCronJobId, markCronDetected } from "./tools/session-manager.js";
+import { notifyCronDetected } from "./conversation/cron-buffer.js";
 import { selfEvolutionManager } from "./utils/self-evolution-manager.js";
 import { setCompactionConfig, setCompactionSessionSnapshot } from "./compaction-provider.js";
 
@@ -615,6 +616,11 @@ export const xiaoyiProvider: ProviderPlugin = {
         // 绑定到本次 cron run 的合成 sessionId。sendCommand 凭同一 sessionId
         // 反查 jobId → cron-push-map → 正确设备的 pushId（多设备路由）。
         const cronJobId = extractCronUuid(context.messages);
+
+        // 通知对话管理层：cron turn 开始，期间的 sendText 将被聚合吞掉，
+        // 只放行 agent_end 后的 announce 最终结果。
+        notifyCronDetected(cronJobId ?? undefined);
+
         const cronCtx = getCurrentSessionContext();
         if (cronJobId && cronCtx?.sessionId) {
           setCurrentCronJobId(cronCtx.sessionId, cronJobId);

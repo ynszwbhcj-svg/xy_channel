@@ -1,5 +1,5 @@
-import type { OutboundWebSocketMessage } from "./types.js";
-import { logger } from "./utils/logger.js";
+import type { OutboundWebSocketMessage } from "../types.js";
+import { logger } from "../utils/logger.js";
 
 const MAX_QUEUE_SIZE = 1000;
 

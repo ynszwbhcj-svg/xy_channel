@@ -3,7 +3,7 @@ import os from "os";
 import WebSocket from "ws";
 import { EventEmitter } from "events";
 import type { RuntimeEnv } from "openclaw/plugin-sdk";
-import { logger } from "./utils/logger.js";
+import { logger } from "../utils/logger.js";
 import { HeartbeatManager } from "./heartbeat.js";
 import { MessageQueue } from "./message-queue.js";
 import type {
@@ -15,7 +15,7 @@ import type {
   A2ADataEvent,
   CrossDeviceTaskResultEvent,
   SentFileCard,
-} from "./types.js";
+} from "../types.js";
 import { v4 as uuidv4 } from "uuid";
 
 const RUN_CROSS_TASK_LOG_TAG = "[RunCrossTask]";

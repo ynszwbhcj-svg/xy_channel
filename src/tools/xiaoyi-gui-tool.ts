@@ -1,10 +1,10 @@
 // XiaoYi GUI tool implementation - simulates phone screen interactions
-import { getCachedXYWebSocketManager } from "../client.js";
+import { getCachedXYWebSocketManager } from "../transport/client.js";
 import { sendCommand } from "../formatter.js";
 import type { SessionContext } from "./session-manager.js";
 
 import { isCronToolCall, getCurrentSessionContext } from './session-manager.js';
-import { registerTaskId } from "../task-manager.js";
+import { registerTask } from "../conversation/conversation-manager.js";
 import { logger } from "../utils/logger.js";
 
 /**
@@ -104,7 +104,7 @@ export const xiaoyiGuiTool = {
 
             // 用响应事件携带的 taskId/messageId 替换当前 session 的最新 taskId
             if (eventTaskId) {
-              registerTaskId(sessionId, eventTaskId, eventMessageId ?? messageId);
+              registerTask(sessionId, eventTaskId, eventMessageId ?? messageId);
             }
 
             const streamContent = event.payload?.streamInfo?.streamContent;
