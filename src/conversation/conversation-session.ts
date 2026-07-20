@@ -33,6 +33,12 @@ export interface SubagentWaitState {
   completionTexts: string[];
   parentSettled: boolean;
   finalizationClaimed: boolean;
+  /**
+   * final 帧开始交付（deliverSubagentFinalResult 入口）后置位。
+   * 捕获窗口以此为准：grace 期间迟到的 announce 文本仍可并入 final；
+   * 置位后到达的 sendText 不再捕获（等待态随即清除，回退 push 兜底）。
+   */
+  finalDeliveryStarted: boolean;
 }
 
 export interface SubagentWaitTransition {

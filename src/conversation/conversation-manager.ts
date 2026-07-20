@@ -306,6 +306,7 @@ export function markSubagentSpawned(sessionKey: string): number {
       completionTexts: [],
       parentSettled: false,
       finalizationClaimed: false,
+      finalDeliveryStarted: false,
     };
     states.push(state);
   }
@@ -444,6 +445,10 @@ export async function deliverSubagentFinalResult(params: {
     log.error(`[SUBAGENT-FINAL] No cached XY config, cannot deliver final result`);
     return;
   }
+
+  // 关闭捕获窗口：此后到达的 sendText 不再并入 final 文本。
+  // 等待态在发送后立即清除，迟到的 announce 文本回退 push 通道兜底（不丢消息）。
+  state.finalDeliveryStarted = true;
 
   const finalText = state.completionTexts.length > 0
     ? state.completionTexts.join("\n\n")

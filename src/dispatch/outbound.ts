@@ -161,20 +161,29 @@ export const xyOutbound: ChannelOutboundAdapter = {
       // 改用 parentSettled 区分：父 run 存活期间的 sendText 是父自己的 message
       // 工具调用（不捕获、push 照常）；父 settle 后命中 waitState 的 sendText
       // 即为 subagent 完成结果的 announce 投递（捕获 + 吞掉 push）。
+      // 捕获窗口以 finalDeliveryStarted 为准（而非 finalizationClaimed）：
+      // finalizationClaimed 在 markSubagentEnded 时就置位，若 announce 的
+      // sendText 晚于 subagent_ended hook 到达（如长文本被 textChunkLimit
+      // 分片、投递时序竞争），claim 会提前关闭捕获导致内容丢失——配合
+      // push 抑制，丢失是永久的。finalDeliveryStarted 在 grace 结束后、
+      // final 帧发送前才置位，grace 期间迟到的文本仍能并入 final。
       const isFromWaitState = waitState && waitState.parentSettled;
 
       if (isFromWaitState) {
         const log = logger.withContext(waitState.sessionId, waitState.taskId);
-        if (!waitState.finalizationClaimed) {
+        if (!waitState.finalDeliveryStarted) {
           log.log(`[xyOutbound.sendText] Subagent completion text captured, len=${(text as string)?.length ?? 0}`);
           addCompletionText(targetSessionId, targetTaskId, text as string);
+          log.log(`[xyOutbound.sendText] Subagent announce — swallowing push (result delivered via A2A final frame)`);
+          return {
+            channel: "xiaoyi-channel",
+            messageId: `subagent-swallowed-${Date.now()}`,
+            chatId: typeof to === "string" ? to : "",
+          };
         }
-        log.log(`[xyOutbound.sendText] Subagent announce — swallowing push (result delivered via A2A final frame)`);
-        return {
-          channel: "xiaoyi-channel",
-          messageId: `subagent-swallowed-${Date.now()}`,
-          chatId: typeof to === "string" ? to : "",
-        };
+        // final 帧已开始交付：不再捕获也不再吞没，fall through 走 push 兜底，
+        // 避免迟到的 announce 文本被静默丢弃。
+        log.log(`[xyOutbound.sendText] Subagent announce arrived after final delivery started — falling back to push`);
       }
     }
     // ── End subagent text capture ───────────────────────────────
