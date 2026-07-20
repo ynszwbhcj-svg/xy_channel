@@ -14,10 +14,20 @@ import { getCurrentSessionContext, setCurrentCronJobId, markCronDetected } from 
 import { notifyCronDetected } from "./conversation/cron-buffer.js";
 import { selfEvolutionManager } from "./utils/self-evolution-manager.js";
 import { setCompactionConfig, setCompactionSessionSnapshot } from "./compaction-provider.js";
+import { sendStatusUpdate } from "./formatter.js";
 
 // ── Retry config ──────────────────────────────────────────────
 const RETRY_DELAYS_MS = [10_000, 20_000, 40_000, 60_000, 60_000];
 const MAX_RETRY_ATTEMPTS = 5;
+
+// ── Kimi_K3 fallback config ───────────────────────────────────
+// Kimi_K3 gets broader error handling: ANY model error — including
+// content_filter rejections like {"error":{"type":"content_filter",...}} —
+// retries with the same backoff as the known transient list, then falls
+// back to MiniMax-M3 for a single attempt.
+const KIMI_K3_MODEL_ID = "Kimi_K3";
+const KIMI_K3_FALLBACK_MODEL_ID = "MiniMax-M3";
+const KIMI_K3_FALLBACK_STATUS_TEXT = "Kimi_K3模型访问失败，切换MiniMax-M3模型重试中";
 
 /** Check if an errorMessage indicates a retryable provider error by type. */
 function isRetryableProviderError(message: string | undefined): boolean {
@@ -120,10 +130,24 @@ function buildReplayStream(result: any): any {
  *  3. Once content events appear, flush the buffer and switch to pass-through mode
  *     — the consumer sees every text_delta in real time.
  */
+interface RetryingStreamOptions {
+  cronJob: boolean;
+  /** Treat every error event as retryable instead of matching the known transient-error list. */
+  retryOnAnyError?: boolean;
+  /**
+   * Factory for a fallback stream on a different model, invoked once after all
+   * retries are exhausted. Its events pass through as-is — no further retry.
+   */
+  fallbackCreateStream?: () => any;
+  /** Called right before the fallback stream starts (e.g. to notify the user). */
+  onFallback?: (lastError: any) => void;
+}
+
 function createRetryingStream(
   createStream: () => any,
-  cronJob: boolean,
+  options: RetryingStreamOptions,
 ): any {
+  const { cronJob, retryOnAnyError = false, fallbackCreateStream, onFallback } = options;
   let resultResolve: (value: any) => void;
   const resultPromise = new Promise<any>(resolve => { resultResolve = resolve; });
 
@@ -135,13 +159,23 @@ function createRetryingStream(
 
   async function* retryGenerator() {
     for (let attempt = 0; attempt < MAX_RETRY_ATTEMPTS; attempt++) {
-      const stream = await createStream();
       let hasContent = false;
       const buffer: any[] = [];
       let errorResult: any = null;
       const fullResponseEvents: any[] = [];
 
-      for await (const event of stream) {
+      let stream: any = null;
+      try {
+        stream = await createStream();
+      } catch (err) {
+        if (!retryOnAnyError) throw err;
+        // retryOnAnyError (Kimi_K3): even failing to open the stream counts
+        // as an error and goes through the same retry/fallback decision.
+        logger.log(`[xiaoyiprovider] stream creation failed (attempt ${attempt + 1}/${MAX_RETRY_ATTEMPTS}): ${String(err)}`);
+        errorResult = { stopReason: "error", errorMessage: String(err) };
+      }
+
+      for await (const event of stream ?? []) {
         const isContent = CONTENT_EVENT_TYPES.has(event.type);
 
         if (!hasContent && !isContent) {
@@ -191,7 +225,10 @@ function createRetryingStream(
       }
 
       // Stream ended (buffer or streaming phase) — decide whether to retry
-      if (errorResult?.stopReason === "error" && isRetryableProviderError(errorResult.errorMessage)) {
+      const isRetryableError = errorResult?.stopReason === "error" &&
+        (retryOnAnyError || isRetryableProviderError(errorResult.errorMessage));
+
+      if (isRetryableError) {
         if (attempt < MAX_RETRY_ATTEMPTS - 1) {
           const delayMs = getRetryDelayMs(attempt + 1, cronJob);
           logger.log(
@@ -201,7 +238,46 @@ function createRetryingStream(
           await sleep(delayMs);
           continue; // discard buffer, retry with a new stream
         }
-        logger.log(`[xiaoyiprovider] all ${MAX_RETRY_ATTEMPTS} retries exhausted, surfacing last error`);
+        logger.log(`[xiaoyiprovider] all ${MAX_RETRY_ATTEMPTS} retries exhausted`);
+
+        // ── Fallback model (Kimi_K3 → MiniMax-M3): one pass-through attempt ──
+        // Events are forwarded as-is; a fallback error is surfaced to openclaw
+        // without further handling. The discarded Kimi_K3 buffer is never
+        // yielded, so the consumer sees a single coherent stream.
+        if (fallbackCreateStream) {
+          logger.log(`[xiaoyiprovider] switching to fallback model stream`);
+          try {
+            onFallback?.(errorResult);
+          } catch (notifyErr) {
+            logger.error(`[xiaoyiprovider] onFallback callback failed:`, notifyErr);
+          }
+          let fallbackStream: any = null;
+          try {
+            fallbackStream = await fallbackCreateStream();
+          } catch (fbErr) {
+            logger.error(`[xiaoyiprovider] fallback stream creation failed:`, fbErr);
+          }
+          for await (const event of fallbackStream ?? []) {
+            if (event.type === "done") {
+              resultResolve(event.message);
+              yield event;
+              return;
+            }
+            if (event.type === "error") {
+              resultResolve(event.error);
+              yield event;
+              return;
+            }
+            yield event;
+          }
+          // Fallback produced no terminal event — surface the original error so
+          // the framework still sees a definitive failure instead of hanging.
+          logger.log(`[xiaoyiprovider] fallback stream ended without terminal event, surfacing original Kimi_K3 error`);
+          resultResolve(errorResult);
+          yield { type: "error", reason: "error", error: errorResult };
+          return;
+        }
+        logger.log(`[xiaoyiprovider] surfacing last error`);
       } else if (errorResult) {
         logger.log(`[xiaoyiprovider] non-retryable error: ${errorResult.errorMessage}`);
       }
@@ -248,6 +324,30 @@ function createRetryingStream(
     end: () => {},
     [Symbol.asyncIterator]: () => gen,
   };
+}
+
+/**
+ * Notify the user that Kimi_K3 failed and we are switching to MiniMax-M3.
+ * Uses the same A2A status-update channel as the "任务正在处理中，请稍候~"
+ * heartbeat. No-op when there is no live session context (e.g. cron runs,
+ * which do not go through ALS).
+ */
+function notifyKimiK3Fallback(): void {
+  const sessionCtx = getCurrentSessionContext();
+  if (!sessionCtx?.config || !sessionCtx.sessionId || !sessionCtx.taskId) {
+    logger.log("[xiaoyiprovider] no session context available, skipping fallback status message");
+    return;
+  }
+  void sendStatusUpdate({
+    config: sessionCtx.config,
+    sessionId: sessionCtx.sessionId,
+    taskId: sessionCtx.taskId,
+    messageId: sessionCtx.messageId,
+    text: KIMI_K3_FALLBACK_STATUS_TEXT,
+    state: "working",
+  }).catch((err) => {
+    logger.error("[xiaoyiprovider] failed to send fallback status message:", err);
+  });
 }
 
 /**
@@ -839,15 +939,35 @@ export const xiaoyiProvider: ProviderPlugin = {
       const cronJob = isCronTriggered(context.messages);
       if (cronJob) logger.log("[xiaoyiprovider] detected cron-triggered request, using extended retry delays");
 
-      const makeStream = () => underlying(model, context, {
+      const streamCallOptions = {
         ...options,
         headers: {
           ...options?.headers,
           ...dynamicHeaders,
         },
-      });
+      };
+      const makeStream = () => underlying(model, context, streamCallOptions);
 
-      return createRetryingStream(makeStream, cronJob);
+      // ── Kimi_K3: retry any error, then fall back to MiniMax-M3 once ──
+      // Scoped to this request only: `model` is a per-call local and the
+      // fallback id is applied only inside the fallback factory, so later
+      // requests still use whatever model.id they actually carry.
+      const isKimiK3 = model.id === KIMI_K3_MODEL_ID;
+      if (isKimiK3) {
+        logger.log(
+          `[xiaoyiprovider] ${KIMI_K3_MODEL_ID} request — any error retries up to ` +
+          `${MAX_RETRY_ATTEMPTS}x, then falls back to ${KIMI_K3_FALLBACK_MODEL_ID} once`,
+        );
+      }
+
+      return createRetryingStream(makeStream, {
+        cronJob,
+        retryOnAnyError: isKimiK3,
+        fallbackCreateStream: isKimiK3
+          ? () => underlying({ ...model, id: KIMI_K3_FALLBACK_MODEL_ID, name: KIMI_K3_FALLBACK_MODEL_ID }, context, streamCallOptions)
+          : undefined,
+        onFallback: isKimiK3 ? notifyKimiK3Fallback : undefined,
+      });
     };
   },
 };
