@@ -502,6 +502,119 @@ export async function sendCard(params: SendCardParams): Promise<void> {
 }
 
 /**
+ * Parameters for sending reference data as an artifact update.
+ */
+export interface SendReferenceParams {
+  config: XYChannelConfig;
+  sessionId: string;
+  taskId: string;
+  messageId: string;
+  toolCallId?: string;
+  final?: boolean;
+  references: ReferenceDataItem[];
+}
+
+/**
+ * Flattened reference data item. The sendReference function transforms
+ * these into the nested ReferenceDataObject structure expected by the client.
+ */
+export interface ReferenceDataItem {
+  /** Site name for tracking, e.g. "百度百科" */
+  name: string;
+  /** Source type, e.g. "web_search", "document", "knowledge_base" */
+  source: string;
+  /** Page title displayed on the card */
+  title: string;
+  /** Page URL for navigation */
+  url: string;
+  /** Optional site logo URL */
+  imageUrl?: string;
+}
+
+/**
+ * Send reference/citation data as an artifact update (final=false).
+ *
+ * Follows the same pattern as sendCard: builds a data part with the
+ * "reference" key containing ReferenceDataObject items, wraps in JSON-RPC,
+ * and sends via WebSocket.
+ */
+export async function sendReference(params: SendReferenceParams): Promise<void> {
+  const { config, sessionId, taskId, messageId, toolCallId } = params;
+
+  // Cron mode not supported
+  if (sessionId.startsWith("cron-") || isCronToolCall(toolCallId)) {
+    throw new Error("sendReference does not support cron mode");
+  }
+
+  const log = logger.withContext(sessionId, taskId);
+
+  // Transform flattened ReferenceDataItem[] into nested ReferenceDataObject
+  const referenceItems = params.references.map((item) => ({
+    params: {
+      name: item.name,
+      source: item.source,
+    },
+    card: {
+      type: "leftPictureRightText",
+      params: {
+        title: item.title,
+        subTitle: item.name,
+        link: {
+          webLink: {
+            startMode: 0,
+            url: item.url,
+          },
+        },
+        ...(item.imageUrl ? { imageInfo: { small: { url: item.imageUrl } } } : {}),
+      },
+    },
+  }));
+
+  const reference = {
+    items: referenceItems,
+  };
+
+  // Build artifact update with reference as data
+  const artifact: A2ATaskArtifactUpdateEvent = {
+    taskId,
+    kind: "artifact-update",
+    append: false,
+    lastChunk: true,
+    final: params.final ?? false,
+    artifact: {
+      artifactId: uuidv4(),
+      parts: [
+        {
+          kind: "data",
+          data: { reference },
+        },
+      ],
+    },
+  };
+
+  // Build JSON-RPC response
+  const jsonRpcResponse = {
+    jsonrpc: "2.0",
+    id: messageId,
+    result: artifact,
+  };
+
+  // Send via WebSocket
+  const wsManager = getXYWebSocketManager(config);
+  const outboundMessage: OutboundWebSocketMessage = {
+    msgType: "agent_response",
+    agentId: config.agentId,
+    sessionId,
+    taskId,
+    msgDetail: JSON.stringify({ ...jsonRpcResponse, hostname: os.hostname() }),
+  };
+
+  log.log(`[A2A_REFERENCE] Sending reference, items=${referenceItems.length}`);
+  await wsManager.sendMessage(sessionId, outboundMessage);
+  log.log(`[A2A_REFERENCE] Reference sent successfully`);
+}
+
+/**
  * Parameters for sending a clearContext response.
  */
 export interface SendClearContextResponseParams {
