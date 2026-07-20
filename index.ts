@@ -346,6 +346,50 @@ function registerCronRecoveryHook(api: OpenClawPluginApi): void {
   });
 }
 
+/**
+ * 从 sessions_spawn 工具结果中提取 ACP child sessionKey。
+ * 兼容三种 result 形态：{status, childSessionKey} 直返、JSON 字符串、
+ * {content:[{text: "<json>"}], details:{...}} 工具信封。
+ * 仅接受 status="accepted" 且 key 形如 agent:<id>:acp:<uuid> 的结果。
+ */
+function extractAcceptedAcpChildSessionKey(result: unknown): string | null {
+  const pick = (obj: unknown): string | null => {
+    if (!obj || typeof obj !== "object") return null;
+    const record = obj as Record<string, unknown>;
+    if (record.status !== "accepted") return null;
+    const key = record.childSessionKey;
+    return typeof key === "string" && key.includes(":acp:") ? key : null;
+  };
+
+  const direct = pick(result);
+  if (direct) return direct;
+
+  const envelope = result as { details?: unknown; content?: Array<{ text?: unknown }> } | null;
+  const fromDetails = pick(envelope?.details);
+  if (fromDetails) return fromDetails;
+
+  if (Array.isArray(envelope?.content)) {
+    for (const item of envelope.content) {
+      if (typeof item?.text !== "string") continue;
+      try {
+        const fromText = pick(JSON.parse(item.text));
+        if (fromText) return fromText;
+      } catch {
+        // 非 JSON 文本，忽略
+      }
+    }
+  }
+
+  if (typeof result === "string") {
+    try {
+      return pick(JSON.parse(result));
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
 function registerSubagentHooks(api: OpenClawPluginApi) {
   // subagent_spawned: fires after a subagent run is successfully registered.
   // We increment the expected completion count so that onIdle knows to wait.
@@ -355,6 +399,29 @@ function registerSubagentHooks(api: OpenClawPluginApi) {
     const count = markSubagentSpawned(requesterSessionKey);
     if (count > 0) {
       logger.log(`[XY-SUBAGENT] spawned, requesterSessionKey=${requesterSessionKey.slice(0, 30)}, expected=${count}`);
+    }
+  });
+
+  // ACP SPAWN TRACKING: openclaw 的 subagent_spawned hook 仅由内嵌 subagent
+  // 路径（subagent-spawn.ts）发射；acp-spawn.ts（runtime="acp"，如 Claude Code）
+  // 不发射 —— 实测 ACP run 仅在结束时经 run registry 触发 subagent_ended，
+  // 导致等待态从未建立、父 turn onIdle 直接发 final 结束对话。
+  // 因此在 after_tool_call 补记：sessions_spawn 成功且 childSessionKey 为 ACP
+  // 形态时递增等待计数。内嵌 subagent 的 childKey 形如 agent:<id>:subagent:<id>，
+  // 不命中此分支，仍由 subagent_spawned hook 负责，不会重复计数。
+  api.on("after_tool_call", async (event, ctx) => {
+    try {
+      if (event?.toolName !== "sessions_spawn" || event?.error) return;
+      const childKey = extractAcceptedAcpChildSessionKey(event?.result);
+      if (!childKey) return;
+      const sessionKey = ctx?.sessionKey;
+      if (!sessionKey) return;
+      const count = markSubagentSpawned(sessionKey);
+      if (count > 0) {
+        logger.log(`[XY-SUBAGENT] ACP spawned, childSessionKey=${childKey.slice(0, 40)}, expected=${count}`);
+      }
+    } catch (err) {
+      logger.error(`[XY-SUBAGENT] Error tracking ACP spawn:`, err);
     }
   });
 
