@@ -57,7 +57,7 @@ function registerSkillsDiagnosticHook(api: OpenClawPluginApi) {
     GetCurrentLocation: ["get_user_location"],
     Schedule: ["create_calendar_event", "search_calendar_event"],
     memorandum: ["create_note", "search_notes", "modify_note"],
-    gallery: ["search_photo_gallery", "upload_photo", "save_media_to_gallery"],
+    gallery: ["search_photo_gallery", "save_media_to_gallery"],
     contact: ["search_contact"],
     file: ["search_file", "upload_file", "save_file_to_file_manager"],
     clock: ["create_alarm", "delete_alarm", "search_alarm", "modify_alarm"],
