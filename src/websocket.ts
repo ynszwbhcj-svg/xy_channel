@@ -717,7 +717,11 @@ export class XYWebSocketManager extends EventEmitter {
                 this.emit("cross-device-task-result", crossDeviceTaskResult);
               } else if (item.header?.namespace === "ClawAgent" && item.header?.name === "InvokeJarvisGUIAgentResponse") {
                 log.log(`[XY] Emitting gui-agent-response, size: ${JSON.stringify(item).length} bytes`);
-                this.emit("gui-agent-response", item);
+                this.emit("gui-agent-response", {
+                  event: item,
+                  taskId: taskId, // 服务端响应携带的 taskId
+                  messageId: a2aRequest.id,
+                });
               } else if (item.header?.namespace === "Common" && item.header?.name === "Trigger") {
                 log.log("[XY] Trigger event detected, emitting trigger-event with context");
                 // 传递完整上下文：event、sessionId、taskId
@@ -840,7 +844,11 @@ export class XYWebSocketManager extends EventEmitter {
                   this.emit("cross-device-task-result", crossDeviceTaskResult);
                 } else if (item.header?.namespace === "ClawAgent" && item.header?.name === "InvokeJarvisGUIAgentResponse") {
                   log.log(`[XY] Emitting gui-agent-response, size: ${JSON.stringify(item).length} bytes`);
-                  this.emit("gui-agent-response", item);
+                  this.emit("gui-agent-response", {
+                    event: item,
+                    taskId: inboundMsg.taskId || a2aRequest.params?.id,
+                    messageId: a2aRequest.id,
+                  });
                 } else if (item.header?.namespace === "Common" && item.header?.name === "Trigger") {
                   log.log("[XY] Trigger event detected (wrapped format), emitting trigger-event with context");
                   // 传递完整上下文：event、sessionId、taskId

@@ -4,6 +4,7 @@ import { sendCommand } from "../formatter.js";
 import type { SessionContext } from "./session-manager.js";
 
 import { isCronToolCall, getCurrentSessionContext } from './session-manager.js';
+import { updateTaskId } from "../task-manager.js";
 import { logger } from "../utils/logger.js";
 
 /**
@@ -84,7 +85,11 @@ export const xiaoyiGuiTool = {
       }, 300000); // 5 minutes timeout
 
       // Listen for GUI agent response events
-      const handler = (event: any) => {
+      const handler = (wrapper: any) => {
+        // 兼容旧格式（直接 emit item）和新格式（{ event, taskId, messageId }）
+        const event = wrapper.event ?? wrapper;
+        const eventTaskId = wrapper.taskId;
+        const eventMessageId = wrapper.messageId;
 
         // Check if this is the InvokeJarvisGUIAgentResponse we're waiting for
         if (
@@ -96,6 +101,11 @@ export const xiaoyiGuiTool = {
           if (event.payload?.isFinal === true) {
             clearTimeout(timeout);
             wsManager.off("gui-agent-response", handler);
+
+            // 用响应事件携带的 taskId/messageId 更新当前 session 的最新 taskId
+            if (eventTaskId) {
+              updateTaskId(sessionId, eventTaskId, eventMessageId ?? messageId);
+            }
 
             const streamContent = event.payload?.streamInfo?.streamContent;
 

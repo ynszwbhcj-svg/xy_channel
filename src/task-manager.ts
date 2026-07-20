@@ -91,6 +91,26 @@ export function getCurrentMessageId(sessionId: string): string | null {
 }
 
 /**
+ * 更新 session 的活跃 taskId/messageId（不操作 refCount）。
+ * 用于 InvokeJarvisGUIAgentResponse 等异步响应事件携带的 taskId 更新场景。
+ */
+export function updateTaskId(
+  sessionId: string,
+  taskId: string,
+  messageId: string,
+): void {
+  const existing = activeTaskIds.get(sessionId);
+  if (existing) {
+    logger.log(`[TASK_MANAGER] updateTaskId: ${existing.currentTaskId} → ${taskId}`);
+    existing.currentTaskId = taskId;
+    existing.currentMessageId = messageId;
+    existing.updatedAt = Date.now();
+  } else {
+    logger.log(`[TASK_MANAGER] updateTaskId: no existing binding for ${sessionId}, skipping`);
+  }
+}
+
+/**
  * 检查session是否有活跃的taskId
  */
 export function hasActiveTask(sessionId: string): boolean {
