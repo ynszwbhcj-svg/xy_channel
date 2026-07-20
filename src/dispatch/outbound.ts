@@ -139,16 +139,18 @@ export const xyOutbound: ChannelOutboundAdapter = {
       };
     }
 
-    // ── Subagent completion text capture ─────────────────────────
+    // ── Subagent completion text capture + push 抑制 ─────────────
     // Subagent completions may arrive here when openclaw's announce
     // flow delivers through the channel outbound. We capture the text
     // for the final A2A response but do NOT track delivery count here.
     // Delivery tracking is done by the subagent_ended hook (index.ts).
     //
-    // IMPORTANT: We do NOT return early here. The OpenClaw core's announce
-    // flow needs sendText to complete normally (push delivery) to avoid
-    // triggering the direct-primary fallback retry loop. Text is captured
-    // for the A2A final response, but push delivery proceeds normally.
+    // 正常对话的 subagent announce 一律不发 push：结果由保活机制经
+    // A2A final 帧交付，push webhook 通知冗余。返回合成成功（与 cron
+    // 吞没路径同理），保证 openclaw durable-delivery 记账正常，避免
+    // 触发 direct-primary fallback 重试。
+    // cron 的 announce 不受此分支影响：cron sendText 无 target
+    // （DEFAULT_PUSH_MARKER），且 cron 会话不存在 wait state，push 照常。
     if (to && to !== DEFAULT_PUSH_MARKER) {
       const [targetSessionId, targetTaskId] = String(to).split("::");
       const waitState = getWaitState(targetSessionId, targetTaskId);
@@ -157,16 +159,22 @@ export const xyOutbound: ChannelOutboundAdapter = {
       // 同样携带父会话 ALS 上下文（resolveTarget 据此增强 target），ALS guard
       // 会把 announce 误判为父 turn 自己的 sendText 而漏捕获。
       // 改用 parentSettled 区分：父 run 存活期间的 sendText 是父自己的 message
-      // 工具调用（不捕获）；父 settle 后命中 waitState 的 sendText 即为
-      // subagent 完成结果的 announce 投递（捕获）。
+      // 工具调用（不捕获、push 照常）；父 settle 后命中 waitState 的 sendText
+      // 即为 subagent 完成结果的 announce 投递（捕获 + 吞掉 push）。
       const isFromWaitState = waitState && waitState.parentSettled;
 
-      if (isFromWaitState && !waitState.finalizationClaimed) {
+      if (isFromWaitState) {
         const log = logger.withContext(waitState.sessionId, waitState.taskId);
-        log.log(`[xyOutbound.sendText] Subagent completion text captured, len=${(text as string)?.length ?? 0}`);
-        addCompletionText(targetSessionId, targetTaskId, text as string);
-        // Fall through to normal push delivery — core needs sendText to
-        // complete normally to avoid retry/announce-failure loops.
+        if (!waitState.finalizationClaimed) {
+          log.log(`[xyOutbound.sendText] Subagent completion text captured, len=${(text as string)?.length ?? 0}`);
+          addCompletionText(targetSessionId, targetTaskId, text as string);
+        }
+        log.log(`[xyOutbound.sendText] Subagent announce — swallowing push (result delivered via A2A final frame)`);
+        return {
+          channel: "xiaoyi-channel",
+          messageId: `subagent-swallowed-${Date.now()}`,
+          chatId: typeof to === "string" ? to : "",
+        };
       }
     }
     // ── End subagent text capture ───────────────────────────────
