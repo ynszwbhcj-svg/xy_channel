@@ -255,7 +255,8 @@ export class XYFileUploadService {
         throw new Error("No file URL returned from completeAndQuery");
       }
 
-      logger.log(`[XY File Upload] File upload successful`);
+      const hasQuery = fileUrl.includes("?");
+      logger.log(`[XY File Upload] File upload successful, hasQuery=${hasQuery} url=${fileUrl}`);
       return fileUrl;
     } catch (error) {
       logger.error(`[XY File Upload] File upload with URL retrieval failed for ${filePath}:`, error);
@@ -369,7 +370,8 @@ export class XYFileUploadService {
         throw new Error("No file URL returned from completeAndQuery (preview)");
       }
 
-      logger.log(`[XY File Upload] File upload with preview URL successful`);
+      const hasQuery = fileUrl.includes("?");
+      logger.log(`[XY File Upload] File upload with preview URL successful, hasQuery=${hasQuery} url=${fileUrl}`);
       return fileUrl;
     } catch (error) {
       logger.error(`[XY File Upload] File upload with preview URL failed for ${filePath}:`, error);
