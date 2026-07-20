@@ -411,55 +411,75 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
       }
     }
 
-    // Resolve envelope format options (following feishu pattern)
-    const envelopeOptions = core.channel.reply.resolveEnvelopeFormatOptions(cfg);
+    // // Resolve envelope format options (following feishu pattern)
+    // const envelopeOptions = core.channel.reply.resolveEnvelopeFormatOptions(cfg);
+    // // Build message body with speaker prefix (following feishu pattern)
+    // const speaker = parsed.sessionId;
+    // const messageBody = `${speaker}: ${textForAgent}`;
 
-    // Build message body with speaker prefix (following feishu pattern)
-    const speaker = parsed.sessionId;
-    const messageBody = `${speaker}: ${textForAgent}`;
+    // // Format agent envelope (following feishu pattern)
+    // const body = core.channel.reply.formatAgentEnvelope({
+    //   channel: "xiaoyi-channel",
+    //   from: speaker,
+    //   timestamp: new Date(),
+    //   envelope: envelopeOptions,
+    //   body: messageBody,
+    // });
 
-    // Format agent envelope (following feishu pattern)
-    const body = core.channel.reply.formatAgentEnvelope({
-      channel: "xiaoyi-channel",
-      from: speaker,
-      timestamp: new Date(),
-      envelope: envelopeOptions,
-      body: messageBody,
-    });
+    // // 🔑 Steer messages use /steer prefix + CommandSource "native" to trigger
+    // // the native slash command fast path, which calls handleSteerCommand →
+    // // queueEmbeddedAgentMessageWithOutcomeAsync before admitReplyTurn blocks.
+    // const steerCommandBody = isUpdate ? `/steer ${textForAgent}` : textForAgent;
 
-    // 🔑 Steer messages use /steer prefix + CommandSource "native" to trigger
-    // the native slash command fast path, which calls handleSteerCommand →
-    // queueEmbeddedAgentMessageWithOutcomeAsync before admitReplyTurn blocks.
-    const steerCommandBody = isUpdate ? `/steer ${textForAgent}` : textForAgent;
+    // if (isUpdate) {
+    //   log.log(`[BOT-STEER] Dispatching via /steer fast path, sessionKey=${route.sessionKey}, cmdLen=${steerCommandBody.length}`);
+    // }
 
-    if (isUpdate) {
-      log.log(`[BOT-STEER] Dispatching via /steer fast path, sessionKey=${route.sessionKey}, cmdLen=${steerCommandBody.length}`);
-    }
+    // // ✅ Finalize inbound context (following feishu pattern)
+    // // Use route.accountId and route.sessionKey instead of parsed fields
+    // const ctxPayload = core.channel.reply.finalizeInboundContext({
+    //   Body: body,
+    //   RawBody: steerCommandBody,
+    //   CommandBody: steerCommandBody,
+    //   ...(isUpdate ? { CommandSource: "native" as const } : {}),
+    //   From: parsed.sessionId,
+    //   To: parsed.sessionId,  // ✅ Simplified: use sessionId as target (context is managed by SessionKey)
+    //   SessionKey: route.sessionKey,  // ✅ Use route.sessionKey
+    //   AccountId: route.accountId,  // ✅ Use route.accountId ("default")
+    //   ChatType: "direct" as const,
+    //   GroupSubject: undefined,
+    //   SenderName: parsed.sessionId,
+    //   SenderId: parsed.sessionId,
+    //   Provider: "xiaoyi-channel" as const,
+    //   Surface: "xiaoyi-channel" as const,
+    //   MessageSid: `xiaoyi_${parsed.taskId}_${deviceType}`,
+    //   Timestamp: Date.now(),
+    //   WasMentioned: false,
+    //   CommandAuthorized: true,
+    //   OriginatingChannel: "xiaoyi-channel" as const,
+    //   OriginatingTo: parsed.sessionId,  // Original message target
+    //   ReplyToBody: undefined, // A2A protocol doesn't support reply/quote
+    //   ...mediaPayload,
+    // });
 
-    // ✅ Finalize inbound context (following feishu pattern)
-    // Use route.accountId and route.sessionKey instead of parsed fields
+    const body = textForAgent;
+    // ✅ Finalize inbound context
     const ctxPayload = core.channel.reply.finalizeInboundContext({
       Body: body,
-      RawBody: steerCommandBody,
-      CommandBody: steerCommandBody,
-      ...(isUpdate ? { CommandSource: "native" as const } : {}),
+      RawBody: textForAgent,
+      CommandBody: textForAgent,
       From: parsed.sessionId,
-      To: parsed.sessionId,  // ✅ Simplified: use sessionId as target (context is managed by SessionKey)
-      SessionKey: route.sessionKey,  // ✅ Use route.sessionKey
-      AccountId: route.accountId,  // ✅ Use route.accountId ("default")
+      To: parsed.sessionId,
+      SessionKey: route.sessionKey,
+      AccountId: route.accountId,
       ChatType: "direct" as const,
       GroupSubject: undefined,
       SenderName: parsed.sessionId,
-      SenderId: parsed.sessionId,
-      Provider: "xiaoyi-channel" as const,
-      Surface: "xiaoyi-channel" as const,
-      MessageSid: `xiaoyi_${parsed.taskId}_${deviceType}`,
-      Timestamp: Date.now(),
       WasMentioned: false,
       CommandAuthorized: true,
       OriginatingChannel: "xiaoyi-channel" as const,
-      OriginatingTo: parsed.sessionId,  // Original message target
-      ReplyToBody: undefined, // A2A protocol doesn't support reply/quote
+      OriginatingTo: parsed.sessionId,
+      ReplyToBody: undefined,
       ...mediaPayload,
     });
 
