@@ -152,10 +152,14 @@ export const xyOutbound: ChannelOutboundAdapter = {
     if (to && to !== DEFAULT_PUSH_MARKER) {
       const [targetSessionId, targetTaskId] = String(to).split("::");
       const waitState = getWaitState(targetSessionId, targetTaskId);
-      const alsCtx = getCurrentSessionContext();
 
-      const isFromWaitState = waitState &&
-        (!alsCtx || alsCtx.taskId !== targetTaskId);
+      // 不能用 ALS taskId 区分来源：实测 openclaw 的 subagent announce 投递
+      // 同样携带父会话 ALS 上下文（resolveTarget 据此增强 target），ALS guard
+      // 会把 announce 误判为父 turn 自己的 sendText 而漏捕获。
+      // 改用 parentSettled 区分：父 run 存活期间的 sendText 是父自己的 message
+      // 工具调用（不捕获）；父 settle 后命中 waitState 的 sendText 即为
+      // subagent 完成结果的 announce 投递（捕获）。
+      const isFromWaitState = waitState && waitState.parentSettled;
 
       if (isFromWaitState && !waitState.finalizationClaimed) {
         const log = logger.withContext(waitState.sessionId, waitState.taskId);

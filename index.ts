@@ -373,6 +373,10 @@ function registerSubagentHooks(api: OpenClawPluginApi) {
 
       if (transition?.shouldFinalize) {
         logger.log(`[XY-SUBAGENT-END] Starting finalization...`);
+        // Grace: announce 投递的 sendText 与 subagent_ended hook 并发到达
+        // （实测 sendText 可能先于 hook 约 1s，也可能略晚于 hook），
+        // 短等让最后一条完成文本先落入 completionTexts 再合并发 final 帧。
+        await new Promise((r) => setTimeout(r, 1500));
         // 最终交付由对话管理层统一负责（含 config 解析、final 帧、清理）
         await deliverSubagentFinalResult({
           state: transition.state,
