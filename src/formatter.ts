@@ -142,19 +142,6 @@ export async function sendA2AResponse(params: SendA2AResponseParams): Promise<vo
   if (shouldLog) {
     const redactedText = redactSensitiveText(bridgedText ?? "");
     log.log(`[A2A_RESPONSE] Sending artifact-update, append=${append}, final=${final}, text=${buildTextPreview(redactedText)}, files=${files?.length ?? 0}, sensitive=${containsSensitiveInfo(bridgedText ?? "")}`);
-
-    // 🔍 URL 追踪日志：提取文本中所有 URL 并打印完整链接，用于排查 query string 截断问题
-    if (bridgedText) {
-      const urlPattern = /https?:\/\/[^\s<>"{}|\\^`[\]]+/gi;
-      const urls = bridgedText.match(urlPattern);
-      if (urls && urls.length > 0) {
-        log.log(`[A2A_URL_TRACE] Found ${urls.length} URL(s) in outbound text:`);
-        urls.forEach((url, i) => {
-          const hasQuery = url.includes("?");
-          log.log(`[A2A_URL_TRACE]   [${i}] hasQuery=${hasQuery} url=${url}`);
-        });
-      }
-    }
   }
 
   await wsManager.sendMessage(sessionId, outboundMessage);
