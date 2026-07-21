@@ -27,8 +27,8 @@ const MAX_RETRY_ATTEMPTS = 5;
 // back to MiniMax-M3 for a single attempt.
 const KIMI_K3_MODEL_ID = "Kimi_K3";
 const KIMI_K3_FALLBACK_MODEL_ID = "MiniMax-M3";
-const KIMI_K3_FALLBACK_STATUS_TEXT = "Kimi K3过载了，切换MiniMax M3重试中~";
-const KIMI_K3_RESTORED_STATUS_TEXT = "已恢复Kimi K3模型~";
+const KIMI_K3_FALLBACK_STATUS_TEXT = "Kimi K3访问拥挤，已切至 MiniMax M3 处理";
+const KIMI_K3_RESTORED_STATUS_TEXT = "Kimi K3已可用，后续步骤将切回";
 /** Ignore restore notices older than this — a days-old "已恢复" is stale UX. */
 const RESTORE_NOTICE_TTL_MS = 6 * 60 * 60 * 1000;
 
