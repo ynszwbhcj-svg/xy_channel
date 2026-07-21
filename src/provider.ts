@@ -28,6 +28,39 @@ const MAX_RETRY_ATTEMPTS = 5;
 const KIMI_K3_MODEL_ID = "Kimi_K3";
 const KIMI_K3_FALLBACK_MODEL_ID = "MiniMax-M3";
 const KIMI_K3_FALLBACK_STATUS_TEXT = "Kimi_K3模型访问失败，切换MiniMax-M3模型重试中";
+const KIMI_K3_RESTORED_STATUS_TEXT = "MiniMax-M3兜底完成，已恢复Kimi_K3模型";
+/** Ignore restore notices older than this — a days-old "已恢复" is stale UX. */
+const RESTORE_NOTICE_TTL_MS = 6 * 60 * 60 * 1000;
+
+// ── Kimi_K3 restore notice state ──────────────────────────────
+// globalThis singleton: openclaw resolves plugin modules through multiple
+// paths, producing duplicate module instances — module-level state would
+// lose the flag between the fallback turn and the next request.
+const _g = globalThis as Record<string, unknown>;
+if (!_g.__xyKimiK3RestorePending) {
+  _g.__xyKimiK3RestorePending = new Map<string, number>();
+}
+/** sessionId → fallback-completion timestamp. */
+const kimiK3RestorePending = _g.__xyKimiK3RestorePending as Map<string, number>;
+
+/**
+ * Record that the MiniMax-M3 fallback completed for this session; the next
+ * healthy Kimi_K3 stream should notify the user that Kimi_K3 is back.
+ */
+function markKimiK3RestorePending(sessionId: string): void {
+  kimiK3RestorePending.set(sessionId, Date.now());
+}
+
+/** Check (without consuming) whether a restore notice is pending and fresh. */
+function isKimiK3RestorePending(sessionId: string): boolean {
+  const ts = kimiK3RestorePending.get(sessionId);
+  if (ts === undefined) return false;
+  if (Date.now() - ts > RESTORE_NOTICE_TTL_MS) {
+    kimiK3RestorePending.delete(sessionId);
+    return false;
+  }
+  return true;
+}
 
 /** Check if an errorMessage indicates a retryable provider error by type. */
 function isRetryableProviderError(message: string | undefined): boolean {
@@ -141,13 +174,20 @@ interface RetryingStreamOptions {
   fallbackCreateStream?: () => any;
   /** Called right before the fallback stream starts (e.g. to notify the user). */
   onFallback?: (lastError: any) => void;
+  /** Called when the fallback stream completes successfully (done event). */
+  onFallbackDone?: () => void;
+  /**
+   * Called once when the primary stream yields its first content event —
+   * i.e. the model is confirmed healthy again, not merely attempted.
+   */
+  onFirstContent?: () => void;
 }
 
 function createRetryingStream(
   createStream: () => any,
   options: RetryingStreamOptions,
 ): any {
-  const { cronJob, retryOnAnyError = false, fallbackCreateStream, onFallback } = options;
+  const { cronJob, retryOnAnyError = false, fallbackCreateStream, onFallback, onFallbackDone, onFirstContent } = options;
   let resultResolve: (value: any) => void;
   const resultPromise = new Promise<any>(resolve => { resultResolve = resolve; });
 
@@ -158,6 +198,7 @@ function createRetryingStream(
   ]);
 
   async function* retryGenerator() {
+    let firstContentFired = false;
     for (let attempt = 0; attempt < MAX_RETRY_ATTEMPTS; attempt++) {
       let hasContent = false;
       const buffer: any[] = [];
@@ -198,6 +239,14 @@ function createRetryingStream(
           if (!hasContent) {
             logger.log("[xiaoyiprovider] first content event received, switching to streaming mode");
             hasContent = true;
+            if (!firstContentFired) {
+              firstContentFired = true;
+              try {
+                onFirstContent?.();
+              } catch (notifyErr) {
+                logger.error(`[xiaoyiprovider] onFirstContent callback failed:`, notifyErr);
+              }
+            }
             for (const b of buffer) {
               if (CONTENT_EVENT_TYPES.has(b.type)) fullResponseEvents.push(b);
               yield b;
@@ -259,6 +308,11 @@ function createRetryingStream(
           }
           for await (const event of fallbackStream ?? []) {
             if (event.type === "done") {
+              try {
+                onFallbackDone?.();
+              } catch (notifyErr) {
+                logger.error(`[xiaoyiprovider] onFallbackDone callback failed:`, notifyErr);
+              }
               resultResolve(event.message);
               yield event;
               return;
@@ -347,6 +401,30 @@ function notifyKimiK3Fallback(): void {
     state: "working",
   }).catch((err) => {
     logger.error("[xiaoyiprovider] failed to send fallback status message:", err);
+  });
+}
+
+/**
+ * Notify the user that the MiniMax-M3 fallback turn completed and the model
+ * has been restored to Kimi_K3. Fired on the first content event of the next
+ * healthy Kimi_K3 stream — proof of recovery, not just an attempt. Same
+ * no-op conditions as notifyKimiK3Fallback (cron runs have no ALS context).
+ */
+function notifyKimiK3Restored(): void {
+  const sessionCtx = getCurrentSessionContext();
+  if (!sessionCtx?.config || !sessionCtx.sessionId || !sessionCtx.taskId) {
+    logger.log("[xiaoyiprovider] no session context available, skipping restore status message");
+    return;
+  }
+  void sendStatusUpdate({
+    config: sessionCtx.config,
+    sessionId: sessionCtx.sessionId,
+    taskId: sessionCtx.taskId,
+    messageId: sessionCtx.messageId,
+    text: KIMI_K3_RESTORED_STATUS_TEXT,
+    state: "working",
+  }).catch((err) => {
+    logger.error("[xiaoyiprovider] failed to send restore status message:", err);
   });
 }
 
@@ -572,7 +650,7 @@ export const xiaoyiProvider: ProviderPlugin = {
       input: ["text"],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: 256_000,
-      maxTokens: 8192,
+      maxTokens: 64_000,
       ...(ctx.providerConfig?.headers && typeof ctx.providerConfig.headers === "object"
         ? { headers: {
             ...ctx.providerConfig.headers as Record<string, string>,
@@ -938,6 +1016,18 @@ export const xiaoyiProvider: ProviderPlugin = {
         );
       }
 
+      // ── Kimi_K3 restore notice ─────────────────────────────
+      // When a MiniMax-M3 fallback completed in an earlier turn of this
+      // session, the next healthy Kimi_K3 stream notifies the user that
+      // Kimi_K3 is back. The flag is consumed only on first content (proof
+      // of recovery); if this request falls back again, onFallbackDone
+      // re-marks it and the notice is deferred. Cron runs never participate:
+      // no ALS context means no fallback notify was sent and no flag is set.
+      const restoreNoticeSessionId =
+        isKimiK3 && sessionCtx?.sessionId && isKimiK3RestorePending(sessionCtx.sessionId)
+          ? sessionCtx.sessionId
+          : undefined;
+
       return createRetryingStream(makeStream, {
         cronJob,
         retryOnAnyError: isKimiK3,
@@ -945,6 +1035,21 @@ export const xiaoyiProvider: ProviderPlugin = {
           ? () => underlying({ ...model, id: KIMI_K3_FALLBACK_MODEL_ID, name: KIMI_K3_FALLBACK_MODEL_ID }, context, streamCallOptions)
           : undefined,
         onFallback: isKimiK3 ? notifyKimiK3Fallback : undefined,
+        onFallbackDone: isKimiK3
+          ? () => {
+              const sid = getCurrentSessionContext()?.sessionId;
+              if (sid) {
+                markKimiK3RestorePending(sid);
+                logger.log(`[xiaoyiprovider] fallback completed, restore notice pending sessionId=${sid}`);
+              }
+            }
+          : undefined,
+        onFirstContent: restoreNoticeSessionId
+          ? () => {
+              kimiK3RestorePending.delete(restoreNoticeSessionId);
+              notifyKimiK3Restored();
+            }
+          : undefined,
       });
     };
   },
