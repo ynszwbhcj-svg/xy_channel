@@ -477,6 +477,10 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
       ChatType: "direct" as const,
       GroupSubject: undefined,
       SenderName: parsed.sessionId,
+      // 🔑 provider.ts wrapStreamFn 从 core 渲染的 Conversation info 块中解析
+      // message_id（= xiaoyi_<taskId>_<deviceType>）来构造 trace/session/interaction
+      // 打点头——这是 steer 场景下唯一能拿到最新 taskId 的来源，不可删除。
+      MessageSid: `xiaoyi_${parsed.taskId}_${deviceType}`,
       WasMentioned: false,
       CommandAuthorized: true,
       OriginatingChannel: "xiaoyi-channel" as const,
