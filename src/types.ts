@@ -15,6 +15,7 @@ export interface XYChannelConfig {
   fileUploadUrl: string;
   pushUrl?: string;
   defaultSessionId?: string;
+  terminalFrameDelayMs?: number;
 }
 
 // ============================================================================

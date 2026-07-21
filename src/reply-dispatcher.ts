@@ -26,6 +26,10 @@ export interface CreateXYReplyDispatcherParams {
 const TEMP_FILE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 const RUN_CROSS_TASK_LOG_TAG = "[RunCrossTask]";
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 // Module-level storage for cross-turn full text. Needed because the /steer
 // fallback path creates a new dispatcher with a fresh closure, which would
 // otherwise lose text accumulated from previous turns.
@@ -373,25 +377,41 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
                 });
               }
 
-              // 🔑 使用动态taskId发送完成状态
+              // 🔑 终态帧延迟：正文 artifact 与终态帧几乎同一毫秒发出，下游服务端
+              // 对长正文走慢速管道（审核/存储）会把正文延迟到最后投递，导致微服务
+              // 先收到 "任务处理已完成" 和 final=true。发终态帧前延迟一小段时间，
+              // 让已发出的正文先穿过服务端管道，保证终态帧最后到达。
+              //
+              // ⚠️ 延迟前必须捕获 taskId/messageId：sleep 会让出宏任务，期间新用户
+              // 消息可能把 session 绑定更新到新 task，若仍用 getActiveTaskId() 动态
+              // 读取，终态帧会误挂到新 task 上、提前终止新任务的流。
+              const terminalTaskId = getActiveTaskId();
+              const terminalMessageId = getActiveMessageId();
+              const terminalFrameDelayMs = config.terminalFrameDelayMs ?? 0;
+              if (terminalFrameDelayMs > 0) {
+                scopedLog().log(`[ON-IDLE] Delaying terminal frames by ${terminalFrameDelayMs}ms to preserve downstream ordering`);
+                await sleep(terminalFrameDelayMs);
+              }
+
+              // 🔑 使用延迟前捕获的 taskId 发送完成状态
               await sendStatusUpdate({
                 config,
                 sessionId,
-                taskId: getActiveTaskId(),
-                messageId: getActiveMessageId(),
+                taskId: terminalTaskId,
+                messageId: terminalMessageId,
                 text: "任务处理已完成~",
                 state: "completed",
               });
               scopedLog().log(`[ON-IDLE] Sent completion status update`);
 
-              // 🔑 使用动态taskId发送最终响应（空字符串表示流结束）
+              // 🔑 使用延迟前捕获的 taskId 发送最终响应（空字符串表示流结束）
               // 确保在所有的 partial 都处理完之后再发送 final 帧
               await processingLock;
               await sendA2AResponse({
                 config,
                 sessionId,
-                taskId: getActiveTaskId(),
-                messageId: getActiveMessageId(),
+                taskId: terminalTaskId,
+                messageId: terminalMessageId,
                 text: "",
                 append: true,
                 final: true,

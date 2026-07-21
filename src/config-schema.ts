@@ -51,6 +51,11 @@ export const xyConfigSchema = {
       type: "string",
       description: "Default session ID for push notifications (used when no target is specified, e.g., in cron jobs)",
     },
+    terminalFrameDelayMs: {
+      type: "number",
+      description: "Delay in ms before sending terminal frames (completed status + final) so the content artifact clears downstream pipelines first; 0 disables",
+      default: 300,
+    },
   },
   required: ["apiKey", "agentId", "uid", "apiId", "pushId"],
 } as const;
