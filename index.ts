@@ -57,7 +57,7 @@ function registerSkillsDiagnosticHook(api: OpenClawPluginApi) {
     GetCurrentLocation: ["get_user_location"],
     Schedule: ["create_calendar_event", "search_calendar_event"],
     memorandum: ["create_note", "search_notes", "modify_note"],
-    gallery: ["search_photo_gallery", "upload_photo", "save_media_to_gallery"],
+    gallery: ["search_photo_gallery", "save_media_to_gallery"],
     contact: ["search_contact"],
     file: ["search_file", "upload_file", "save_file_to_file_manager"],
     clock: ["create_alarm", "delete_alarm", "search_alarm", "modify_alarm"],
@@ -71,9 +71,21 @@ function registerSkillsDiagnosticHook(api: OpenClawPluginApi) {
     Object.entries(SKILL_TOOLS).flatMap(([skill, tools]) => tools.map((t) => [t, skill])),
   );
 
+  // Resolve the actual tool name from call_device_tool wrapper.
+  // The model calls call_device_tool({ toolName: "...", arguments: {...} })
+  // — the real tool name is inside params, not event.toolName.
+  function resolveActualToolName(event: { toolName: string; params: Record<string, unknown> }): string {
+    if (event.toolName === "call_device_tool") {
+      const inner = event.params?.toolName;
+      if (typeof inner === "string" && inner.length > 0) return inner;
+    }
+    return event.toolName;
+  }
+
   // Log skill usage for known device tools on before_tool_call
   api.on("before_tool_call", async (event, _ctx) => {
-    const skillName = TOOL_SKILL_MAP[event.toolName];
+    const actualToolName = resolveActualToolName(event);
+    const skillName = TOOL_SKILL_MAP[actualToolName];
     if (skillName) {
       writeSkillUsage(skillName);
     }
