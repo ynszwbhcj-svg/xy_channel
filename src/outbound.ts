@@ -291,10 +291,6 @@ export const xyOutbound: ChannelOutboundAdapter = {
       throw new Error("mediaUrl is required for sendMedia");
     }
 
-    // 🔍 URL 追踪日志：记录上传前的原始 URL
-    const hasQuery = mediaUrl.includes("?");
-    logger.log(`[SEND_MEDIA_URL_TRACE] Uploading media, hasQuery=${hasQuery} mediaUrl=${mediaUrl}`);
-
     // Upload file
     const fileId = await uploadService.uploadFile(mediaUrl);
 
@@ -303,8 +299,6 @@ export const xyOutbound: ChannelOutboundAdapter = {
       logger.error(`File upload returned empty fileId for: ${mediaUrl}`);
       throw new Error(`File upload returned empty fileId for: ${mediaUrl}`);
     }
-
-    logger.log(`[SEND_MEDIA_URL_TRACE] Upload done, fileId=${fileId}`);
 
     logger.log(`[xyOutbound.sendMedia] File uploaded:`, {
       fileId,
