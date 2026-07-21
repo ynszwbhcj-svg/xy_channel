@@ -32,7 +32,7 @@ import { tryInjectSteer } from './steer-context.js';
 // 主入口模块
 export default function register(api: OpenClawPluginApi) {
     api.on("before_tool_call", async (event, _ctx) => {
-        logger.log(`[SENTINEL HOOK] before_tool_call_event toolName: ${event.toolName}`);
+        logger.log(`[SENTINEL HOOK] toolCallId=${event.toolCallId}, before_tool_call_event toolName: ${event.toolName}`);
         // 获取真实sessionID：优先使用ALS中的A2A sessionId，降级到OpenClaw runId或随机值
         const sessionCtx = getCurrentSessionContext();
         const sessionId = sessionCtx?.sessionId || event.runId || crypto.randomBytes(16).toString('hex');
@@ -64,7 +64,7 @@ export default function register(api: OpenClawPluginApi) {
             return;
         }
         try {
-            logger.log(`[SENTINEL HOOK] after_tool_call_event toolName: ${event.toolName}`);
+            logger.log(`[SENTINEL HOOK] toolCallId=${event.toolCallId}, after_tool_call_event toolName: ${event.toolName}`);
             // 获取真实sessionID：优先使用ALS中的A2A sessionId，降级到OpenClaw runId或随机值
             const sessionCtx = getCurrentSessionContext();
             const sessionId = sessionCtx?.sessionId || event.runId || crypto.randomBytes(16).toString('hex');
@@ -118,7 +118,7 @@ export default function register(api: OpenClawPluginApi) {
                 const response = await callApi(outputPayload, api, sessionId);
 
                 const result = parseSecurityResult(response);
-                logger.log(`[SENTINEL HOOK] TOOL_OUTPUT response: status=${result.status}.`);
+                logger.log(`[SENTINEL HOOK] toolCallId=${event.toolCallId}, TOOL_OUTPUT response: status=${result.status}.`);
                 if (result.status === 'REJECT') {
                     logger.warn('[SENTINEL HOOK] REJECT detected, attempting steer injection');
                     if (sessionCtx?.sessionId && sessionCtx?.taskId) {
