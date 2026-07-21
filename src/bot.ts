@@ -29,13 +29,6 @@ import {
   decrementTaskIdRef,
   hasActiveTask,
 } from "./task-manager.js";
-import {
-  registerSessionKeyMapping,
-  getWaitState,
-  hasWaitState,
-  markParentSettled,
-  cacheXYConfig,
-} from "./subagent-wait-state.js";
 import type { A2AJsonRpcRequest } from "./types.js";
 import { logger } from "./utils/logger.js";
 
@@ -230,7 +223,6 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
 
     // Resolve configuration (needed for status updates)
     const config = resolveXYConfig(cfg);
-    cacheXYConfig(config);
 
     // ✅ Resolve agent route (following feishu pattern)
     // accountId is "default" for XY (single account mode)
@@ -246,17 +238,6 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
     });
 
     log.log(`[BOT] Resolved route, sessionKey=${route.sessionKey}`);
-
-    // Register sessionKey→A2A sessionId mapping for subagent hook translation.
-    // Hooks receive openclaw sessionKey (e.g. "agent:main:direct:xxx") but
-    // xy_channel operates on A2A sessionId. This bridge lets subagent_spawned/
-    // subagent_ended hooks find the correct wait state.
-    // IMPORTANT: Only register on the FIRST message. Steer messages have a
-    // different taskId — overwriting the mapping would break subagent wait
-    // state tracking for the original message's subagents.
-    if (!isUpdate) {
-      registerSessionKeyMapping(route.sessionKey, parsed.sessionId, parsed.taskId, parsed.messageId);
-    }
 
     // Check for ACP runtime binding on this A2A conversation
     const runtimeRoute = resolveRuntimeConversationBindingRoute({
@@ -483,15 +464,6 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
       cleaned = true;
       log.log(`[BOT] Cleanup started, steered=${steerState.steered}, skipReg=${skipReg}`);
       if (!skipReg) {
-        // Check for pending subagent wait on this session
-        const pendingWait = getWaitState(parsed.sessionId, parsed.taskId) ??
-          (hasWaitState(parsed.sessionId) ? { deliveredCompletions: 0, expectedCompletions: 1 } : null);
-        if (pendingWait && pendingWait.deliveredCompletions < pendingWait.expectedCompletions) {
-          // Subagent wait active — skip cleanup, session stays alive
-          log.log(`[BOT] Cleanup suppressed — subagent wait active on session, taskId=${parsed.taskId}`);
-          cleaned = false;
-          return;
-        }
         decrementTaskIdRef(parsed.sessionId);
       } else {
         log.log(`[BOT] CSPL steer cleanup, skipping decrementTaskIdRef (never incremented)`);
@@ -544,27 +516,6 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
         // 🔑 When steered, skip cleanup — the first message's dispatcher is still running
         if (steerState.steered) {
           log.log(`[BOT] Steered dispatch settled, skipping cleanup`);
-          return;
-        }
-
-        // Subagent wait state: if parent has pending subagents, mark settled
-        // and defer finalization. Cleanup is suppressed so the session stays alive.
-        const pendingWait = getWaitState(parsed.sessionId, parsed.taskId);
-        if (pendingWait && !pendingWait.parentSettled) {
-          const transition = markParentSettled(parsed.sessionId, parsed.taskId);
-          if (transition?.shouldFinalize) {
-            // All completions arrived before parent settled → finalize now
-            const { deliverSubagentFinalResult } = await import("./outbound.js");
-            await deliverSubagentFinalResult({
-              config,
-              state: transition.state,
-              reason: "all-subagent-results-delivered-before-parent-settled",
-            });
-            log.log(`[BOT] Subagent wait complete on parent settled; final response delivered`);
-          } else {
-            log.log(`[BOT] Subagent wait active, preserving session context for completion`);
-          }
-          dispatcherUpdaters.delete(parsed.sessionId);
           return;
         }
 

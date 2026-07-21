@@ -18,11 +18,6 @@ import { registerCLIHook } from "./src/tools/hmos-cli.js";
 import { recoverCronState } from "./src/cron-recovery.js";
 import type { CronRecoveryResult } from "./src/cron-recovery.js";
 import { writeSkillUsage } from "./src/utils/skills-logger.js";
-import {
-  markSubagentSpawned,
-  markSubagentEnded,
-  getCachedXYConfig,
-} from "./src/subagent-wait-state.js";
 import { logger } from "./src/utils/logger.js";
 
 /**
@@ -361,57 +356,7 @@ function registerCronRecoveryHook(api: OpenClawPluginApi): void {
   });
 }
 
-function registerSubagentHooks(api: OpenClawPluginApi) {
-  // subagent_spawned: fires after a subagent run is successfully registered.
-  // We increment the expected completion count so that onIdle knows to wait.
-  api.on("subagent_spawned", async (_event, ctx) => {
-    const requesterSessionKey = ctx?.requesterSessionKey;
-    if (!requesterSessionKey) return;
-    const count = markSubagentSpawned(requesterSessionKey);
-    if (count > 0) {
-      logger.log(`[XY-SUBAGENT] spawned, requesterSessionKey=${requesterSessionKey.slice(0, 30)}, expected=${count}`);
-    }
-  });
-
-  // subagent_ended: fires when a subagent run terminates (complete/error/killed).
-  // This is the PRIMARY delivery tracking mechanism. When all expected
-  // subagents have ended and parent has settled, we finalize the A2A session.
-  api.on("subagent_ended", async (event, ctx) => {
-    try {
-      const requesterSessionKey = ctx?.requesterSessionKey;
-      if (!requesterSessionKey) {
-        logger.log(`[XY-SUBAGENT-END] no requesterSessionKey in ctx`);
-        return;
-      }
-      const transition = markSubagentEnded(requesterSessionKey);
-      logger.log(`[XY-SUBAGENT-END] ended, targetSessionKey=${event?.targetSessionKey?.slice(0, 30)}, outcome=${event?.outcome}, complete=${transition?.isComplete ?? false}, shouldFinalize=${transition?.shouldFinalize ?? false}, transition=${!!transition}`);
-
-      if (transition?.shouldFinalize) {
-        logger.log(`[XY-SUBAGENT-END] Starting finalization...`);
-        const config = getCachedXYConfig();
-        if (!config) {
-          logger.error(`[XY-SUBAGENT-END] No cached XY config, cannot deliver final result`);
-          return;
-        }
-        const { deliverSubagentFinalResult } = await import("./src/outbound.js");
-        logger.log(`[XY-SUBAGENT-END] Using cached XY config`);
-        await deliverSubagentFinalResult({
-          config: config as any,
-          state: transition.state,
-          reason: "all-subagents-ended-after-parent-settled",
-        });
-        logger.log(`[XY-SUBAGENT-END] Finalized A2A session after all subagents ended`);
-      }
-    } catch (err) {
-      logger.error(`[XY-SUBAGENT-END] Error in subagent_ended hook:`, err);
-    }
-  });
-}
-
 function registerFullHooks(api: OpenClawPluginApi) {
-  // SUBAGENT HOOKS: track subagent spawn/end lifecycle for session keep-alive
-  registerSubagentHooks(api);
-
   // SKILL RETRIEVER HOOK: before_prompt_build hook
   const pluginConfig = (api as { pluginConfig?: unknown }).pluginConfig as Record<string, unknown> || {};
   const skillRetrieverConfig = normalizeToolRetrieverConfig({

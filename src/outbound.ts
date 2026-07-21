@@ -9,53 +9,12 @@ import { resolveXYConfig } from "./config.js";
 import { XYFileUploadService } from "./file-upload.js";
 import { XYPushService } from "./push.js";
 import { getCurrentSessionContext } from "./tools/session-manager.js";
-import {
-  getWaitState,
-  addCompletionText,
-  clearWaitState,
-} from "./subagent-wait-state.js";
-import { decrementTaskIdRef } from "./task-manager.js";
-import { sendA2AResponse, sendStatusUpdate } from "./formatter.js";
 import { savePushData } from "./utils/pushdata-manager.js";
 import { getAllPushIds } from "./utils/pushid-manager.js";
 import { logger } from "./utils/logger.js";
 
 // Special marker for default push delivery when no target is specified
 const DEFAULT_PUSH_MARKER = "default";
-
-// ─── Subagent completion delivery ──────────────────────────────
-
-export async function deliverSubagentFinalResult(params: {
-  config: ReturnType<typeof resolveXYConfig>;
-  state: import("./subagent-wait-state.js").SubagentWaitState;
-  reason?: string;
-  text?: string;
-}): Promise<void> {
-  const { config, state, reason, text } = params;
-  const log = logger.withContext(state.sessionId, state.taskId);
-
-  const finalText = state.completionTexts.length > 0
-    ? state.completionTexts.join("\n\n")
-    : (text || undefined) ?? "子任务已完成";
-
-  await sendA2AResponse({
-    config,
-    sessionId: state.sessionId,
-    taskId: state.taskId,
-    messageId: state.messageId,
-    text: finalText,
-    append: false,
-    final: true,
-  });
-
-  clearWaitState(
-    state.sessionId,
-    reason ?? "all-subagent-results-delivered",
-    state.taskId,
-  );
-  decrementTaskIdRef(state.sessionId, state.taskId);
-  log.log(`[xyOutbound] Subagent final delivered to original A2A task, reason=${reason}`);
-}
 
 // File extension to MIME type mapping
 const FILE_TYPE_TO_MIME_TYPE: Record<string, string> = {
@@ -135,20 +94,7 @@ export const xyOutbound: ChannelOutboundAdapter = {
         };
       }
 
-      // Fallback: subagent wait state (ALS is null for subagent completion deliveries)
-      const waitState = getWaitState(trimmedTo);
-      if (waitState) {
-        const enhancedTarget = `${waitState.sessionId}::${waitState.taskId}`;
-        logger.withContext(waitState.sessionId, waitState.taskId).log(
-          `[xyOutbound.resolveTarget] Enhanced target from subagent wait state: ${enhancedTarget}`,
-        );
-        return {
-          ok: true,
-          to: enhancedTarget,
-        };
-      }
-
-      logger.log(`[xyOutbound.resolveTarget] Could not find matching session context or wait state for "${trimmedTo}"`);
+      logger.log(`[xyOutbound.resolveTarget] Could not find matching session context for "${trimmedTo}"`);
       // Still return the original target, but it may fail in sendMedia
     }
 
@@ -164,34 +110,6 @@ export const xyOutbound: ChannelOutboundAdapter = {
 
     // Resolve configuration
     const config = resolveXYConfig(cfg);
-
-    // ── Subagent completion text capture ─────────────────────────
-    // Subagent completions may arrive here when openclaw's announce
-    // flow delivers through the channel outbound. We capture the text
-    // for the final A2A response but do NOT track delivery count here.
-    // Delivery tracking is done by the subagent_ended hook (index.ts).
-    //
-    // IMPORTANT: We do NOT return early here. The OpenClaw core's announce
-    // flow needs sendText to complete normally (push delivery) to avoid
-    // triggering the direct-primary fallback retry loop. Text is captured
-    // for the A2A final response, but push delivery proceeds normally.
-    if (to && to !== DEFAULT_PUSH_MARKER) {
-      const [targetSessionId, targetTaskId] = String(to).split("::");
-      const waitState = getWaitState(targetSessionId, targetTaskId);
-      const alsCtx = getCurrentSessionContext();
-
-      const isFromWaitState = waitState &&
-        (!alsCtx || alsCtx.taskId !== targetTaskId);
-
-      if (isFromWaitState && !waitState.finalizationClaimed) {
-        const log = logger.withContext(waitState.sessionId, waitState.taskId);
-        log.log(`[xyOutbound.sendText] Subagent completion text captured, len=${(text as string)?.length ?? 0}`);
-        addCompletionText(targetSessionId, targetTaskId, text as string);
-        // Fall through to normal push delivery — core needs sendText to
-        // complete normally to avoid retry/announce-failure loops.
-      }
-    }
-    // ── End subagent text capture ───────────────────────────────
 
     // Handle default push marker (for cron jobs without explicit target)
     let actualTo = to;
