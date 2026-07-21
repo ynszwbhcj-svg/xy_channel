@@ -413,84 +413,55 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
       }
     }
 
-    // // Resolve envelope format options (following feishu pattern)
-    // const envelopeOptions = core.channel.reply.resolveEnvelopeFormatOptions(cfg);
-    // // Build message body with speaker prefix (following feishu pattern)
-    // const speaker = parsed.sessionId;
-    // const messageBody = `${speaker}: ${textForAgent}`;
+    // Resolve envelope format options (following feishu pattern)
+    const envelopeOptions = core.channel.reply.resolveEnvelopeFormatOptions(cfg);
 
-    // // Format agent envelope (following feishu pattern)
-    // const body = core.channel.reply.formatAgentEnvelope({
-    //   channel: "xiaoyi-channel",
-    //   from: speaker,
-    //   timestamp: new Date(),
-    //   envelope: envelopeOptions,
-    //   body: messageBody,
-    // });
+    // Build message body with speaker prefix (following feishu pattern)
+    const speaker = parsed.sessionId;
+    const messageBody = `${speaker}: ${textForAgent}`;
 
-    // // 🔑 Steer messages use /steer prefix + CommandSource "native" to trigger
-    // // the native slash command fast path, which calls handleSteerCommand →
-    // // queueEmbeddedAgentMessageWithOutcomeAsync before admitReplyTurn blocks.
-    // const steerCommandBody = isUpdate ? `/steer ${textForAgent}` : textForAgent;
+    // Format agent envelope (following feishu pattern)
+    const body = core.channel.reply.formatAgentEnvelope({
+      channel: "xiaoyi-channel",
+      from: speaker,
+      timestamp: new Date(),
+      envelope: envelopeOptions,
+      body: messageBody,
+    });
 
-    // if (isUpdate) {
-    //   log.log(`[BOT-STEER] Dispatching via /steer fast path, sessionKey=${route.sessionKey}, cmdLen=${steerCommandBody.length}`);
-    // }
+    // 🔑 Steer messages use /steer prefix + CommandSource "native" to trigger
+    // the native slash command fast path, which calls handleSteerCommand →
+    // queueEmbeddedAgentMessageWithOutcomeAsync before admitReplyTurn blocks.
+    const steerCommandBody = isUpdate ? `/steer ${textForAgent}` : textForAgent;
 
-    // // ✅ Finalize inbound context (following feishu pattern)
-    // // Use route.accountId and route.sessionKey instead of parsed fields
-    // const ctxPayload = core.channel.reply.finalizeInboundContext({
-    //   Body: body,
-    //   RawBody: steerCommandBody,
-    //   CommandBody: steerCommandBody,
-    //   ...(isUpdate ? { CommandSource: "native" as const } : {}),
-    //   From: parsed.sessionId,
-    //   To: parsed.sessionId,  // ✅ Simplified: use sessionId as target (context is managed by SessionKey)
-    //   SessionKey: route.sessionKey,  // ✅ Use route.sessionKey
-    //   AccountId: route.accountId,  // ✅ Use route.accountId ("default")
-    //   ChatType: "direct" as const,
-    //   GroupSubject: undefined,
-    //   SenderName: parsed.sessionId,
-    //   SenderId: parsed.sessionId,
-    //   Provider: "xiaoyi-channel" as const,
-    //   Surface: "xiaoyi-channel" as const,
-    //   MessageSid: `xiaoyi_${parsed.taskId}_${deviceType}`,
-    //   Timestamp: Date.now(),
-    //   WasMentioned: false,
-    //   CommandAuthorized: true,
-    //   OriginatingChannel: "xiaoyi-channel" as const,
-    //   OriginatingTo: parsed.sessionId,  // Original message target
-    //   ReplyToBody: undefined, // A2A protocol doesn't support reply/quote
-    //   ...mediaPayload,
-    // });
+    if (isUpdate) {
+      log.log(`[BOT-STEER] Dispatching via /steer fast path, sessionKey=${route.sessionKey}, cmdLen=${steerCommandBody.length}`);
+    }
 
-    // 🔑 Steer fallthrough: 当 direct steer 失败时（无活跃 run），斜杠命令
-    // 需要通过 CommandSource: "native" 让 OpenClaw core 走原生命令快速通道，
-    // 否则 /new、/clear 等命令会被当成普通文本交给 LLM，触发错误的兜底回复。
-    const body = textForAgent;
-    const isSteerFallthrough = isUpdate && !skipReg;
-    // ✅ Finalize inbound context
+    // ✅ Finalize inbound context (following feishu pattern)
+    // Use route.accountId and route.sessionKey instead of parsed fields
     const ctxPayload = core.channel.reply.finalizeInboundContext({
       Body: body,
-      RawBody: textForAgent,
-      CommandBody: textForAgent,
-      ...(isSteerFallthrough ? { CommandSource: "native" as const } : {}),
+      RawBody: steerCommandBody,
+      CommandBody: steerCommandBody,
+      ...(isUpdate ? { CommandSource: "native" as const } : {}),
       From: parsed.sessionId,
-      To: parsed.sessionId,
-      SessionKey: route.sessionKey,
-      AccountId: route.accountId,
+      To: parsed.sessionId,  // ✅ Simplified: use sessionId as target (context is managed by SessionKey)
+      SessionKey: route.sessionKey,  // ✅ Use route.sessionKey
+      AccountId: route.accountId,  // ✅ Use route.accountId ("default")
       ChatType: "direct" as const,
       GroupSubject: undefined,
       SenderName: parsed.sessionId,
-      // 🔑 provider.ts wrapStreamFn 从 core 渲染的 Conversation info 块中解析
-      // message_id（= xiaoyi_<taskId>_<deviceType>）来构造 trace/session/interaction
-      // 打点头——这是 steer 场景下唯一能拿到最新 taskId 的来源，不可删除。
+      SenderId: parsed.sessionId,
+      Provider: "xiaoyi-channel" as const,
+      Surface: "xiaoyi-channel" as const,
       MessageSid: `xiaoyi_${parsed.taskId}_${deviceType}`,
+      Timestamp: Date.now(),
       WasMentioned: false,
       CommandAuthorized: true,
       OriginatingChannel: "xiaoyi-channel" as const,
-      OriginatingTo: parsed.sessionId,
-      ReplyToBody: undefined,
+      OriginatingTo: parsed.sessionId,  // Original message target
+      ReplyToBody: undefined, // A2A protocol doesn't support reply/quote
       ...mediaPayload,
     });
 
