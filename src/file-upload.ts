@@ -255,11 +255,12 @@ export class XYFileUploadService {
         throw new Error("No file URL returned from completeAndQuery");
       }
 
-      const hasQuery = fileUrl.includes("?");
-      logger.log(`[XY File Upload] File upload successful, hasQuery=${hasQuery} url=${fileUrl}`);
+      logger.log(`[XY File Upload] File upload successful`); 
+      
       return fileUrl;
     } catch (error) {
       logger.error(`[XY File Upload] File upload with URL retrieval failed for ${filePath}:`, error);
+      
       throw error;
     } finally {
       if (isTempFile) {
@@ -370,8 +371,8 @@ export class XYFileUploadService {
         throw new Error("No file URL returned from completeAndQuery (preview)");
       }
 
-      const hasQuery = fileUrl.includes("?");
-      logger.log(`[XY File Upload] File upload with preview URL successful, hasQuery=${hasQuery} url=${fileUrl}`);
+      logger.log(`[XY File Upload] File upload with preview URL successful`);
+      
       return fileUrl;
     } catch (error) {
       logger.error(`[XY File Upload] File upload with preview URL failed for ${filePath}:`, error);
