@@ -53,24 +53,40 @@ function extractSkillNameFromPath(filePath: unknown): string | null {
  * the `after_tool_call` hook and write the skill name to the skills log.
  */
 function registerSkillsDiagnosticHook(api: OpenClawPluginApi) {
-  // Tool name → skill name mapping for direct tool-based skill usage logging
-  const TOOL_SKILL_MAP: Record<string, string> = {
-    get_user_location: "GetCurrentLocation",
-    get_calendar_tool_schema: "Schedule",
-    get_note_tool_schema: "memorandum",
-    get_photo_tool_schema: "gallery",
-    get_contact_tool_schema: "contact",
-    get_device_file_tool_schema: "file",
-    get_alarm_tool_schema: "clock",
-    message: "message",
-    get_phone_tool_schema: "phone",
-    get_collection_tool_schema: "xiaoyi-collection",
-    image_reading: "xiaoyi-image-understanding"
+  // Skill name → tool names mapping for direct tool-based skill usage logging
+  const SKILL_TOOLS: Record<string, string[]> = {
+    GetCurrentLocation: ["get_user_location"],
+    Schedule: ["create_calendar_event", "search_calendar_event"],
+    memorandum: ["create_note", "search_notes", "modify_note"],
+    gallery: ["search_photo_gallery", "save_media_to_gallery"],
+    contact: ["search_contact"],
+    file: ["search_file", "upload_file", "save_file_to_file_manager"],
+    clock: ["create_alarm", "delete_alarm", "search_alarm", "modify_alarm"],
+    message: ["search_message", "send_message"],
+    phone: ["call_phone"],
+    "xiaoyi-collection": ["add_collection", "query_collection", "delete_collection"],
+    "xiaoyi-image-understanding": ["image_reading"],
   };
+  // Inverted to tool name → skill name for lookup
+  const TOOL_SKILL_MAP: Record<string, string> = Object.fromEntries(
+    Object.entries(SKILL_TOOLS).flatMap(([skill, tools]) => tools.map((t) => [t, skill])),
+  );
+
+  // Resolve the actual tool name from call_device_tool wrapper.
+  // The model calls call_device_tool({ toolName: "...", arguments: {...} })
+  // — the real tool name is inside params, not event.toolName.
+  function resolveActualToolName(event: { toolName: string; params: Record<string, unknown> }): string {
+    if (event.toolName === "call_device_tool") {
+      const inner = event.params?.toolName;
+      if (typeof inner === "string" && inner.length > 0) return inner;
+    }
+    return event.toolName;
+  }
 
   // Log skill usage for known device tools on before_tool_call
   api.on("before_tool_call", async (event, _ctx) => {
-    const skillName = TOOL_SKILL_MAP[event.toolName];
+    const actualToolName = resolveActualToolName(event);
+    const skillName = TOOL_SKILL_MAP[actualToolName];
     if (skillName) {
       writeSkillUsage(skillName);
     }
