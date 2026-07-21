@@ -464,12 +464,17 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
     //   ...mediaPayload,
     // });
 
+    // 🔑 Steer fallthrough: 当 direct steer 失败时（无活跃 run），斜杠命令
+    // 需要通过 CommandSource: "native" 让 OpenClaw core 走原生命令快速通道，
+    // 否则 /new、/clear 等命令会被当成普通文本交给 LLM，触发错误的兜底回复。
     const body = textForAgent;
+    const isSteerFallthrough = isUpdate && !skipReg;
     // ✅ Finalize inbound context
     const ctxPayload = core.channel.reply.finalizeInboundContext({
       Body: body,
       RawBody: textForAgent,
       CommandBody: textForAgent,
+      ...(isSteerFallthrough ? { CommandSource: "native" as const } : {}),
       From: parsed.sessionId,
       To: parsed.sessionId,
       SessionKey: route.sessionKey,
