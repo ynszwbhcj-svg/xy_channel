@@ -331,10 +331,10 @@ export function buildToolOutputPayload(
 }
 
 // 发送新接口请求并处理响应，返回扫描结果（保留block/steer能力）
-async function sendToolInputRequest(payload: CallApiPayload, api: OpenClawPluginApi, sessionId: string): Promise<{ status: 'ACCEPT' | 'REJECT' }> {
+async function sendToolInputRequest(payload: CallApiPayload, api: OpenClawPluginApi, sessionId: string, toolCallId: string): Promise<{ status: 'ACCEPT' | 'REJECT' }> {
     const response = await callApi(payload, api, sessionId);
     const result = parseSecurityResult(response);
-    logger.log(`[SENTINEL HOOK] TOOL_INPUT response: status=${result.status}`);
+    logger.log(`[SENTINEL HOOK] toolCallId=${toolCallId}, TOOL_INPUT response: status=${result.status}`);
     return result;
 }
 
@@ -388,7 +388,7 @@ export async function handleExecToolInput(event: any, api: OpenClawPluginApi, se
 
             logger.log(`[SENTINEL HOOK] Sending TOOL_INPUT for file: ${path.basename(filePath)}, body length: ${JSON.stringify(toolInputPayload).length}`);
             try {
-                lastResult = await sendToolInputRequest(toolInputPayload, api, sessionId);
+                lastResult = await sendToolInputRequest(toolInputPayload, api, sessionId, event.toolCallId);
                 if (lastResult.status === 'REJECT') {
                     return lastResult;
                 }
@@ -418,7 +418,7 @@ export async function handleExecToolInput(event: any, api: OpenClawPluginApi, se
         );
         logger.log(`[SENTINEL HOOK] Sending TOOL_INPUT for direct code execution, body length: ${JSON.stringify(toolInputPayload).length}`);
 
-        return await sendToolInputRequest(toolInputPayload, api, sessionId);
+        return await sendToolInputRequest(toolInputPayload, api, sessionId, event.toolCallId);
     }
 }
 
@@ -445,7 +445,7 @@ export async function handleMessageToolInput(event: any, api: OpenClawPluginApi,
 
     logger.log(`[SENTINEL HOOK] Sending TOOL_INPUT for message, body length: ${JSON.stringify(toolInputPayload).length}`);
 
-    return await sendToolInputRequest(toolInputPayload, api, sessionId);
+    return await sendToolInputRequest(toolInputPayload, api, sessionId, event.toolCallId);
 }
 
 // 计算项目目录的哈希值（遍历所有文件）
@@ -562,8 +562,8 @@ export async function handleOtherToolInput(event: any, api: OpenClawPluginApi, s
 
     logger.log(`[SENTINEL HOOK] Processing other tool input, toolName: ${event.toolName}`);
 
-    // 将 params 序列化为 JSON 字符串
-    const paramsJson = JSON.stringify(params);
+    // 将 params 序列化为 JSON 字符串，并限制长度
+    const paramsJson = JSON.stringify(params).substring(0, MAX_TEXT_LENGTH);
 
     const interActionID = extractInterActionId(taskId);
 
@@ -578,5 +578,5 @@ export async function handleOtherToolInput(event: any, api: OpenClawPluginApi, s
 
     logger.log(`[SENTINEL HOOK] Sending TOOL_INPUT for ${event.toolName}, body length: ${JSON.stringify(toolInputPayload).length}`);
 
-    return await sendToolInputRequest(toolInputPayload, api, sessionId);
+    return await sendToolInputRequest(toolInputPayload, api, sessionId, event.toolCallId);
 }
