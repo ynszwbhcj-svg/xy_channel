@@ -442,7 +442,7 @@ def _clean_surrogates(text: str) -> str:
     Replace lone surrogate characters that cannot be encoded to UTF-8.
     JSON-decoded emoji can leave unpaired surrogates like \\ud83d in strings.
     """
-    return text.encode("utf-8", errors="surrogateescape").decode("utf-8", errors="replace")
+    return text.encode("utf-8", errors="replace").decode("utf-8")
 
 
 def format_parsed_log_line(parsed: Dict[str, Any]) -> str:
