@@ -1308,7 +1308,11 @@ export const invokeTool = {
   name: "invoke",
   label: "Invoke",
   description:
-      "调用已安装 skill 中声明的工具。必须传 functionName(或funcName) 与 arguments(或params)；functionName 的值等于工具定义中的 toolName；arguments 是包含 bundleName 和业务参数字段的对象；完整业务参数定义见 references/tools/<bundleName>__<toolName>.json。",
+      `调用已安装 skill 中声明的工具。必须传 functionName(或funcName) 与 arguments(或params)；functionName 的值等于工具定义中的 toolName；arguments 是包含 bundleName 和业务参数字段的对象；完整业务参数定义见 references/tools/<bundleName>__<toolName>.json。
+      注意事项：
+      a. 操作超时时间为60秒，请勿重复调用此工具，如果超时或失败，最多重试一次。
+      b. 如果涉及xiaoyi_gui_agent相关操作，请勿调用此工具
+      `,
     parameters: {
       type: "object",
       properties: {
