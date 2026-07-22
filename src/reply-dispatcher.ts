@@ -30,16 +30,6 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-// Module-level storage for cross-turn full text. Needed because the /steer
-// fallback path creates a new dispatcher with a fresh closure, which would
-// otherwise lose text accumulated from previous turns.
-const sessionFullTextMap = new Map<string, string>();
-
-/** Clear saved full text for a session (call when session is fully done). */
-export function clearSessionFullText(sessionId: string): void {
-  sessionFullTextMap.delete(sessionId);
-}
-
 function buildDistributionStatusCommand(context: RunCrossTaskContext): A2ACommand {
   return {
     header: {
@@ -191,10 +181,8 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
   // ── append: false streaming state ─────────────────────────────
   // Instead of computing deltas, we always send the full text with
   // append: false.  Model-call boundaries are detected via startsWith.
-  // crossTurnPrefix: 仅在 steer 时继承上一轮内容，新消息从空开始。
-  let crossTurnPrefix = steerState.steered
-    ? (sessionFullTextMap.get(sessionId) ?? "")
-    : "";
+  // onIdle 的最终帧携带权威全文本（append:false 整体替换），因此不再
+  // 维护跨 turn 前缀 —— 每轮对话的最终帧自足，下一轮从干净状态开始。
   let prevModelText = "";     // completed model calls within this turn
   let currentModelText = "";  // current model call's full accumulated text
   // ──────────────────────────────────────────────────────────────
@@ -278,7 +266,10 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
             return;
           }
 
-          if (info?.kind === "final") {
+          // 捕获权威最终文本（canonical，来自最后一条 assistant 消息，
+          // 非流式累计），供 onIdle 拼接最终帧。compaction 通知不是答案
+          // 文本，不能污染 finalReplyText。
+          if (info?.kind === "final" && !payload.isCompactionNotice) {
             finalReplyText = text;
             scopedLog().log(`[DELIVER] Captured final reply text, length=${finalReplyText.length}`);
           }
@@ -297,7 +288,7 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
             sessionId,
             taskId: getActiveTaskId(),
             messageId: getActiveMessageId(),
-            text: crossTurnPrefix + text,
+            text,
             append: false,
             final: false,
           });
@@ -346,23 +337,42 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
         try {
           // 正常模式（或未被steer的dispatch）
           if (hasSentResponse && !finalSent) {
-            // 保存本轮完整文本，供后续 steer/fallback 的 dispatcher 读取
-            const sep = prevModelText ? "\n" : "";
-            crossTurnPrefix = crossTurnPrefix + prevModelText + sep + currentModelText;
-            sessionFullTextMap.set(sessionId, crossTurnPrefix);
+            // 🔑 先等在途 onPartialReply 全部落账，再读取流式累计文本。
+            // openclaw 以 void fire-and-forget 调用 onPartialReply，onIdle
+            // 触发时最后一个回调可能仍在 processingLock 链上排队；在 await
+            // 之前读取 currentModelText 会缺失最后几个流式块。
+            await processingLock;
 
-            // 先用后清：crossTaskResultMessage 需要 currentModelText
-            const trimmedFinalReplyText = finalReplyText.trim();
-            const trimmedCurrentModelText = currentModelText.trim();
-            const crossTaskResultMessage = trimmedFinalReplyText || trimmedCurrentModelText;
-            const crossTaskResultSource = trimmedFinalReplyText ? "final" : "currentModel";
+            // 🔑 拼接权威最终全文本。currentModelText 是 onPartialReply 流式
+            // 累计的最后一轮模型文本，可能缺尾：openclaw 在 message_end 发出的
+            // 最终清洗文本（final:true 指令剥离）不再走 onPartialReply
+            // （emitAssistantStreamData 未置 emitPartialReply）。finalReplyText
+            // 来自 deliver(kind=final)，是 buildEmbeddedRunPayloads 从最后一条
+            // assistant 消息直接提取的 canonical 完整文本，天然完整 —— 非空时
+            // 一律以它为准；startsWith 对比仅用于诊断日志。
+            let resolvedLastModelText = currentModelText;
+            if (finalReplyText) {
+              if (finalReplyText === currentModelText) {
+                scopedLog().log(`[ON-IDLE] Final text matches streamed text, length=${finalReplyText.length}`);
+              } else if (finalReplyText.startsWith(currentModelText)) {
+                scopedLog().log(`[ON-IDLE] Streamed text missing tail (streamed=${currentModelText.length}, final=${finalReplyText.length}), patched from final payload`);
+              } else if (currentModelText.startsWith(finalReplyText)) {
+                scopedLog().log(`[ON-IDLE] Final text shorter than streamed (streamed=${currentModelText.length}, final=${finalReplyText.length}), using canonical final`);
+              } else {
+                scopedLog().warn(`[ON-IDLE] Final text diverged from streamed text (streamed=${currentModelText.length}, final=${finalReplyText.length}), using canonical final`);
+              }
+              resolvedLastModelText = finalReplyText;
+            }
+
+            const sep = prevModelText ? "\n" : "";
+            const fullFinalText = prevModelText + sep + resolvedLastModelText;
+            const crossTaskResultMessage = resolvedLastModelText.trim();
 
             // 重置当前 turn 状态，为下一轮 steer 做准备
             prevModelText = "";
             currentModelText = "";
 
-            scopedLog().log(`[ON-IDLE] Saved cross-turn prefix, length=${crossTurnPrefix.length}`);
-            scopedLog().log(`[ON-IDLE] [SendCrossResult]Sending cross-task result, source=${crossTaskResultSource}, resultMessage.length=${crossTaskResultMessage.length}`);
+            scopedLog().log(`[ON-IDLE] [SendCrossResult]Sending cross-task result, resultMessage.length=${crossTaskResultMessage.length}`);
             try {
               const runCrossTaskContext = getRunCrossTaskContext();
               if (runCrossTaskContext) {
@@ -404,20 +414,35 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
               });
               scopedLog().log(`[ON-IDLE] Sent completion status update`);
 
-              // 🔑 使用延迟前捕获的 taskId 发送最终响应（空字符串表示流结束）
-              // 确保在所有的 partial 都处理完之后再发送 final 帧
-              await processingLock;
-              await sendA2AResponse({
-                config,
-                sessionId,
-                taskId: terminalTaskId,
-                messageId: terminalMessageId,
-                text: "",
-                append: true,
-                final: true,
-              });
+              // 🔑 使用延迟前捕获的 taskId 发送最终响应。最终帧携带权威
+              // 全文本 + append:false，客户端整体替换气泡 —— 流式期间缺失的
+              // 尾部内容在此补齐，同时本轮对话自足闭环，无需维护跨 turn 前缀。
+              // 空文本属异常路径，回退旧的空帧语义（append:true 仅标记流
+              // 结束），避免把客户端已展示的内容刷空。
+              if (fullFinalText) {
+                await sendA2AResponse({
+                  config,
+                  sessionId,
+                  taskId: terminalTaskId,
+                  messageId: terminalMessageId,
+                  text: fullFinalText,
+                  append: false,
+                  final: true,
+                });
+                scopedLog().log(`[ON-IDLE] Sent final response (append=false, full text length=${fullFinalText.length})`);
+              } else {
+                await sendA2AResponse({
+                  config,
+                  sessionId,
+                  taskId: terminalTaskId,
+                  messageId: terminalMessageId,
+                  text: "",
+                  append: true,
+                  final: true,
+                });
+                scopedLog().log(`[ON-IDLE] Sent final response (empty fallback, stream end)`);
+              }
               finalSent = true;
-              scopedLog().log(`[ON-IDLE] Sent final response (empty, stream end)`);
             } catch (err) {
               scopedLog().error(`[ON-IDLE] Failed to send final response:`, err);
             }
@@ -599,7 +624,7 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
           currentModelText = text;
 
           const sep = prevModelText ? "\n" : "";
-          const fullText = crossTurnPrefix + prevModelText + sep + text;
+          const fullText = prevModelText + sep + text;
 
           await sendA2AResponse({
             config,
