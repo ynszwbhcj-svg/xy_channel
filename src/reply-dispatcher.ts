@@ -591,8 +591,10 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
           // 检测新模型调用：同一模型调用内 text 是递增的（"好的"→"好的，已查到"），
           // 跨模型调用时 text 会刷新，此时 !text.startsWith(currentModelText) 为 true
           if (currentModelText && !text.startsWith(currentModelText)) {
-            // 锁存上一个模型调用的完整文本
-            prevModelText += currentModelText;
+            // 锁存上一个模型调用的完整文本。锁存必须带上轮间分隔符：
+            // append:false 全量重发时 prevModelText 原样透出，若直接拼接，
+            // 第三轮开始时第一、二轮之间的 "\n" 会丢失，客户端看到换行消失。
+            prevModelText += (prevModelText ? "\n" : "") + currentModelText;
           }
           currentModelText = text;
 
