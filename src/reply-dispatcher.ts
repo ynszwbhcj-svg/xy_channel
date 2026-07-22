@@ -434,6 +434,7 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
                   append: false,
                   final: true,
                 });
+                scopedLog().log(`[ON-IDLE] Sent final response text hcj=${fullFinalText})`);
                 scopedLog().log(`[ON-IDLE] Sent final response (append=false, full text length=${fullFinalText.length})`);
               } else {
                 await sendA2AResponse({
