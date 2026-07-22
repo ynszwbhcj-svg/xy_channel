@@ -414,6 +414,11 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
               });
               scopedLog().log(`[ON-IDLE] Sent completion status update`);
 
+              if (terminalFrameDelayMs > 0) {
+                scopedLog().log(`[ON-IDLE] Delaying terminal frames by ${terminalFrameDelayMs}ms to preserve downstream ordering 2`);
+                await sleep(terminalFrameDelayMs);
+              }
+
               // 🔑 使用延迟前捕获的 taskId 发送最终响应。最终帧携带权威
               // 全文本 + append:false，客户端整体替换气泡 —— 流式期间缺失的
               // 尾部内容在此补齐，同时本轮对话自足闭环，无需维护跨 turn 前缀。
