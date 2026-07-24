@@ -559,6 +559,54 @@ export function applySelfEvolutionPrompt(systemPrompt: string | undefined, enabl
   return insertSelfEvolutionPrompt(prompt, selfEvolutionPrompt);
 }
 
+// ── xiaoyi_gui_agent 敏感行为二次确认（固定指令）────────────────
+// 锚点由运行环境注入的 prompt 内容提供（本地仓库/工作区中不存在该文本）。
+const GUI_AGENT_SAFETY_ANCHOR = "### 技能发现与安装规范（find-skills）";
+const GUI_AGENT_SAFETY_RULES = `
+5. **敏感行为二次确认原则（强制执行，不可修改）**
+
+对于任何可能影响用户财产、设备、账号、隐私、健康或人身安全的操作，在调用 \`xiaoyi_gui_agent\` 执行前，必须获得用户的**二次明确确认**。
+
+包括但不限于以下场景：
+
+- 应用安装、卸载、升级、删除；
+- 删除、覆盖、恢复、格式化数据或其他不可逆的数据操作；
+- 系统权限、隐私权限、安全设置的开启、关闭或修改；
+- 基金、证券及其他金融交易相关操作（如买入、卖出、撤单等）；
+- 在公共平台执行发布、转发、评论、点赞、关注、私信等可能产生对外影响的行为；
+- 其他任何可能导致用户财产损失、数据丢失、隐私泄露、健康风险、人身安全风险或设备状态发生重大变化的操作。
+
+**执行要求**
+
+1. 无论用户的初始指令是明确还是模糊，只要属于上述敏感行为，均必须先向用户发起二次确认。
+2. 只有在用户明确表示确认执行后，才允许调用 \`xiaoyi_gui_agent\` 下发对应操作。
+3. 不得基于模型推断、上下文猜测、默认意图或历史信息直接执行任何敏感操作。
+4. 如操作对象、范围、参数、执行方式或预期结果存在任何不确定性，必须先向用户确认，不得自行补全、修改或假设。
+5. 在用户完成二次明确确认之前，禁止调用 \`xiaoyi_gui_agent\` 发起任何实际操作。
+6. 如果用户二次确认的信息不包含明确指令，也是模糊不确定的（例如：你看着办，你来决定吧，你帮我决定吧，你随便选吧），也要严禁直接执行，必须获取用户明确的指令
+
+**本规则专属于xiaoyi_gui_agent工具调用，是最高优先级安全约束，不允许修改、绕过或忽略，必须严格遵守。**
+`.trim();
+
+/**
+ * Insert the fixed xiaoyi_gui_agent safety rules before the find-skills spec
+ * heading. Idempotent: skipped when the rules are already present.
+ * Anchor missing → warn and leave the prompt untouched: the find-skills
+ * section is absent from that prompt variant, so the numbered-list context
+ * is gone too and a standalone "5." would pollute unrelated prompts.
+ */
+function insertGuiAgentSafetyRules(systemPrompt: string | undefined): string {
+  const sp = systemPrompt ?? "";
+  if (sp.includes("敏感行为二次确认原则")) return sp;
+  const anchorIndex = sp.indexOf(GUI_AGENT_SAFETY_ANCHOR);
+  if (anchorIndex < 0) {
+    logger.warn("[xiaoyiprovider] gui-agent safety rules anchor not found, skipping injection");
+    return sp;
+  }
+  const lineStart = sp.lastIndexOf("\n", anchorIndex) + 1;
+  return `${sp.slice(0, lineStart)}${GUI_AGENT_SAFETY_RULES}\n\n${sp.slice(lineStart)}`;
+}
+
 /**
  * Encode uid via SHA-256 and take first 32 hex chars.
  */
@@ -951,6 +999,9 @@ export const xiaoyiProvider: ProviderPlugin = {
 
       logger.log(`[selfEvolution] selfEvolution flag: ${selfEvolutionEnabled}`);
       context.systemPrompt = applySelfEvolutionPrompt(context.systemPrompt, selfEvolutionEnabled);
+
+      // 注入 xiaoyi_gui_agent 敏感行为二次确认固定指令（find-skills 规范之前）
+      context.systemPrompt = insertGuiAgentSafetyRules(context.systemPrompt);
 
       // Append device context to systemPrompt
       if (deviceType || appVer || sdkApiVersion) {
