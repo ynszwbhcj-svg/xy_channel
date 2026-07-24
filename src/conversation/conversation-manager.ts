@@ -58,6 +58,8 @@ export function getSession(sessionId: string): ConversationSession | null {
 }
 
 export function deleteSession(sessionId: string): void {
+  const session = sessions.get(sessionId);
+  session?.outboundQueue.destroy();
   sessions.delete(sessionId);
 }
 
@@ -456,15 +458,29 @@ export async function deliverSubagentFinalResult(params: {
 
   setSessionState(state.sessionId, "completing");
 
-  await sendA2AResponse({
-    config,
-    sessionId: state.sessionId,
-    taskId: state.taskId,
-    messageId: state.messageId,
-    text: finalText,
-    append: false,
-    final: true,
-  });
+  // final 帧走会话出站队列：排在任何在途 partial 帧之后，保证客户端
+  // 先收齐流式正文再收到 final（与 reply-dispatcher 的终态帧同一收口点）。
+  const session = sessions.get(state.sessionId);
+  const sendFinal = () =>
+    sendA2AResponse({
+      config,
+      sessionId: state.sessionId,
+      taskId: state.taskId,
+      messageId: state.messageId,
+      text: finalText,
+      append: false,
+      final: true,
+    });
+  if (session) {
+    session.outboundQueue.enqueue({
+      taskId: state.taskId,
+      label: "subagent-final",
+      send: sendFinal,
+    });
+    await session.outboundQueue.whenIdle();
+  } else {
+    await sendFinal();
+  }
 
   clearWaitState(state.sessionId, reason ?? "all-subagent-results-delivered", state.taskId);
   completeTask(state.sessionId, state.taskId);

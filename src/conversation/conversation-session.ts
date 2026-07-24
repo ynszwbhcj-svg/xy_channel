@@ -6,6 +6,11 @@
 //   - sessionKey:   openclaw 路由 sessionKey（吸收自 sessionKeyMap）
 //   - subagentWaits: subagent 等待态（吸收自 subagent-wait-state）
 //   - statusTimer:  30s 状态心跳定时器（由 manager 拥有）
+//   - assembler:    流式文本装配器（model/injected 段拼接 + 权威文本修正）
+//   - outboundQueue: 会话级出站 FIFO（帧时序唯一收口，coalescing/delayMs）
+
+import { StreamAssembler } from "./stream-assembler.js";
+import { OutboundQueue } from "./outbound-queue.js";
 
 export interface TaskEntry {
   taskId: string;
@@ -58,6 +63,14 @@ export interface ConversationSession {
   subagentWaits: SubagentWaitState[];
   /** manager 拥有的 30s 状态心跳定时器。 */
   statusTimer?: NodeJS.Timeout;
+  /**
+   * 当前 dispatcher 的流式文本装配器（model/injected 段拼接 + 权威文本修正）。
+   * 生命周期随 dispatcher：dispatcher 创建时挂载，终态清理时卸载；
+   * 挂在这里是为了让工具（display-a2ui-card 等）经 getSession 注入文本段。
+   */
+  assembler?: StreamAssembler;
+  /** 会话级出站队列：所有出站帧的时序收口点，生命周期随 session。 */
+  outboundQueue: OutboundQueue;
   lastActivityAt: number;
 }
 
@@ -67,6 +80,7 @@ export function createConversationSession(sessionId: string): ConversationSessio
     state: "working",
     tasks: [],
     subagentWaits: [],
+    outboundQueue: new OutboundQueue(sessionId),
     lastActivityAt: Date.now(),
   };
 }

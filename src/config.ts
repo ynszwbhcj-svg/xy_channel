@@ -34,6 +34,7 @@ export function resolveXYConfig(cfg: ClawdbotConfig): XYChannelConfig {
     fileUploadUrl: xyConfig.fileUploadUrl ?? "http://localhost:8767",
     pushUrl: xyConfig.pushUrl,
     defaultSessionId: xyConfig.defaultSessionId,
+    terminalFrameDelayMs: xyConfig.terminalFrameDelayMs ?? 300,
   };
 }
 

@@ -13,10 +13,21 @@ import {
   clearWaitState,
   getCurrentTaskId,
   getCurrentMessageId,
+  getOrCreateSession,
   startStatusHeartbeat,
   stopStatusHeartbeat,
   setSessionState,
 } from "../conversation/conversation-manager.js";
+import { StreamAssembler } from "../conversation/stream-assembler.js";
+
+// ⚙️ 前缀是 openclaw 系统消息稳定标记（infra/system-message.ts SYSTEM_MARK）。
+// ACP 绑定会话 turn 结束会以 kind=final 尾随投递系统诊断通知（如
+// "Session ids resolved"），deliver 捕获权威文本时必须排除，否则最终帧
+// 会把答案替换成通知。
+const SYSTEM_NOTICE_MARK = "⚙️";
+function isSystemNoticeText(text: string): boolean {
+  return text.trimStart().startsWith(SYSTEM_NOTICE_MARK);
+}
 
 export interface CreateXYReplyDispatcherParams {
   cfg: ClawdbotConfig;
@@ -170,20 +181,24 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
 
   let hasSentResponse = false;
   let finalSent = false;
-  let finalReplyText = "";
 
-  // ── append: false streaming state ─────────────────────────────
-  // Instead of computing deltas, we always send the full text with
-  // append: false.  Model-call boundaries are detected via startsWith.
-  let prevModelText = "";     // completed model calls within this turn
-  let currentModelText = "";  // current model call's full accumulated text
-  // ──────────────────────────────────────────────────────────────
+  // ── 文本装配与出站时序由对话管理层拥有 ─────────────────────
+  // assembler：model/injected 段拼接 + deliver 权威文本修正，生命周期随本
+  // dispatcher（同时挂载到 session 上，供 display-a2ui-card 等工具注入文本段）。
+  // outboundQueue：会话级出站 FIFO，所有出站帧的唯一时序收口（partial 帧
+  // coalescing、终态帧 delayMs）。dispatcher 只做事件翻译和业务决策。
+  const session = getOrCreateSession(sessionId);
+  const assembler = new StreamAssembler();
+  session.assembler = assembler;
+  const outboundQueue = session.outboundQueue;
+  // 终态帧延迟：正文 artifact 与终态帧几乎同一毫秒发出，下游服务端对长正文
+  // 走慢速管道会把正文延迟到最后投递，导致微服务先收到终态帧（0 关闭）。
+  const terminalFrameDelayMs = config.terminalFrameDelayMs ?? 0;
 
-  // 串行化 onPartialReply 回调的发送，避免 SDK fire-and-forget 模式下
-  // 多个回调并发执行造成 ws.send 乱序。
-  // 注意：append:false 发送全量文本，即使偶有乱序也会被下一次全量覆盖修复，
-  // 此处锁主要避免客户端短暂出现文本回退的闪烁。
-  let processingLock: Promise<void> = Promise.resolve();
+  // 串行化 onPartialReply 回调体：SDK fire-and-forget 模式下多个回调可能
+  // 并发进入，streamChain 保证 assembler 读写互斥；onIdle 在 finalize 前
+  // await 它，确保在途回调全部落账（否则读取的装配状态缺最后几个流式块）。
+  let streamChain: Promise<void> = Promise.resolve();
   const initialRunCrossTaskContext = getCurrentSessionContext()?.runCrossTaskContext;
 
   const getRunCrossTaskContext = (): RunCrossTaskContext | undefined => {
@@ -238,9 +253,12 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
             return;
           }
 
-          if (info?.kind === "final") {
-            finalReplyText = text;
-            scopedLog().log(`[DELIVER] Captured final reply text, length=${finalReplyText.length}`);
+          // 捕获权威最终文本（canonical，来自最后一条 assistant 消息，
+          // 非流式累计），供 onIdle 拼接最终帧。compaction 通知和 ⚙️ 系统
+          // 通知（如 ACP "Session ids resolved"）不是答案文本，不能污染。
+          if (info?.kind === "final" && !payload.isCompactionNotice && !isSystemNoticeText(text)) {
+            assembler.onFinalText(text);
+            scopedLog().log(`[DELIVER] Captured final reply text, length=${text.length}`);
           }
 
           // onPartialReply 已经通过 append:false 全量发送了所有文本，deliver 不再重复发送
@@ -251,15 +269,24 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
 
           hasSentResponse = true;
 
-          // 非流式回退路径（onPartialReply 未触发时）
-          await sendA2AResponse({
-            config,
-            sessionId,
-            taskId: getActiveTaskId(),
-            messageId: getActiveMessageId(),
-            text,
-            append: false,
-            final: false,
+          // 非流式回退路径（onPartialReply 未触发时，如 ACP 绑定会话），
+          // 同样经出站队列保序；与流式帧同 coalesceKey，可被后续全量帧合并。
+          const deliverTaskId = getActiveTaskId();
+          const deliverMessageId = getActiveMessageId();
+          outboundQueue.enqueue({
+            taskId: deliverTaskId,
+            label: "deliver-fallback",
+            coalesceKey: `partial:${deliverTaskId}`,
+            send: () =>
+              sendA2AResponse({
+                config,
+                sessionId,
+                taskId: deliverTaskId,
+                messageId: deliverMessageId,
+                text,
+                append: false,
+                final: false,
+              }),
           });
         } catch (deliverError) {
           scopedLog().error(`Failed to deliver message:`, deliverError);
@@ -271,19 +298,20 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
         stopStatusInterval();
 
         if (!hasSentResponse) {
-
-          try {
-            await sendStatusUpdate({
-              config,
-              sessionId,
-              taskId: getActiveTaskId(),
-              messageId: getActiveMessageId(),
-              text: "处理失败，请稍后重试",
-              state: "failed",
-            });
-          } catch (statusError) {
-            scopedLog().error(`Failed to send error status:`, statusError);
-          }
+          const errorTaskId = getActiveTaskId();
+          outboundQueue.enqueue({
+            taskId: errorTaskId,
+            label: "error-status",
+            send: () =>
+              sendStatusUpdate({
+                config,
+                sessionId,
+                taskId: errorTaskId,
+                messageId: getActiveMessageId(),
+                text: "处理失败，请稍后重试",
+                state: "failed",
+              }),
+          });
         }
       },
 
@@ -306,18 +334,19 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
           );
           // 会话不结束：转入 waiting-subagent，心跳由对话管理层继续维持
           setSessionState(sessionId, "waiting-subagent");
-          try {
-            await sendStatusUpdate({
-              config,
-              sessionId,
-              taskId,
-              messageId,
-              text: "子任务正在处理中，请稍候~",
-              state: "working",
-            });
-          } catch (err) {
-            scopedLog().error(`[ON-IDLE] Failed to send subagent waiting status:`, err);
-          }
+          outboundQueue.enqueue({
+            taskId,
+            label: "subagent-waiting-status",
+            send: () =>
+              sendStatusUpdate({
+                config,
+                sessionId,
+                taskId,
+                messageId,
+                text: "子任务正在处理中，请稍候~",
+                state: "working",
+              }),
+          });
           // 心跳由对话管理层拥有，subagent 等待期间自动存活，无需附加到等待态
           return;
         }
@@ -340,101 +369,176 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
         try {
           // 正常模式
           if (hasSentResponse && !finalSent) {
-            // 先用后清：crossTaskResultMessage 需要 currentModelText
-            const trimmedFinalReplyText = finalReplyText.trim();
-            const trimmedCurrentModelText = currentModelText.trim();
-            const crossTaskResultMessage = trimmedFinalReplyText || trimmedCurrentModelText;
-            const crossTaskResultSource = trimmedFinalReplyText ? "final" : "currentModel";
+            // 🔑 先等在途 onPartialReply 全部落账，再读装配状态。openclaw 以
+            // void fire-and-forget 调用 onPartialReply，onIdle 触发时最后一个
+            // 回调可能仍在 streamChain 上排队；提前读取会缺最后几个流式块。
+            await streamChain;
 
-            // 重置当前 turn 状态
-            prevModelText = "";
-            currentModelText = "";
+            // 🔑 终态帧延迟会让出宏任务，期间新用户消息可能把 session 绑定
+            // 更新到新 task，必须提前捕获 taskId/messageId，避免终态帧误挂到
+            // 新 task 上、提前终止新任务的流。
+            const terminalTaskId = getActiveTaskId();
+            const terminalMessageId = getActiveMessageId();
 
-            scopedLog().log(`[ON-IDLE] [SendCrossResult]Sending cross-task result, source=${crossTaskResultSource}, resultMessage.length=${crossTaskResultMessage.length}`);
+            // 🔑 权威文本合并：deliver(kind=final) 捕获的 canonical 文本
+            // （openclaw 从最后一条 assistant 消息直接提取）非空时替换流式
+            // 累计的末轮 —— message_end 的最终清洗文本不走 onPartialReply，
+            // 流式累计天然可能缺尾，以 canonical 为准。
+            const { fullText: fullFinalText, resolvedLastText, diagnostic } = assembler.finalize();
+            if (diagnostic === "patched-tail") {
+              scopedLog().log(`[ON-IDLE] Streamed text missing tail, patched from final payload, canonical.length=${resolvedLastText.length}`);
+            } else if (diagnostic === "canonical-shorter") {
+              scopedLog().log(`[ON-IDLE] Final text shorter than streamed, using canonical final, canonical.length=${resolvedLastText.length}`);
+            } else if (diagnostic === "diverged") {
+              scopedLog().warn(`[ON-IDLE] Final text diverged from streamed text, using canonical final, canonical.length=${resolvedLastText.length}`);
+            }
+            const crossTaskResultMessage = resolvedLastText.trim();
+
+            scopedLog().log(`[ON-IDLE] [SendCrossResult]Sending cross-task result, resultMessage.length=${crossTaskResultMessage.length}`);
             try {
               const runCrossTaskContext = getRunCrossTaskContext();
               if (runCrossTaskContext) {
-                await sendRunCrossTaskResult({
-                  config,
-                  sessionId,
-                  taskId: getActiveTaskId(),
-                  messageId: getActiveMessageId(),
-                  context: runCrossTaskContext,
-                  resultCode: "0",
-                  resultMessage: crossTaskResultMessage,
+                const ctx = runCrossTaskContext;
+                outboundQueue.enqueue({
+                  taskId: terminalTaskId,
+                  label: "cross-task-result",
+                  send: () =>
+                    sendRunCrossTaskResult({
+                      config,
+                      sessionId,
+                      taskId: terminalTaskId,
+                      messageId: terminalMessageId,
+                      context: ctx,
+                      resultCode: "0",
+                      resultMessage: crossTaskResultMessage,
+                    }),
                 });
               }
 
-              // 🔑 使用动态taskId发送完成状态
-              await sendStatusUpdate({
-                config,
-                sessionId,
-                taskId: getActiveTaskId(),
-                messageId: getActiveMessageId(),
-                text: "任务处理已完成~",
-                state: "completed",
+              // 🔑 终态帧延迟：让已发出的长正文先穿过下游服务端慢速管道，
+              // 保证终态帧最后到达（openclaw6.6 3e7b1aa/cdc4cdc 同款治理，
+              // delayMs 在队列 drain 内 sleep，阻塞后续帧）。
+              outboundQueue.enqueue({
+                taskId: terminalTaskId,
+                label: "terminal-status",
+                delayMs: terminalFrameDelayMs,
+                send: () =>
+                  sendStatusUpdate({
+                    config,
+                    sessionId,
+                    taskId: terminalTaskId,
+                    messageId: terminalMessageId,
+                    text: "任务处理已完成~",
+                    state: "completed",
+                  }),
               });
-              scopedLog().log(`[ON-IDLE] Sent completion status update`);
 
-              // 🔑 使用动态taskId发送最终响应（空字符串表示流结束）
-              // 确保在所有的 partial 都处理完之后再发送 final 帧
-              await processingLock;
-              await sendA2AResponse({
-                config,
-                sessionId,
-                taskId: getActiveTaskId(),
-                messageId: getActiveMessageId(),
-                text: "",
-                append: true,
-                final: true,
-              });
+              // 🔑 最终帧携带权威全文本（append:false 整体替换）—— 流式期间
+              // 缺失的尾部在此补齐。空文本属异常路径，回退旧的空帧语义
+              // （append:true 仅标记流结束），避免把客户端已展示内容刷空。
+              if (fullFinalText) {
+                outboundQueue.enqueue({
+                  taskId: terminalTaskId,
+                  label: "terminal-final",
+                  delayMs: terminalFrameDelayMs,
+                  send: () =>
+                    sendA2AResponse({
+                      config,
+                      sessionId,
+                      taskId: terminalTaskId,
+                      messageId: terminalMessageId,
+                      text: fullFinalText,
+                      append: false,
+                      final: true,
+                    }),
+                });
+              } else {
+                outboundQueue.enqueue({
+                  taskId: terminalTaskId,
+                  label: "terminal-final-empty",
+                  delayMs: terminalFrameDelayMs,
+                  send: () =>
+                    sendA2AResponse({
+                      config,
+                      sessionId,
+                      taskId: terminalTaskId,
+                      messageId: terminalMessageId,
+                      text: "",
+                      append: true,
+                      final: true,
+                    }),
+                });
+              }
+
+              await outboundQueue.whenIdle();
               finalSent = true;
               if (waitState) {
                 clearWaitState(sessionId, "main-final-delivered", taskId);
               }
               setSessionState(sessionId, "completed");
-              scopedLog().log(`[ON-IDLE] Sent final response (empty, stream end)`);
+              scopedLog().log(
+                `[ON-IDLE] Sent final response (${fullFinalText ? `append=false, full text length=${fullFinalText.length}` : "append=true, empty stream-end"})`,
+              );
             } catch (err) {
               scopedLog().error(`[ON-IDLE] Failed to send final response:`, err);
             }
           } else {
             // 正常失败场景
             scopedLog().log(`[ON-IDLE] Skipping final message: hasSentResponse=${hasSentResponse}, finalSent=${finalSent}`);
+            const failureTaskId = getActiveTaskId();
+            const failureMessageId = getActiveMessageId();
             try {
               const runCrossTaskContext = getRunCrossTaskContext();
               if (runCrossTaskContext) {
-                await sendRunCrossTaskResult({
-                  config,
-                  sessionId,
-                  taskId: getActiveTaskId(),
-                  messageId: getActiveMessageId(),
-                  context: runCrossTaskContext,
-                  resultCode: "1",
-                  resultMessage: "任务执行异常，请重试",
+                const ctx = runCrossTaskContext;
+                outboundQueue.enqueue({
+                  taskId: failureTaskId,
+                  label: "cross-task-result-failure",
+                  send: () =>
+                    sendRunCrossTaskResult({
+                      config,
+                      sessionId,
+                      taskId: failureTaskId,
+                      messageId: failureMessageId,
+                      context: ctx,
+                      resultCode: "1",
+                      resultMessage: "任务执行异常，请重试",
+                    }),
                 });
               }
 
-              await sendStatusUpdate({
-                config,
-                sessionId,
-                taskId: getActiveTaskId(),
-                messageId: getActiveMessageId(),
-                text: "任务处理中断了~",
-                state: "failed",
+              outboundQueue.enqueue({
+                taskId: failureTaskId,
+                label: "failure-status",
+                send: () =>
+                  sendStatusUpdate({
+                    config,
+                    sessionId,
+                    taskId: failureTaskId,
+                    messageId: failureMessageId,
+                    text: "任务处理中断了~",
+                    state: "failed",
+                  }),
               });
-              scopedLog().log(`[ON-IDLE] Sent failure status update`);
 
-              await sendA2AResponse({
-                config,
-                sessionId,
-                taskId: getActiveTaskId(),
-                messageId: getActiveMessageId(),
-                text: "任务执行异常，请重试~",
-                append: false,
-                final: true,
-                errorCode: 99921111,
-                errorMessage: "任务执行异常，请重试",
+              outboundQueue.enqueue({
+                taskId: failureTaskId,
+                label: "failure-final",
+                send: () =>
+                  sendA2AResponse({
+                    config,
+                    sessionId,
+                    taskId: failureTaskId,
+                    messageId: failureMessageId,
+                    text: "任务执行异常，请重试~",
+                    append: false,
+                    final: true,
+                    errorCode: 99921111,
+                    errorMessage: "任务执行异常，请重试",
+                  }),
               });
+
+              await outboundQueue.whenIdle();
               finalSent = true;
               setSessionState(sessionId, "failed");
               scopedLog().log(`[ON-IDLE] Sent error response, code=99921111`);
@@ -444,6 +548,12 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
           }
         } finally {
           stopStatusInterval();
+
+          // 卸载 assembler（终态后工具不再有注入窗口）；仅在仍属于本
+          // dispatcher 时卸载，避免误删 steer 新 dispatcher 的实例。
+          if (session.assembler === assembler) {
+            session.assembler = undefined;
+          }
 
           // 🔑 清理必须在 onIdle 内部完成，因为 openclaw 的 waitForIdle() 不会
           // await onIdle 返回的 Promise（源码中为 void options.onIdle?.()），
@@ -482,13 +592,19 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
           }
 
           try {
-            await sendStatusUpdate({
-              config,
-              sessionId,
-              taskId: getActiveTaskId(),
-              messageId: getActiveMessageId(),
-              text: `正在使用工具: ${toolName}...`,
-              state: "working",
+            const toolTaskId = getActiveTaskId();
+            outboundQueue.enqueue({
+              taskId: toolTaskId,
+              label: "tool-start-status",
+              send: () =>
+                sendStatusUpdate({
+                  config,
+                  sessionId,
+                  taskId: toolTaskId,
+                  messageId: getActiveMessageId(),
+                  text: `正在使用工具: ${toolName}...`,
+                  state: "working",
+                }),
             });
             scopedLog().log(`[TOOL-START] Sent status update for tool start: ${toolName}`);
           } catch (err) {
@@ -506,14 +622,20 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
         try {
           if (text.length > 0 || hasMedia) {
             const resultText = text.length > 0 ? text : "工具执行完成";
+            const toolTaskId = getActiveTaskId();
 
-            await sendStatusUpdate({
-              config,
-              sessionId,
-              taskId: getActiveTaskId(),
-              messageId: getActiveMessageId(),
-              text: resultText,
-              state: "working",
+            outboundQueue.enqueue({
+              taskId: toolTaskId,
+              label: "tool-result-status",
+              send: () =>
+                sendStatusUpdate({
+                  config,
+                  sessionId,
+                  taskId: toolTaskId,
+                  messageId: getActiveMessageId(),
+                  text: resultText,
+                  state: "working",
+                }),
             });
             scopedLog().log(`[TOOL-RESULT] Sent tool result as status update`);
           }
@@ -533,13 +655,19 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
 
         try {
           if (text.length > 0) {
-            await sendReasoningTextUpdate({
-              config,
-              sessionId,
-              taskId: getActiveTaskId(),
-              messageId: getActiveMessageId(),
-              text,
-              append: false,
+            const reasoningTaskId = getActiveTaskId();
+            outboundQueue.enqueue({
+              taskId: reasoningTaskId,
+              label: "reasoning-stream",
+              send: () =>
+                sendReasoningTextUpdate({
+                  config,
+                  sessionId,
+                  taskId: reasoningTaskId,
+                  messageId: getActiveMessageId(),
+                  text,
+                  append: false,
+                }),
             });
           }
         } catch (err) {
@@ -553,43 +681,43 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
 
         hasSentResponse = true;
 
-        // 串行化回调进入：SDK fire-and-forget 模式下多个 onPartialReply
-        // 可能并发执行，processingLock 保证 currentModelText/prevModelText
-        // 的读写和 ws.send 都在互斥临界区内。
-        const prevLock = processingLock;
-        let releaseLock: () => void;
-        processingLock = new Promise<void>((resolve) => {
-          releaseLock = resolve;
+        // 串行化回调体：SDK fire-and-forget 模式下多个 onPartialReply 可能
+        // 并发进入，streamChain 保证 assembler 读写互斥；发送本身由会话
+        // 出站队列保序，append:false 全量帧携带 coalesceKey 可被合并。
+        const prevChain = streamChain;
+        let releaseChain: () => void;
+        streamChain = new Promise<void>((resolve) => {
+          releaseChain = resolve;
         });
 
         try {
-          await prevLock;
+          await prevChain;
 
-          // 检测新模型调用：同一模型调用内 text 是递增的（"好的"→"好的，已查到"），
-          // 跨模型调用时 text 会刷新，此时 !text.startsWith(currentModelText) 为 true
-          if (currentModelText && !text.startsWith(currentModelText)) {
-            // 锁存上一个模型调用的完整文本
-            prevModelText += currentModelText;
-          }
-          currentModelText = text;
+          // assembler 内部完成 startsWith 边界检测与跨调用锁存（含轮间换行）
+          const { fullText } = assembler.onStreamText(text);
+          const partialTaskId = getActiveTaskId();
+          const partialMessageId = getActiveMessageId();
 
-          const sep = prevModelText ? "\n" : "";
-          const fullText = prevModelText + sep + text;
-
-          await sendA2AResponse({
-            config,
-            sessionId,
-            taskId: getActiveTaskId(),
-            messageId: getActiveMessageId(),
-            text: fullText,
-            append: false,
-            final: false,
-            log: false,
+          outboundQueue.enqueue({
+            taskId: partialTaskId,
+            label: "partial",
+            coalesceKey: `partial:${partialTaskId}`,
+            send: () =>
+              sendA2AResponse({
+                config,
+                sessionId,
+                taskId: partialTaskId,
+                messageId: partialMessageId,
+                text: fullText,
+                append: false,
+                final: false,
+                log: false,
+              }),
           });
         } catch (err) {
           scopedLog().error(`[PARTIAL-REPLY] Failed to send:`, err);
         } finally {
-          releaseLock!();
+          releaseChain!();
         }
       },
     },

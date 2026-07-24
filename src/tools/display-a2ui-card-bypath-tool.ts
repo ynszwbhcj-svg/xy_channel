@@ -2,6 +2,7 @@ import fs from "fs/promises";
 import { sendA2AResponse } from "../formatter.js";
 import { logger } from "../utils/logger.js";
 import { getCurrentSessionContext } from "./session-manager.js";
+import { getSession } from "../conversation/conversation-manager.js";
 
 class ToolInputError extends Error {
   readonly status = 400;
@@ -43,16 +44,44 @@ export const displayA2UICardByPathTool = {
       throw new Error(`读取 cardDSLPath 文件失败: ${error instanceof Error ? error.message : String(error)}`);
     }
 
-    await sendA2AResponse({
-      config,
-      sessionId,
-      taskId,
-      messageId,
-      text: cardDSLContent,
-      append: true,
-      final: false,
-    });
-    logger.log(`[DISPLAY-A2UI-CARD-BYPATH] card DSL sent, path=${cardDSLPath}, length=${cardDSLContent.length}`);
+    // 🔑 卡片 DSL 是 text part，进入客户端气泡的文本内容。若绕过装配器直发
+    // （append:true），下一帧流式全量帧（append:false 整体替换）不含 DSL，
+    // 卡片会被抹掉。因此注入装配器成为 injected 段，之后所有全量帧（含终帧）
+    // 都携带 DSL；注入帧本身也发全量，经会话出站队列与流式帧保序。
+    const session = getSession(sessionId);
+    if (session?.assembler?.hasContent()) {
+      const fullText = session.assembler.injectArtifact(cardDSLContent);
+      session.outboundQueue.enqueue({
+        taskId,
+        label: "a2ui-card",
+        coalesceKey: `partial:${taskId}`,
+        send: () =>
+          sendA2AResponse({
+            config,
+            sessionId,
+            taskId,
+            messageId,
+            text: fullText,
+            append: false,
+            final: false,
+          }),
+      });
+      logger.log(`[DISPLAY-A2UI-CARD-BYPATH] card DSL injected into assembler, path=${cardDSLPath}, dslLength=${cardDSLContent.length}, fullTextLength=${fullText.length}`);
+    } else {
+      // 异常路径：无装配上下文（如 dispatcher 已终态清理）。回退旧的
+      // append:true 直发，语义与重构前一致。
+      logger.log(`[DISPLAY-A2UI-CARD-BYPATH] no active assembler, falling back to direct append send, path=${cardDSLPath}`);
+      await sendA2AResponse({
+        config,
+        sessionId,
+        taskId,
+        messageId,
+        text: cardDSLContent,
+        append: true,
+        final: false,
+      });
+      logger.log(`[DISPLAY-A2UI-CARD-BYPATH] card DSL sent, path=${cardDSLPath}, length=${cardDSLContent.length}`);
+    }
 
     return {
       content: [
