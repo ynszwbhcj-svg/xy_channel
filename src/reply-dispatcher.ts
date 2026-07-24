@@ -266,18 +266,12 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
             return;
           }
 
-          // 捕获权威最终文本（canonical），供 onIdle 拼接最终帧。
-          // 真正的 assistant 回复带有 assistantMessageIndex 元数据，系统通知
-          // （如 ⚙️ Session ids resolved. 诊断通知）没有此字段。assistant
-          // 回复始终可信，系统通知仅在没有已捕获答案时作为兜底（如纯报错场景）。
+          // 捕获权威最终文本（canonical，来自最后一条 assistant 消息，
+          // 非流式累计），供 onIdle 拼接最终帧。compaction 通知不是答案
+          // 文本，不能污染 finalReplyText。
           if (info?.kind === "final" && !payload.isCompactionNotice) {
-            const isAssistantReply = info?.assistantMessageIndex !== undefined;
-            if (isAssistantReply || !finalReplyText) {
-              finalReplyText = text;
-              scopedLog().log(`[DELIVER] Captured final reply text, length=${finalReplyText.length}${isAssistantReply ? "" : " (fallback)"}`);
-            } else {
-              scopedLog().log(`[DELIVER] Skip non-assistant notification, keeping finalReplyText length=${finalReplyText.length}`);
-            }
+            finalReplyText = text;
+            scopedLog().log(`[DELIVER] Captured final reply text, length=${finalReplyText.length}`);
           }
 
           // onPartialReply 已经通过 append:false 全量发送了所有文本，deliver 不再重复发送
