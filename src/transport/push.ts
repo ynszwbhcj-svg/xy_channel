@@ -31,6 +31,10 @@ interface PushRequest {
             data:
               | {
                   pushDataId: string;
+                  /** cron 推送时携带：任务 jobId（线上字段名 cronId，客户端据此识别 push 来源） */
+                  cronId?: string;
+                  /** cron 推送时携带：任务标题 */
+                  cronTitle?: string;
                 }
               | {
                   directives: any[];
@@ -81,6 +85,8 @@ export class XYPushService {
    * @param sessionId - Optional session ID
    * @param pushDataId - Optional pushDataId for kind="data" format
    * @param pushId - Push ID to use (required)
+   * @param cronJobId - Optional cron job ID（仅 cron 推送，随 kind="data" 下发，线上字段名 cronId）
+   * @param cronTitle - Optional cron job 标题（仅 cron 推送，随 kind="data" 下发）
    */
   async sendPush(
     content: string,
@@ -88,7 +94,9 @@ export class XYPushService {
     data?: Record<string, any>,
     sessionId?: string,
     pushDataId?: string,
-    pushId?: string
+    pushId?: string,
+    cronJobId?: string,
+    cronTitle?: string
   ): Promise<void> {
     const pushUrl = this.resolvePushUrl();
     const traceId = this.generateTraceId();
@@ -97,6 +105,9 @@ export class XYPushService {
     const actualPushId = pushId || this.config.pushId;
 
     logger.log(`[PUSH] Preparing to send push message with pushId: ${actualPushId.substring(0, 20)}...`);
+    if (cronJobId || cronTitle) {
+      logger.log(`[PUSH] Cron push: pushDataId=${pushDataId ?? "-"} cronId=${cronJobId ?? "-"} cronTitle=${cronTitle ?? "-"}`);
+    }
 
     try {
       const requestBody: PushRequest = {
@@ -117,6 +128,9 @@ export class XYPushService {
                       kind: "data",
                       data: {
                         pushDataId: pushDataId,
+                        // 线上协议字段名 cronId（内部变量沿用 cronJobId）
+                        ...(cronJobId ? { cronId: cronJobId } : {}),
+                        ...(cronTitle ? { cronTitle } : {}),
                       },
                     },
                   ]

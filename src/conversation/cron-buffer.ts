@@ -25,10 +25,18 @@
 
 import { logger } from "../utils/logger.js";
 import { pushBroadcast } from "./outbound-gateway.js";
+import { savePushData } from "../utils/pushdata-manager.js";
 import type { XYChannelConfig } from "../types.js";
+
+/** 随 push 下发的 cron 元数据（jobId + title），客户端据此识别 push 来源。 */
+export interface CronTurnMeta {
+  jobId?: string;
+  jobTitle?: string;
+}
 
 interface CronTurnState {
   jobId?: string;
+  jobTitle?: string;
   startedAt: number;
   agentEnded: boolean;
   /** run 期间被吞文本的缓冲（聚合发送用）。 */
@@ -69,8 +77,14 @@ export function closeCronTurn(reason: string): void {
   logger.log(`[CRON-BUFFER] Cron turn closed, reason=${reason}`);
 }
 
-/** 将缓冲文本合并为一条 push 发出（截断沿用 1000 字限制）。 */
-async function flushBufferedTexts(texts: string[], config: XYChannelConfig | undefined, reason: string): Promise<void> {
+/**
+ * 将缓冲文本合并为一条 push 发出（截断沿用 1000 字限制）。
+ * meta 必须由调用方在 closeCronTurn 之前从 turn 捕获传入 —— close 后
+ * getTurn() 为 null，flush 内部无法再读取 cron 元数据。
+ * 持久化用全文 merged（客户端 Trigger 回查看全文，不受截断影响）；
+ * savePushData 失败时 pushDataId="" 回落 kind:"text" 内联，行为同现状。
+ */
+async function flushBufferedTexts(texts: string[], config: XYChannelConfig | undefined, reason: string, meta?: CronTurnMeta): Promise<void> {
   const merged = texts.join("\n\n").trim();
   if (!merged) {
     logger.log(`[CRON-BUFFER] Nothing to flush (${reason})`);
@@ -81,14 +95,22 @@ async function flushBufferedTexts(texts: string[], config: XYChannelConfig | und
     return;
   }
   const pushText = merged.length > 1000 ? merged.slice(0, 1000) : merged;
-  logger.log(`[CRON-BUFFER] Flushing merged text (${reason}), len=${pushText.length}`);
+  let pushDataId = "";
+  try {
+    pushDataId = await savePushData(merged, { cronJobId: meta?.jobId, cronTitle: meta?.jobTitle });
+  } catch (err) {
+    logger.error(`[CRON-BUFFER] Failed to save pushData for flush (${reason}):`, err);
+  }
+  logger.log(`[CRON-BUFFER] Flushing merged text (${reason}), len=${pushText.length}, pushDataId=${pushDataId || "-"}`);
   try {
     await pushBroadcast({
       config,
       text: pushText,
       title: pushText.split("\n")[0].slice(0, 57),
       to: config.defaultSessionId || "",
-      pushDataId: "",
+      pushDataId,
+      cronJobId: meta?.jobId,
+      cronTitle: meta?.jobTitle,
     });
   } catch (err) {
     logger.error(`[CRON-BUFFER] Flush push failed (${reason}):`, err);
@@ -100,24 +122,27 @@ async function flushBufferedTexts(texts: string[], config: XYChannelConfig | und
  * 同一 cron run 的每次模型调用都会重复触发检测 —— 此时仅刷新安全定时器，
  * 不重开 turn（避免 churn，也避免重置 agentEnded/缓冲状态）。
  */
-export function notifyCronDetected(jobId?: string): void {
+export function notifyCronDetected(jobId?: string, jobTitle?: string): void {
   const existing = getTurn();
   if (existing) {
-    // 同一 run 的重复检测：刷新安全定时器
+    // 同一 run 的重复检测：刷新安全定时器，回填缺失的 jobId/title
     clearTimeout(existing.safetyTimer);
     existing.safetyTimer = armSafetyTimer();
     existing.startedAt = Date.now();
+    if (!existing.jobId && jobId) existing.jobId = jobId;
+    if (!existing.jobTitle && jobTitle) existing.jobTitle = jobTitle;
     return;
   }
   const turn: CronTurnState = {
     jobId,
+    jobTitle,
     startedAt: Date.now(),
     agentEnded: false,
     bufferedTexts: [],
     safetyTimer: armSafetyTimer(),
   };
   setTurn(turn);
-  logger.log(`[CRON-BUFFER] Cron turn opened, jobId=${jobId ?? "unknown"}`);
+  logger.log(`[CRON-BUFFER] Cron turn opened, jobId=${jobId ?? "unknown"}, title=${jobTitle ?? "-"}`);
 }
 
 function armSafetyTimer(): NodeJS.Timeout {
@@ -126,9 +151,11 @@ function armSafetyTimer(): NodeJS.Timeout {
     if (!turn) return;
     logger.warn(`[CRON-BUFFER] Safety timeout (${CRON_SAFETY_TIMEOUT_MS}ms) reached, agentEnded=${turn.agentEnded}, buffered=${turn.bufferedTexts.length}`);
     const flushed = turn.bufferedTexts.slice();
+    const meta: CronTurnMeta = { jobId: turn.jobId, jobTitle: turn.jobTitle };
+    const config = turn.config;
     closeCronTurn("safety-timeout");
     if (flushed.length > 0) {
-      void flushBufferedTexts(flushed, turn.config, "safety-timeout");
+      void flushBufferedTexts(flushed, config, "safety-timeout", meta);
     }
   }, CRON_SAFETY_TIMEOUT_MS);
   // 安全定时器不应阻止进程退出
@@ -152,9 +179,11 @@ export function notifyCronAgentEnd(): void {
     if (!t) return;
     logger.log(`[CRON-BUFFER] Announce grace expired, buffered=${t.bufferedTexts.length}`);
     const flushed = t.bufferedTexts.slice();
+    const meta: CronTurnMeta = { jobId: t.jobId, jobTitle: t.jobTitle };
+    const config = t.config;
     closeCronTurn("announce-grace-expired");
     if (flushed.length > 0) {
-      void flushBufferedTexts(flushed, t.config, "announce-grace-expired");
+      void flushBufferedTexts(flushed, config, "announce-grace-expired", meta);
     }
   }, ANNOUNCE_GRACE_MS);
   turn.graceTimer.unref?.();
@@ -163,23 +192,35 @@ export function notifyCronAgentEnd(): void {
 
 export type CronSendTextGate = "swallow" | "announce" | "none";
 
+export interface CronGateResult {
+  gate: CronSendTextGate;
+  /**
+   * gate === "announce" 时的 cron 元数据同步快照（其余情况为 null）。
+   * 快照在 gate 返回时完成 —— 调用方后续 await 空窗期内 turn 可能被
+   * safety timer 关闭，届时再读 getTurn() 已拿不到 meta。
+   */
+  meta: CronTurnMeta | null;
+}
+
 /**
  * sendText 闸门：
  * - "swallow"：cron turn 进行中（run 未结束），吞掉中间 sendText，文本入缓冲；
  * - "announce"：run 已结束（宽限期内），当前 sendText 是 announce 最终
- *   结果，放行（唯一一条，缓冲丢弃）；
+ *   结果，放行（唯一一条，缓冲丢弃），meta 携带 cron 元数据快照；
  * - "none"：无 cron turn，正常发送。
  */
-export function gateCronSendText(swallowedText?: string, config?: XYChannelConfig): CronSendTextGate {
+export function gateCronSendText(swallowedText?: string, config?: XYChannelConfig): CronGateResult {
   const turn = getTurn();
-  if (!turn) return "none";
+  if (!turn) return { gate: "none", meta: null };
   if (config) turn.config = config;
-  if (turn.agentEnded) return "announce";
+  if (turn.agentEnded) {
+    return { gate: "announce", meta: { jobId: turn.jobId, jobTitle: turn.jobTitle } };
+  }
   if (swallowedText && swallowedText.trim()) {
     turn.bufferedTexts.push(swallowedText.trim());
     if (turn.bufferedTexts.length > MAX_BUFFERED_KEPT) {
       turn.bufferedTexts.shift();
     }
   }
-  return "swallow";
+  return { gate: "swallow", meta: null };
 }

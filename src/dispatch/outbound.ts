@@ -129,7 +129,9 @@ export const xyOutbound: ChannelOutboundAdapter = {
     // 定时任务执行期间的所有 sendText 一律吞掉（返回合成成功，保证
     // openclaw durable-delivery 记账正常），只放行 cron run 结束后的
     // announce 最终结果（唯一一条 push）。
-    const cronGate = gateCronSendText(text as string, config);
+    // announce 时 meta 是 gate 同步快照的 cron 元数据（jobId/title），
+    // 随 push 下发供客户端识别来源；其余路径 meta 为 null。
+    const { gate: cronGate, meta: cronMeta } = gateCronSendText(text as string, config);
     if (cronGate === "swallow") {
       logger.log(`[xyOutbound.sendText] Cron turn active — swallowing intermediate sendText, len=${(text as string)?.length ?? 0}`);
       return {
@@ -197,11 +199,13 @@ export const xyOutbound: ChannelOutboundAdapter = {
       actualTo = config.defaultSessionId || "";
     }
 
-    // 1. 持久化推送消息内容，获取 pushDataId
+    // 1. 持久化推送消息内容，获取 pushDataId（cron announce 时附带 cron 元数据）
     logger.log(`[xyOutbound.sendText] Saving push data to local storage...`);
     let pushDataId: string;
     try {
-      pushDataId = await savePushData(text);
+      pushDataId = await savePushData(text, cronMeta
+        ? { cronJobId: cronMeta.jobId, cronTitle: cronMeta.jobTitle }
+        : undefined);
       logger.log(`[xyOutbound.sendText] Push data saved with ID: ${pushDataId.substring(0, 20)}`);
     } catch (error) {
       logger.error(`[xyOutbound.sendText] Failed to save push data:`, error);
@@ -220,6 +224,7 @@ export const xyOutbound: ChannelOutboundAdapter = {
       title,
       to: actualTo,
       pushDataId,
+      ...(cronMeta ? { cronJobId: cronMeta.jobId, cronTitle: cronMeta.jobTitle } : {}),
     });
 
     // announce 最终结果已送达 —— 关闭 cron turn

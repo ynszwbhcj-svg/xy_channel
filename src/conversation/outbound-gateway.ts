@@ -52,6 +52,10 @@ export interface PushBroadcastParams {
   /** 目标会话标识（push 服务侧使用，可为空字符串）。 */
   to: string;
   pushDataId: string;
+  /** cron 推送时携带：任务 jobId（随 kind="data" 下发给客户端） */
+  cronJobId?: string;
+  /** cron 推送时携带：任务标题 */
+  cronTitle?: string;
 }
 
 export interface PushBroadcastResult {
@@ -63,7 +67,7 @@ export interface PushBroadcastResult {
  * 向所有已注册 pushId 广播推送通知（单 pushId 失败不影响其他）。
  */
 export async function pushBroadcast(params: PushBroadcastParams): Promise<PushBroadcastResult> {
-  const { config, text, title, to, pushDataId } = params;
+  const { config, text, title, to, pushDataId, cronJobId, cronTitle } = params;
 
   let pushIdList: string[] = [];
   try {
@@ -81,7 +85,7 @@ export async function pushBroadcast(params: PushBroadcastParams): Promise<PushBr
 
   for (const pushId of pushIdList) {
     try {
-      await pushService.sendPush(text, title, undefined, to, pushDataId, pushId);
+      await pushService.sendPush(text, title, undefined, to, pushDataId, pushId, cronJobId, cronTitle);
       successCount++;
       logger.log(`[outbound-gateway] Push sent to pushId: ${pushId.substring(0, 20)}...`);
     } catch (error) {

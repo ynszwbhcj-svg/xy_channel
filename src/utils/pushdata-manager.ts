@@ -14,6 +14,10 @@ export interface PushDataItem {
   pushDataId: string;
   dataDetail: string;
   time: string; // 格式：YYYYMMDD HHmmss（北京时间）
+  /** cron 推送时携带：任务 jobId（正常对话推送无此字段） */
+  cronJobId?: string;
+  /** cron 推送时携带：任务标题（openclaw job.name） */
+  cronTitle?: string;
 }
 
 /**
@@ -91,8 +95,12 @@ async function writePushDataList(list: PushDataItem[]): Promise<void> {
 
 /**
  * 保存推送数据，返回 pushDataId
+ * meta.cronJobId/cronTitle 仅 cron 推送时传入（正常对话为 undefined，不写入文件）。
  */
-export async function savePushData(dataDetail: string): Promise<string> {
+export async function savePushData(
+  dataDetail: string,
+  meta?: { cronJobId?: string; cronTitle?: string }
+): Promise<string> {
   const pushDataId = randomUUID();
   const time = formatBeijingTime(new Date());
 
@@ -100,6 +108,8 @@ export async function savePushData(dataDetail: string): Promise<string> {
     pushDataId,
     dataDetail,
     time,
+    ...(meta?.cronJobId ? { cronJobId: meta.cronJobId } : {}),
+    ...(meta?.cronTitle ? { cronTitle: meta.cronTitle } : {}),
   };
 
   try {

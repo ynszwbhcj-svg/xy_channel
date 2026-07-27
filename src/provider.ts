@@ -772,10 +772,12 @@ export const xiaoyiProvider: ProviderPlugin = {
         // 绑定到本次 cron run 的合成 sessionId。sendCommand 凭同一 sessionId
         // 反查 jobId → cron-push-map → 正确设备的 pushId（多设备路由）。
         const cronJobId = extractCronUuid(context.messages);
+        const cronTitle = extractCronTitle(context.messages);
 
         // 通知对话管理层：cron turn 开始，期间的 sendText 将被聚合吞掉，
-        // 只放行 agent_end 后的 announce 最终结果。
-        notifyCronDetected(cronJobId ?? undefined);
+        // 只放行 agent_end 后的 announce 最终结果。jobId/title 随最终
+        // push 下发，供客户端识别 push 来源。
+        notifyCronDetected(cronJobId ?? undefined, cronTitle);
 
         const cronCtx = getCurrentSessionContext();
         if (cronJobId && cronCtx?.sessionId) {
@@ -794,7 +796,6 @@ export const xiaoyiProvider: ProviderPlugin = {
           dynamicHeaders[HEADER_SESSION_ID] = cronUuid;
           dynamicHeaders[HEADER_INTERACTION_ID] = cronSessionId;
         }
-        const cronTitle = extractCronTitle(context.messages);
         if (cronTitle) dynamicHeaders["x-cron-title"] = encodeURIComponent(cronTitle);
         if (context.messages?.length === 1) dynamicHeaders["x-cron-flag"] = "begin";
         logger.log(`[ALS-PROOF] provider headers source=cron`);
