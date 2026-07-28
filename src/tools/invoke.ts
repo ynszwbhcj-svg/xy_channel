@@ -673,7 +673,7 @@ const ENV_FILE_PATH = path.join(os.homedir(), ".openclaw", ".xiaoyienv");
 //   - REST (accept: application/json) → single JSON frame
 //   - SSE/Websocket (accept: text/event-stream) → multiple SSE frames, only final frame used (§4.7)
 const UNIFIED_API_SUFFIX = "/plugin-executor-service-ws/v1/skill-action-executor/query";
-const DEFAULT_TIMEOUT_MS = 60_000;
+const DEFAULT_TIMEOUT_MS = 300_000;
 const REQUIRED_ENV_VARS = ["SERVICE_URL", "PERSONAL-API-KEY", "PERSONAL-UID"];
 
 interface CloudConfig { serviceUrl: string; apiKey: string; uid: string }
