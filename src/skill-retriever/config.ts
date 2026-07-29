@@ -4,10 +4,10 @@ export interface NormalizedConfig extends ToolRetrieverConfig {}
 
 const DEFAULT_CONFIG: ToolRetrieverConfig = {
   enabled: true,
-  maxTools: 2,
+  maxTools: 6,
   includeUninstalledOnly: true,
   envFilePath: "~/.openclaw/.xiaoyienv",
-  timeoutMs: 1000,
+  timeoutMs: 10000,
   excludedSkills: ["content-compliance", "plugin-audit"],
 };
 
