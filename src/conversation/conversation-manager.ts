@@ -464,14 +464,20 @@ export async function deliverSubagentFinalResult(params: {
   // 先收齐流式正文再收到 final（与 reply-dispatcher 的终态帧同一收口点）。
   // 终态帧延迟同 reply-dispatcher 的 terminalFrameDelayMs 治理：让已发出的
   // 长正文先穿过下游服务端慢速管道，保证终态帧最后到达。
+  // 解析下发帧所用的 A2A 身份：跟随任务链末尾的最新 taskId/messageId。
+  // steer 重分发场景下 state.taskId 为旧身份，取链尾可保证终态帧与
+  // 心跳/保活帧的 taskId 一致，客户端不会看到 taskId 跳跃。
+  const effectiveTaskId = getCurrentTaskId(state.sessionId) ?? state.taskId;
+  const effectiveMessageId = getCurrentMessageId(state.sessionId) ?? state.messageId;
+
   const terminalFrameDelayMs = config.terminalFrameDelayMs ?? 0;
   const session = sessions.get(state.sessionId);
   const sendCompletedStatus = () =>
     sendStatusUpdate({
       config,
       sessionId: state.sessionId,
-      taskId: state.taskId,
-      messageId: state.messageId,
+      taskId: effectiveTaskId,
+      messageId: effectiveMessageId,
       text: "任务处理已完成~",
       state: "completed",
     });
@@ -479,21 +485,21 @@ export async function deliverSubagentFinalResult(params: {
     sendA2AResponse({
       config,
       sessionId: state.sessionId,
-      taskId: state.taskId,
-      messageId: state.messageId,
+      taskId: effectiveTaskId,
+      messageId: effectiveMessageId,
       text: finalText,
       append: false,
       final: true,
     });
   if (session) {
     session.outboundQueue.enqueue({
-      taskId: state.taskId,
+      taskId: effectiveTaskId,
       label: "subagent-terminal-status",
       delayMs: terminalFrameDelayMs,
       send: sendCompletedStatus,
     });
     session.outboundQueue.enqueue({
-      taskId: state.taskId,
+      taskId: effectiveTaskId,
       label: "subagent-final",
       delayMs: terminalFrameDelayMs,
       send: sendFinal,
@@ -505,7 +511,8 @@ export async function deliverSubagentFinalResult(params: {
   }
 
   clearWaitState(state.sessionId, reason ?? "all-subagent-results-delivered", state.taskId);
-  completeTask(state.sessionId, state.taskId);
+  // 清理整个任务链（无 expectedTaskId），避免 steer 引入的额外 taskId 残留。
+  completeTask(state.sessionId);
   setSessionState(state.sessionId, "completed");
-  log.log(`[SUBAGENT-FINAL] Subagent final delivered to original A2A task, reason=${reason}`);
+  log.log(`[SUBAGENT-FINAL] Subagent final delivered, reason=${reason}, effectiveTaskId=${effectiveTaskId}`);
 }
