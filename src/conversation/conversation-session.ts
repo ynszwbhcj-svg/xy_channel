@@ -71,6 +71,12 @@ export interface ConversationSession {
   assembler?: StreamAssembler;
   /** 会话级出站队列：所有出站帧的时序收口点，生命周期随 session。 */
   outboundQueue: OutboundQueue;
+  /**
+   * 在途 turn 的 taskId 集合（dispatch 时登记，onIdle/onSettled 时清除）。
+   * subagent 终态帧的时机门控据此判断"session 内仍有 turn 在流式输出"，
+   * 防止 final:true 提前截断在途回复（steer 重分发场景）。
+   */
+  inflightTurns: Set<string>;
   lastActivityAt: number;
 }
 
@@ -81,6 +87,7 @@ export function createConversationSession(sessionId: string): ConversationSessio
     tasks: [],
     subagentWaits: [],
     outboundQueue: new OutboundQueue(sessionId),
+    inflightTurns: new Set(),
     lastActivityAt: Date.now(),
   };
 }
