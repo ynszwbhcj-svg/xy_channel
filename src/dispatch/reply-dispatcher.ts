@@ -323,7 +323,7 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
         // If this session has pending subagent completions, suppress final:true
         // and keep the A2A session alive. The final response will be sent when
         // all completions arrive via xyOutbound.sendText interception.
-        const waitState = getWaitState(sessionId, taskId);
+        const waitState = getWaitState(sessionId, taskId) ?? getWaitState(sessionId);
         if (
           waitState &&
           waitState.deliveredCompletions < waitState.expectedCompletions &&

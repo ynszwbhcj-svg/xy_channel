@@ -506,9 +506,9 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
 
         // Subagent wait state: if parent has pending subagents, mark settled
         // and defer finalization. Cleanup is suppressed so the session stays alive.
-        const pendingWait = getWaitState(parsed.sessionId, parsed.taskId);
+        const pendingWait = getWaitState(parsed.sessionId, parsed.taskId) ?? getWaitState(parsed.sessionId);
         if (pendingWait && !pendingWait.parentSettled) {
-          const transition = markParentSettled(parsed.sessionId, parsed.taskId);
+          const transition = markParentSettled(parsed.sessionId, pendingWait.taskId);
           if (transition?.shouldFinalize) {
             // All completions arrived before parent settled → finalize now
             const { deliverSubagentFinalResult } = await import("../conversation/conversation-manager.js");
