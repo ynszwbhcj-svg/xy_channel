@@ -90,6 +90,9 @@ export const ENV_FILE_PATH = '/home/sandbox/.openclaw/.xiaoyienv';
 export const API_URL_SUFFIX = '/celia-claw/v1/rest-api/skill/execute';
 export const REQUIRED_ENV_VARS = ['PERSONAL-API-KEY', 'PERSONAL-UID', 'SERVICE_URL'];
 
+// x-hag-trace-id 最大长度，超出截断
+export const MAX_TRACE_ID_LENGTH = 64;
+
 // 工具白名单：除了web_fetch特殊处理外，只有这些工具才处理result文本
 export const ALLOWED_TOOLS = ['web_fetch', 'read', 'pdf', 'exec', 'message'];
 

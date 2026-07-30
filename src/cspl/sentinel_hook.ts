@@ -104,7 +104,6 @@ export default function register(api: OpenClawPluginApi) {
 
             const interActionID = extractInterActionId(taskId);
             const outputPayload = buildToolOutputPayload(
-                taskId,
                 payloadSessionId,
                 event.toolName,
                 content,

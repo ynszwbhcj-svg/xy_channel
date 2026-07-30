@@ -258,7 +258,6 @@ export function formatReqTime(): string {
 
 // 构建工具输入新消息体（新接口格式）
 export function buildToolInputPayload(
-    taskID: string,
     sessionID: string,
     toolName: string,
     toolArguments: string,
@@ -277,7 +276,7 @@ export function buildToolInputPayload(
         callObj.file = [options.file];
     }
     return {
-        taskID,
+        taskID: crypto.randomUUID(),
         sessionID,
         businessID: 'voiceassistant',
         sceneID: 'XIAOYI_CLAW',
@@ -298,7 +297,6 @@ export function buildToolInputPayload(
 
 // 构建工具输出新消息体（新接口格式）
 export function buildToolOutputPayload(
-    taskID: string,
     sessionID: string,
     funcName: string,
     content: string,
@@ -306,7 +304,7 @@ export function buildToolOutputPayload(
     interActionID: number
 ): CallApiPayload {
     return {
-        taskID,
+        taskID: crypto.randomUUID(),
         sessionID,
         businessID: 'voiceassistant',
         sceneID: 'XIAOYI_CLAW',
@@ -377,7 +375,6 @@ export async function handleExecToolInput(event: any, api: OpenClawPluginApi, se
             }
 
             const toolInputPayload = buildToolInputPayload(
-                taskId,
                 sessionId,
                 'exec',
                 command,
@@ -409,7 +406,6 @@ export async function handleExecToolInput(event: any, api: OpenClawPluginApi, se
         logger.log('[SENTINEL HOOK] No code files found in command, treating as direct code execution');
 
         const toolInputPayload = buildToolInputPayload(
-            taskId,
             sessionId,
             'exec',
             command,
@@ -435,7 +431,6 @@ export async function handleMessageToolInput(event: any, api: OpenClawPluginApi,
     const interActionID = extractInterActionId(taskId);
 
     const toolInputPayload = buildToolInputPayload(
-        taskId,
         sessionId,
         'message',
         message,
@@ -568,7 +563,6 @@ export async function handleOtherToolInput(event: any, api: OpenClawPluginApi, s
     const interActionID = extractInterActionId(taskId);
 
     const toolInputPayload = buildToolInputPayload(
-        taskId,
         sessionId,
         event.toolName,
         paramsJson,

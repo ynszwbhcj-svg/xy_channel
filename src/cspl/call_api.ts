@@ -4,6 +4,7 @@
 
 import https from 'https';
 import http from 'http';
+import crypto from 'crypto';
 import {URL} from 'url';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -21,15 +22,22 @@ import {
     DEFAULT_HTTPS_PORT,
     DEFAULT_HTTP_PORT,
     HTTP_STATUS_BAD_REQUEST,
-    API_URL_SUFFIX
+    API_URL_SUFFIX,
+    MAX_TRACE_ID_LENGTH
 } from './constants.js';
+
+// 安全扫描接口 trace-id：sessionId 为空时降级为 uuid，超过 MAX_TRACE_ID_LENGTH 截断
+function buildTraceId(sessionId: string): string {
+    const traceId = sessionId ? sessionId : crypto.randomUUID();
+    return traceId.length > MAX_TRACE_ID_LENGTH ? traceId.substring(0, MAX_TRACE_ID_LENGTH) : traceId;
+}
 
 function buildHeadersForCelia(config: { uid: string; apiKey: string; skillId: string; requestFrom: string }, sessionId: string): HttpHeaders {
     if (!config.uid || !config.apiKey || !config.skillId || !config.requestFrom) {
         throw new Error('[SENTINEL HOOK] Missing required configuration: uid, apiKey, skillId, or requestFrom is not defined');
     }
     return {
-        'x-hag-trace-id': sessionId,
+        'x-hag-trace-id': buildTraceId(sessionId),
         'x-uid': config.uid,
         'x-api-key': config.apiKey,
         'x-request-from': config.requestFrom,
