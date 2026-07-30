@@ -327,15 +327,15 @@ export async function sendCommand(params: SendCommandParams): Promise<void> {
     throw new Error("sendCommand requires command or commands.");
   }
 
-  // ── Cron mode: route through push channel ──────────────────────
-  // Detected via: (a) sessionId "cron-" prefix from synthetic session, OR
-  //               (b) toolCallId marked by before_tool_call hook from openclaw's sessionKey.
+  // ── Cron mode: DISABLED ────────────────────────────────────────
+  // sendCommandViaPush 已屏蔽，定时任务不再通过 push 通道执行端插件。
+  // 如需恢复，取消注释下方代码块即可。
   if (sessionId.startsWith("cron-") || isCronToolCall(toolCallId)) {
-    const { sendCommandViaPush } = await import("./cron-command.js");
-    // 解析正确设备的 pushId：合成 sessionId → jobId → cron-push-map。
-    // provider.ts 在 isCron 分支已把 jobId 绑定到该 sessionId。
-    const pushId = await resolveCronPushId(sessionId, config);
-    return sendCommandViaPush({ config, command: commands[0], pushId });
+    logger.log(`[CRON-CMD-BLOCKED] sendCommandViaPush disabled, command dropped: ${commands[0]?.header?.name ?? commands[0]?.payload?.executeParam?.intentName ?? "unknown"}`);
+    return;
+  //   const { sendCommandViaPush } = await import("./cron-command.js");
+  //   const pushId = await resolveCronPushId(sessionId, config);
+  //   return sendCommandViaPush({ config, command: commands[0], pushId });
   }
 
   // ── Normal mode: WebSocket ─────────────────────────────────────
