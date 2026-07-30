@@ -227,6 +227,8 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
     // IMPORTANT: Only register on the FIRST message. Steer messages have a
     // different taskId — overwriting the mapping would break subagent wait
     // state tracking for the original message's subagents.
+    // 例外：steer 直接注入失败（no-active-run）且无存活等待态时，下方
+    // steer 重分发路径会重绑定到新 taskId（旧 run 已消失，无历史等待态需保护）。
     if (!isUpdate) {
       bindSessionKey(route.sessionKey, parsed.sessionId, parsed.taskId, parsed.messageId);
     }
@@ -382,6 +384,22 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
       }
       const steerFailReason = (steerResult as { reason: string }).reason;
       log.log(`[BOT-STEER] Direct steer failed (${steerFailReason}), re-dispatching as a new turn`);
+
+      // 🔑 steer 失败重分发前重绑 sessionKey → 本消息的 A2A 身份。
+      // 首条消息绑定刻意不被 steer 覆盖（见上方 bindSessionKey 注释），但那会让
+      // 新 turn 派生的 subagent 等待态挂在旧 taskId 上：spawn/ended 计数走
+      // sessionKeyIndex（旧身份），onIdle/onSettled/announce 捕获走新 taskId，
+      // 两套身份错位导致 final 帧提前发出、parentSettled 永远缺失、announce
+      // 落 push 兜底。旧 run 已不存在（no-active-run）时重绑定可让三者对齐。
+      // 安全条件：
+      //   - 仅 no-active-run —— queue-rejected 说明旧 run 仍存活，重绑定会
+      //     打断旧 run 的 subagent 跟踪；
+      //   - 无存活等待态 —— 旧 subagent 未归时保持旧绑定，保住旧任务的
+      //     final 交付（新 turn 的 subagent 跟踪退化为已知限制）。
+      if (steerFailReason === "no-active-run" && !hasWaitState(parsed.sessionId)) {
+        bindSessionKey(route.sessionKey, parsed.sessionId, parsed.taskId, parsed.messageId);
+        log.log(`[BOT-STEER] Rebound sessionKey to new taskId (no active run, no pending subagent wait)`);
+      }
     }
 
     // Resolve envelope format options (following feishu pattern)
