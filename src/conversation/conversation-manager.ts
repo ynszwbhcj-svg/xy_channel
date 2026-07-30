@@ -167,6 +167,32 @@ export function listActiveTaskBindings(): Array<{
   return result;
 }
 
+// ─── 在途 turn 跟踪（subagent 终态帧时机门控） ───────────────
+
+/**
+ * dispatch 时登记在途 turn（bot.ts 创建 dispatcher 后调用）。
+ * 注意：steer 直接注入成功的路径不 dispatch，不得登记。
+ */
+export function markTurnInflight(sessionId: string, taskId: string): void {
+  const session = getOrCreateSession(sessionId);
+  if (!session.inflightTurns) {
+    session.inflightTurns = new Set();
+  }
+  session.inflightTurns.add(taskId);
+}
+
+/** turn 不再产生流式帧时清除在途标记（onIdle 入口 / onSettled 兜底）。 */
+export function clearTurnInflight(sessionId: string, taskId: string): void {
+  const session = sessions.get(sessionId);
+  session?.inflightTurns?.delete(taskId);
+}
+
+/** session 内是否仍有 turn 在流式输出（未 idle）。 */
+function hasInflightTurn(sessionId: string): boolean {
+  const session = sessions.get(sessionId);
+  return (session?.inflightTurns?.size ?? 0) > 0;
+}
+
 // ─── SessionKey ↔ SessionId 索引 ──────────────────────────────
 
 /**
@@ -443,6 +469,24 @@ export async function deliverSubagentFinalResult(params: {
 }): Promise<void> {
   const { state, reason } = params;
   const log = logger.withContext(state.sessionId, state.taskId);
+
+  // 🔑 幂等 guard：终态交付只执行一次。onIdle defer 分支 / onSettled 安全网 /
+  // subagent_ended hook 可能相继触发交付，重复调用为 no-op。
+  // （检查与下方 finalDeliveryStarted 置位之间无 await，不会并发穿透。）
+  if (state.finalDeliveryStarted) {
+    log.log(`[SUBAGENT-FINAL] Final delivery already started, skipping duplicate trigger, reason=${reason}`);
+    return;
+  }
+
+  // 🔑 时机门控：session 内仍有 turn 在流式输出（steer 重分发的新 turn 未
+  // idle）时推迟交付 —— 此时以最新 taskId 发 final:true 会提前截断在途
+  // 回复，且新 turn 之后还会再发一次 final（双重终态帧）。推迟期间
+  // waitState 完整保留（parentSettled、完成计数等就绪态不丢失），由在途
+  // turn 的 onIdle defer 分支或 onSettled 安全网就地交付，身份仍取任务链末尾。
+  if (hasInflightTurn(state.sessionId)) {
+    log.log(`[SUBAGENT-FINAL] Deferring final delivery — turn still in flight, reason=${reason}`);
+    return;
+  }
 
   const config = getCachedXYConfig() as XYChannelConfig | null;
   if (!config) {

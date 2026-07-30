@@ -17,6 +17,8 @@ import {
   startStatusHeartbeat,
   stopStatusHeartbeat,
   setSessionState,
+  clearTurnInflight,
+  deliverSubagentFinalResult,
 } from "../conversation/conversation-manager.js";
 import { StreamAssembler } from "../conversation/stream-assembler.js";
 
@@ -319,6 +321,10 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
 
         scopedLog().log(`[ON-IDLE] Reply idle, hasSentResponse=${hasSentResponse}, finalSent=${finalSent}`);
 
+        // 🔑 本 turn 不再产生流式帧：清除在途标记，放行 subagent 终态帧的
+        // 时机门控（见 conversation-manager.deliverSubagentFinalResult）。
+        clearTurnInflight(sessionId, taskId);
+
         // ── Subagent wait state check ─────────────────────────────
         // If this session has pending subagent completions, suppress final:true
         // and keep the A2A session alive. The final response will be sent when
@@ -334,15 +340,20 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
           );
           // 会话不结束：转入 waiting-subagent，心跳由对话管理层继续维持
           setSessionState(sessionId, "waiting-subagent");
+          // 🔑 保活帧必须使用最新 A2A 身份：steer 场景下旧 taskId 已被服务端
+          // 作废，用旧身份发帧无任何回应。读任务链末尾（新 dispatcher 场景下
+          // 与本 dispatcher 闭包 taskId 一致；旧 dispatcher 晚到触发时除外）。
+          const aliveTaskId = getActiveTaskId();
+          const aliveMessageId = getActiveMessageId();
           outboundQueue.enqueue({
-            taskId,
+            taskId: aliveTaskId,
             label: "subagent-waiting-status",
             send: () =>
               sendStatusUpdate({
                 config,
                 sessionId,
-                taskId,
-                messageId,
+                taskId: aliveTaskId,
+                messageId: aliveMessageId,
                 text: "子任务正在处理中，请稍候~",
                 state: "working",
               }),
@@ -358,6 +369,17 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
           scopedLog().log(
             `[ON-IDLE] Subagent completions all arrived (${waitState.deliveredCompletions}/${waitState.expectedCompletions}), deferring final to parent-settled path`,
           );
+          // 🔑 父 turn 已 settle 时就地交付：finalize 可能因本 turn 当时在途
+          // 被时机门控推迟，而 parentSettled 早已被（旧 dispatcher 的）
+          // onSettled 标记 —— 那条路径不会再触发交付，必须由本分支收口。
+          // 本 turn 已 idle（在途标记已在入口清除），交付不会被门控拦截；
+          // deliverSubagentFinalResult 幂等，重复触发为 no-op。
+          if (waitState.parentSettled) {
+            await deliverSubagentFinalResult({
+              state: waitState,
+              reason: "parent-settled-completions-ready-at-idle",
+            });
+          }
           return;
         }
         // ── End subagent wait state check ─────────────────────────
