@@ -428,9 +428,11 @@ export function clearWaitState(sessionId: string, reason: string, taskId?: strin
 // ─── Subagent 最终交付（收拢自原 outbound.deliverSubagentFinalResult） ──
 
 /**
- * 当所有 subagent 完成且父 turn 已 settle 时，由 manager 发送唯一的
- * final 帧并真正结束当前 A2A session：
- *   1. 合并 completionTexts 发送 final:true 帧
+ * 当所有 subagent 完成且父 turn 已 settle 时，由 manager 发送终态帧并真正
+ * 结束当前 A2A session：
+ *   1. completed 状态帧（"任务处理已完成~"）→ final:true 全文本帧（合并
+ *      completionTexts）——与 reply-dispatcher 正常终态同序，xy_tester
+ *      与客户端依赖该顺序
  *   2. 清理等待态、停止心跳、移除任务链
  *   3. 会话状态迁移到 completed
  */
@@ -460,7 +462,19 @@ export async function deliverSubagentFinalResult(params: {
 
   // final 帧走会话出站队列：排在任何在途 partial 帧之后，保证客户端
   // 先收齐流式正文再收到 final（与 reply-dispatcher 的终态帧同一收口点）。
+  // 终态帧延迟同 reply-dispatcher 的 terminalFrameDelayMs 治理：让已发出的
+  // 长正文先穿过下游服务端慢速管道，保证终态帧最后到达。
+  const terminalFrameDelayMs = config.terminalFrameDelayMs ?? 0;
   const session = sessions.get(state.sessionId);
+  const sendCompletedStatus = () =>
+    sendStatusUpdate({
+      config,
+      sessionId: state.sessionId,
+      taskId: state.taskId,
+      messageId: state.messageId,
+      text: "任务处理已完成~",
+      state: "completed",
+    });
   const sendFinal = () =>
     sendA2AResponse({
       config,
@@ -474,11 +488,19 @@ export async function deliverSubagentFinalResult(params: {
   if (session) {
     session.outboundQueue.enqueue({
       taskId: state.taskId,
+      label: "subagent-terminal-status",
+      delayMs: terminalFrameDelayMs,
+      send: sendCompletedStatus,
+    });
+    session.outboundQueue.enqueue({
+      taskId: state.taskId,
       label: "subagent-final",
+      delayMs: terminalFrameDelayMs,
       send: sendFinal,
     });
     await session.outboundQueue.whenIdle();
   } else {
+    await sendCompletedStatus();
     await sendFinal();
   }
 
