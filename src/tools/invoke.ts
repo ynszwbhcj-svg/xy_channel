@@ -795,7 +795,7 @@ async function executePluginExecutor(
       settled = true;
       ws.close();
       logger.warn("[INVOKE-CLOUD] WebSocket request timed out", { url, toolName, bundleName, protocol });
-      reject(new InvokeError("TIMEOUT", "Cloud tool execution timed out (60s)"));
+      reject(new InvokeError("TIMEOUT", "Cloud tool execution timed out (300s)"));
     }, DEFAULT_TIMEOUT_MS);
 
     ws.on("open", () => {

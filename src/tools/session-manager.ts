@@ -39,20 +39,31 @@ export interface SessionContext {
 const _g = globalThis as Record<string, unknown>;
 
 // ── Cron request detection ──────────────────────────────────────────
-// The provider detects cron from [cron:...] in message text and sets
-// this timestamp.  The before_tool_call hook checks it as a fallback
-// when openclaw's sessionKey does not have the "cron:" prefix.
+// The provider detects cron from [cron:<jobId> ...] in message text and
+// records a per-job timestamp.  The before_tool_call / lifecycle hooks parse
+// the same jobId from sessionKey and check it as a fallback when openclaw's
+// sessionKey does not have the "cron:" prefix.
+// Per-job keyed（而非全局单时间戳）：单个全局时间戳会让一个 job 触发后 120s 内
+// 把普通对话或其它 job 的 lifecycle/工具调用误判为 cron，导致 turn 被误关、
+// sendCommand 被误路由到 push 通道。按 jobId 精确命中后，普通对话（无 jobId）
+// 查 "unknown" 桶恒为 false，不再误判。
 // Timestamp-based so it self-expires and requires no explicit cleanup.
-let __xyCronDetectedTs = 0;
+if (!(_g.__xyCronDetectedTsMap instanceof Map)) {
+  _g.__xyCronDetectedTsMap = new Map<string, number>();
+}
+const cronDetectedTsMap = _g.__xyCronDetectedTsMap as Map<string, number>;
+/** jobId 缺失（无法归属）时的兜底桶。 */
+const UNKNOWN_CRON_KEY = "__unknown__";
 
-/** Mark that the current request is cron-triggered (called by provider). */
-export function markCronDetected(): void {
-  __xyCronDetectedTs = Date.now();
+/** Mark that the given cron job was recently detected (called by provider). */
+export function markCronDetected(jobId?: string): void {
+  cronDetectedTsMap.set(jobId ?? UNKNOWN_CRON_KEY, Date.now());
 }
 
-/** Check whether a cron request was recently detected. */
-export function isCronActive(ttlMs = 120_000): boolean {
-  return Date.now() - __xyCronDetectedTs < ttlMs;
+/** Check whether the given cron job was recently detected. */
+export function isCronActive(jobId?: string, ttlMs = 120_000): boolean {
+  const ts = cronDetectedTsMap.get(jobId ?? UNKNOWN_CRON_KEY);
+  return typeof ts === "number" && Date.now() - ts < ttlMs;
 }
 
 // ── Cron tool-call tracking ─────────────────────────────────────────

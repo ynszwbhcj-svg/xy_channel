@@ -131,7 +131,15 @@ export const xyOutbound: ChannelOutboundAdapter = {
     // announce 最终结果（唯一一条 push）。
     // announce 时 meta 是 gate 同步快照的 cron 元数据（jobId/title），
     // 随 push 下发供客户端识别来源；其余路径 meta 为 null。
-    const { gate: cronGate, meta: cronMeta } = gateCronSendText(text as string, config);
+    // announceLike（无显式 target：to 为空或 DEFAULT_PUSH_MARKER）用于并发
+    // 场景下把 announce 与中间消息粗路由到正确的 job turn —— sendText 层
+    // 拿不到 jobId/runId。
+    const announceLike = !to || to === DEFAULT_PUSH_MARKER;
+    const { gate: cronGate, meta: cronMeta } = gateCronSendText(
+      text as string,
+      announceLike,
+      config,
+    );
     if (cronGate === "swallow") {
       logger.log(`[xyOutbound.sendText] Cron turn active — swallowing intermediate sendText, len=${(text as string)?.length ?? 0}`);
       return {
@@ -227,9 +235,9 @@ export const xyOutbound: ChannelOutboundAdapter = {
       ...(cronMeta ? { cronJobId: cronMeta.jobId, cronTitle: cronMeta.jobTitle } : {}),
     });
 
-    // announce 最终结果已送达 —— 关闭 cron turn
+    // announce 最终结果已送达 —— 关闭该 job 的 cron turn（并发下不误关其它 job）
     if (cronGate === "announce") {
-      closeCronTurn("announce-delivered");
+      closeCronTurn(cronMeta?.jobId, "announce-delivered");
     }
 
     // Return message info

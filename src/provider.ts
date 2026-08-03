@@ -812,15 +812,17 @@ export const xiaoyiProvider: ProviderPlugin = {
       const isCron = isCronTriggered(context.messages);
 
       if (isCron) {
-        // 通知 before_tool_call hook：当前请求是 cron 触发。
-        // 不依赖 openclaw 的 sessionKey 前缀（部分版本可能不设置）。
-        markCronDetected();
-
         // fire 期 jobId 桥：把首条消息 `[cron:<jobId> ...]` 解析出的真实 jobId
         // 绑定到本次 cron run 的合成 sessionId。sendCommand 凭同一 sessionId
         // 反查 jobId → cron-push-map → 正确设备的 pushId（多设备路由）。
         const cronJobId = extractCronUuid(context.messages);
         const cronTitle = extractCronTitle(context.messages);
+
+        // 通知 before_tool_call hook：当前请求是 cron 触发。
+        // 不依赖 openclaw 的 sessionKey 前缀（部分版本可能不设置）。
+        // 按 jobId 标记，before_tool_call/lifecycle 从 sessionKey 解析同一
+        // jobId 精确命中，替代全局单时间戳避免误判普通对话/其它 job。
+        markCronDetected(cronJobId);
 
         // 通知对话管理层：cron turn 开始，期间的 sendText 将被聚合吞掉，
         // 只放行 agent_end 后的 announce 最终结果。jobId/title 随最终
