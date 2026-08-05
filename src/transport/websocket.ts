@@ -431,6 +431,7 @@ export class XYWebSocketManager extends EventEmitter {
   private startHeartbeat(): void {
     if (!this.ws) return;
 
+    const hostname = os.hostname();
     const heartbeat = new HeartbeatManager(
       this.ws,
       {
@@ -439,7 +440,7 @@ export class XYWebSocketManager extends EventEmitter {
         message: JSON.stringify({
           msgType: "heartbeat",
           agentId: this.config.agentId,
-          msgDetail: JSON.stringify({ timestamp: Date.now() }),
+          msgDetail: JSON.stringify({ timestamp: Date.now() , hostname}),
         }),
       },
       () => {
