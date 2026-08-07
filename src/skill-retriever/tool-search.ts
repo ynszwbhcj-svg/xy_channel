@@ -5,28 +5,115 @@ import type { EnvConfig, FormattedSkill, RawSkill, ToolSearchResult } from "./ty
 import { logger } from "../utils/logger.js";
 import { getCurrentSessionContext } from "../tools/session-manager.js";
 import { filterDisabledSkills, parseSkillFrontmatter } from "./skill-status.js";
+import { extensionForMime, getFileExtension } from "openclaw/plugin-sdk/media-mime";
 
 const SKILL_ID = "celia_find_skills";
 const PLUGIN_LOG_PREFIX = "[skill-retriever]";
 
+export const MEDIA_ATTACHED_LINE_RE = /^\[media attached(?:\s+(\d+)\/(\d+))?:\s+([^\]]+)]$/;
+export const MEDIA_ATTACHED_FILES_HEADER_RE = /^\[media attached:\s*\d+\s+files?]$/i;
+export const UNTRUSTED_METADATA_BLOCK_RE =
+  /\n*Conversation info \(untrusted metadata\):\n```json\n[\s\S]*?\n```\n*/g;
+export const SENDER_METADATA_BLOCK_RE =
+  /\n*Sender \(untrusted metadata\):\n```json\n[\s\S]*?\n```\n*/g;
+export const ROOM_EVENT_PREFIX_RE =
+  /^\[xiaoyi-channel\s+[0-9a-fA-F]{8,}\s+[A-Z][a-z]{2}\s+\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\s+[^\]]+]\s+[0-9a-fA-F]{8,}:\s?(.*)$/;
+export const FILE_BLOCK_RE = /<file [^>]*>[\s\S]*?<\/file>/g;
+
+function stripRoomEventPrefix(text: string): string {
+  return text
+    .split("\n")
+    .map((line) => {
+      const m = line.trim().match(ROOM_EVENT_PREFIX_RE);
+      return m ? m[1] : line;
+    })
+    .join("\n");
+}
+
+function stripFileBlocks(text: string): string {
+  return text.replace(FILE_BLOCK_RE, "");
+}
+
+function extForType(pathPart: string, mime: string): string {
+  return getFileExtension(pathPart)?.slice(1) ?? extensionForMime(mime)?.slice(1) ?? "bin";
+}
+
+const REPLY_MEDIA_HINT = "To send an image back, use the message tool with structured media fields such as media, mediaUrl, path, or filePath. Keep caption in the text body.";
+
+function collapseWhitespace(text: string): string {
+  return text.replace(/\n{3,}/g, "\n\n").trim();
+}
+
+function stripUntrustedMetadataBlocks(text: string): string {
+  return text
+    .replace(UNTRUSTED_METADATA_BLOCK_RE, "\n")
+    .replace(SENDER_METADATA_BLOCK_RE, "\n")
+    .replace(/^\n+/, "");
+}
+
+// 判断是否 media 附属行（header、文件行、无 caption 标记、回复提示）
+function classifyMediaLine(trimmed: string): { type: string; pathPart: string } | "skip" | null {
+  if (MEDIA_ATTACHED_FILES_HEADER_RE.test(trimmed)) return "skip";
+  if (trimmed === "[User sent media without caption]") return "skip";
+  if (trimmed === REPLY_MEDIA_HINT) return "skip";
+  const m = trimmed.match(MEDIA_ATTACHED_LINE_RE);
+  if (!m) return null;
+  const body = m[3];
+  const typeMatch = body.match(/\(([^)]+)\)/);
+  const type = typeMatch ? typeMatch[1].trim().toLowerCase() : "";
+  const pathPart = body.split("|")[0].replace(/\([^)]*\)/, "").trim();
+  return { type, pathPart };
+}
+
+// 压缩 media attached 段：同类型去重，每类保留首个并重命名为 <序号>.<扩展名>
+// media 段在原位置替换为单个占位 [1.jpg, 2.ppt]，与紧随的用户文本之间不换行
+function collapseMediaAttached(text: string): string {
+  const seenTypes = new Set<string>();
+  const out: string[] = [];
+  let mediaNames: string[] | null = null;
+  let pendingPlaceholder = "";
+
+  const finalizeMedia = () => {
+    if (mediaNames && mediaNames.length > 0) pendingPlaceholder = `[${mediaNames.join(", ")}]`;
+    mediaNames = null;
+  };
+
+  for (const line of text.split("\n")) {
+    const trimmed = line.trim();
+    const cls = classifyMediaLine(trimmed);
+
+    if (cls === "skip") continue;            // 固定拼接文案直接丢弃
+
+    if (cls !== null) {
+      if (mediaNames === null) mediaNames = [];
+      if (typeof cls !== "string" && !seenTypes.has(cls.type)) {
+        seenTypes.add(cls.type);
+        mediaNames.push(`${mediaNames.length + 1}.${extForType(cls.pathPart, cls.type)}`);
+      }
+      continue;
+    }
+
+    if (mediaNames !== null) finalizeMedia();
+    if (pendingPlaceholder) {
+      out.push(trimmed ? `${pendingPlaceholder}${trimmed}` : pendingPlaceholder);
+      pendingPlaceholder = "";
+      continue;
+    }
+    out.push(line);
+  }
+  if (mediaNames !== null) finalizeMedia();
+  if (pendingPlaceholder) out.push(pendingPlaceholder);
+
+  return collapseWhitespace(out.join("\n"));
+}
+
 export function extractUserQuery(fullPrompt: string): string {
-  const lastNewlineIndex = fullPrompt.lastIndexOf("\n");
+  if (fullPrompt.toLowerCase().includes("cron")) return "";
 
-  if (lastNewlineIndex === -1) {
-    return fullPrompt.trim();
-  }
-
-  const afterLastNewline = fullPrompt.slice(lastNewlineIndex + 1).trim();
-
-  if (!afterLastNewline || afterLastNewline === "```") {
-    return "";
-  }
-
-  if (fullPrompt.toLowerCase().includes("cron")) {
-    return "";
-  }
-
-  return afterLastNewline;
+  const stripped = stripUntrustedMetadataBlocks(fullPrompt);
+  const withoutRoomEvent = stripRoomEventPrefix(stripped);
+  const withoutFileBlocks = stripFileBlocks(withoutRoomEvent);
+  return collapseMediaAttached(withoutFileBlocks);
 }
 
 function expandPath(filePath: string): string {
