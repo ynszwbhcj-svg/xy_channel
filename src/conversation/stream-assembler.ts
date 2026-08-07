@@ -130,7 +130,7 @@ export class StreamAssembler {
     return parts.join(SEGMENT_SEPARATOR);
   }
 
-  /** 是否有任何已装配内容（卡片工具据此决定注入还是回退直发）。 */
+  /** 是否有任何已装配内容（已锁存段或当前模型文本非空）。 */
   hasContent(): boolean {
     return this.segments.length > 0 || this.currentModelText.length > 0;
   }
