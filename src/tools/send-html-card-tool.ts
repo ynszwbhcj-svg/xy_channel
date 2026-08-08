@@ -3,7 +3,7 @@ import type { ChannelAgentTool } from "openclaw/plugin-sdk";
 import { XYFileUploadService } from "../file-upload.js";
 import { sendCard } from "../formatter.js";
 import type { SessionContext } from "./session-manager.js";
-import { getCurrentSessionContext } from './session-manager.js';
+import { getCurrentSessionContext, isCronToolCall } from './session-manager.js';
 
 import { logger } from "../utils/logger.js";
 
@@ -43,6 +43,23 @@ c. 仅当用户或者skill中显示说明使用send_html_card工具时才调用�
 
     async execute(toolCallId: string, params: any) {
       const _c = getCurrentSessionContext();
+
+      // 定时任务判定与 sendCommand → sendCommandViaPush 的路由判定拉齐
+      // （formatter.ts）：toolCallId 被 before_tool_call hook 标记，或合成
+      // sessionId 带 "cron-" 前缀。cron 场景无活跃 WebSocket 会话，H5 卡片
+      // 无法投递，直接返回不支持，不再走上传/发卡流程。
+      if (isCronToolCall(toolCallId) || (_c?.sessionId ?? "").startsWith("cron-")) {
+        logger.log(`[SEND-HTML-CARD] Cron scenario detected (toolCallId=${toolCallId}), html card not supported`);
+        return {
+          content: [
+            {
+              type: "text",
+              text: "定时任务场景不支持返回html卡片",
+            },
+          ],
+        };
+      }
+
       const { config, sessionId, taskId, messageId } = _c;
 // Validate at least one parameter is provided
       if (!params.htmlUrl && !params.htmlLocal) {
