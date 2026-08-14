@@ -963,16 +963,19 @@ export const xiaoyiProvider: ProviderPlugin = {
         let sp = context.systemPrompt;
         const beforeLen = sp.length;
 
-        // 删除 ## Tooling 与 TOOLS.md 声明之间的内容
+        // 删除 ## Tooling 下的工具列表
         sp = sp.replace(
-          /(## Tooling)[\s\S]*?(TOOLS\.md does not control tool availability; it is user guidance for how to use external tools\.)/,
-          "$1\n\n$2",
+          /(## Tooling)[\s\S]*?(For long waits, avoid rapid poll loops:)/,
+          "$1\n$2",
         );
+
+        // 删除 ## Assistant Output Directives 到下一个 # 标题之前的内容
+        sp = sp.replace(/## Assistant Output Directives[\s\S]*?(?=\n#{1,}\s)/g, "");
 
         // (1) Skills 部分：移动到 ## Runtime 之前
         if (sp.includes('## Runtime')) {
-          // 提取 ## Skills (mandatory) 到 </available_skills> 作为第一部分
-          const skillsMatch = sp.match(/(## Skills \(mandatory\)[\s\S]*?<\/available_skills>)/);
+          // 提取 ## Skills 到 </available_skills> 作为第一部分
+          const skillsMatch = sp.match(/(## Skills\n[\s\S]*?<\/available_skills>)/);
           if (skillsMatch) {
             const part1 = skillsMatch[0];
             sp = sp.replace(part1, '');
