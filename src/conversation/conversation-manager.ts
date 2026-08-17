@@ -167,6 +167,32 @@ export function listActiveTaskBindings(): Array<{
   return result;
 }
 
+// ─── 在途 turn 跟踪（subagent 终态帧时机门控） ───────────────
+
+/**
+ * dispatch 时登记在途 turn（bot.ts 创建 dispatcher 后调用）。
+ * 注意：steer 直接注入成功的路径不 dispatch，不得登记。
+ */
+export function markTurnInflight(sessionId: string, taskId: string): void {
+  const session = getOrCreateSession(sessionId);
+  if (!session.inflightTurns) {
+    session.inflightTurns = new Set();
+  }
+  session.inflightTurns.add(taskId);
+}
+
+/** turn 不再产生流式帧时清除在途标记（onIdle 入口 / onSettled 兜底）。 */
+export function clearTurnInflight(sessionId: string, taskId: string): void {
+  const session = sessions.get(sessionId);
+  session?.inflightTurns?.delete(taskId);
+}
+
+/** session 内是否仍有 turn 在流式输出（未 idle）。 */
+function hasInflightTurn(sessionId: string): boolean {
+  const session = sessions.get(sessionId);
+  return (session?.inflightTurns?.size ?? 0) > 0;
+}
+
 // ─── SessionKey ↔ SessionId 索引 ──────────────────────────────
 
 /**
@@ -444,6 +470,24 @@ export async function deliverSubagentFinalResult(params: {
   const { state, reason } = params;
   const log = logger.withContext(state.sessionId, state.taskId);
 
+  // 🔑 幂等 guard：终态交付只执行一次。onIdle defer 分支 / onSettled 安全网 /
+  // subagent_ended hook 可能相继触发交付，重复调用为 no-op。
+  // （检查与下方 finalDeliveryStarted 置位之间无 await，不会并发穿透。）
+  if (state.finalDeliveryStarted) {
+    log.log(`[SUBAGENT-FINAL] Final delivery already started, skipping duplicate trigger, reason=${reason}`);
+    return;
+  }
+
+  // 🔑 时机门控：session 内仍有 turn 在流式输出（steer 重分发的新 turn 未
+  // idle）时推迟交付 —— 此时以最新 taskId 发 final:true 会提前截断在途
+  // 回复，且新 turn 之后还会再发一次 final（双重终态帧）。推迟期间
+  // waitState 完整保留（parentSettled、完成计数等就绪态不丢失），由在途
+  // turn 的 onIdle defer 分支或 onSettled 安全网就地交付，身份仍取任务链末尾。
+  if (hasInflightTurn(state.sessionId)) {
+    log.log(`[SUBAGENT-FINAL] Deferring final delivery — turn still in flight, reason=${reason}`);
+    return;
+  }
+
   const config = getCachedXYConfig() as XYChannelConfig | null;
   if (!config) {
     log.error(`[SUBAGENT-FINAL] No cached XY config, cannot deliver final result`);
@@ -464,14 +508,20 @@ export async function deliverSubagentFinalResult(params: {
   // 先收齐流式正文再收到 final（与 reply-dispatcher 的终态帧同一收口点）。
   // 终态帧延迟同 reply-dispatcher 的 terminalFrameDelayMs 治理：让已发出的
   // 长正文先穿过下游服务端慢速管道，保证终态帧最后到达。
+  // 解析下发帧所用的 A2A 身份：跟随任务链末尾的最新 taskId/messageId。
+  // steer 重分发场景下 state.taskId 为旧身份，取链尾可保证终态帧与
+  // 心跳/保活帧的 taskId 一致，客户端不会看到 taskId 跳跃。
+  const effectiveTaskId = getCurrentTaskId(state.sessionId) ?? state.taskId;
+  const effectiveMessageId = getCurrentMessageId(state.sessionId) ?? state.messageId;
+
   const terminalFrameDelayMs = config.terminalFrameDelayMs ?? 0;
   const session = sessions.get(state.sessionId);
   const sendCompletedStatus = () =>
     sendStatusUpdate({
       config,
       sessionId: state.sessionId,
-      taskId: state.taskId,
-      messageId: state.messageId,
+      taskId: effectiveTaskId,
+      messageId: effectiveMessageId,
       text: "任务处理已完成~",
       state: "completed",
     });
@@ -479,21 +529,21 @@ export async function deliverSubagentFinalResult(params: {
     sendA2AResponse({
       config,
       sessionId: state.sessionId,
-      taskId: state.taskId,
-      messageId: state.messageId,
+      taskId: effectiveTaskId,
+      messageId: effectiveMessageId,
       text: finalText,
       append: false,
       final: true,
     });
   if (session) {
     session.outboundQueue.enqueue({
-      taskId: state.taskId,
+      taskId: effectiveTaskId,
       label: "subagent-terminal-status",
       delayMs: terminalFrameDelayMs,
       send: sendCompletedStatus,
     });
     session.outboundQueue.enqueue({
-      taskId: state.taskId,
+      taskId: effectiveTaskId,
       label: "subagent-final",
       delayMs: terminalFrameDelayMs,
       send: sendFinal,
@@ -505,7 +555,8 @@ export async function deliverSubagentFinalResult(params: {
   }
 
   clearWaitState(state.sessionId, reason ?? "all-subagent-results-delivered", state.taskId);
-  completeTask(state.sessionId, state.taskId);
+  // 清理整个任务链（无 expectedTaskId），避免 steer 引入的额外 taskId 残留。
+  completeTask(state.sessionId);
   setSessionState(state.sessionId, "completed");
-  log.log(`[SUBAGENT-FINAL] Subagent final delivered to original A2A task, reason=${reason}`);
+  log.log(`[SUBAGENT-FINAL] Subagent final delivered, reason=${reason}, effectiveTaskId=${effectiveTaskId}`);
 }

@@ -103,18 +103,32 @@ function registerSkillsDiagnosticHook(api: OpenClawPluginApi) {
   });
 }
 /**
+ * 从 openclaw sessionKey 解析 cron jobId。
+ * 格式形如 `agent:<agentId>:cron:<jobId>:run:<startedAtTs>`（隔离 run 为
+ * `cron:<jobId>`），jobId 位于 "cron:" 之后到下一个冒号/空白之前。
+ */
+function parseCronJobIdFromSessionKey(sessionKey: string): string | undefined {
+  const match = sessionKey.match(/cron:([^:\s]+)/);
+  return match ? match[1] : undefined;
+}
+
+/**
  * Register the cron detection hook.
  *
  * When openclaw's cron runner triggers a tool call, the sessionKey has the
- * format "cron:<jobId>".  We use this to mark the toolCallId in a global Map
+ * format "cron:<jobId>"（或 agent 展开后的 `agent:<id>:cron:<jobId>:run:<ts>`）。
+ * We use this to mark the toolCallId in a global Map
  * so that sendCommand() can route the command through the push channel
  * instead of the (non-existent) WebSocket session.
  */
 function registerCronDetectionHook(api: OpenClawPluginApi) {
   api.on("before_tool_call", async (event, ctx) => {
-    // sessionKey 前缀依赖 openclaw 版本行为，不一定可靠；
-    // isCronActive() 由 provider.ts 根据消息内容 [cron:...] 设置，更可靠。
-    if ((ctx.sessionKey?.startsWith("cron:") || isCronActive()) && event.toolCallId) {
+    // sessionKey 前缀依赖 openclaw 版本行为，不一定可靠；isCronActive(jobId)
+    // 按 jobId 精确判断（provider 已从消息 [cron:...] 标记过该 job），替代
+    // 原先的全局 120s 时间戳，避免把普通对话/其它 job 的工具调用误判为 cron。
+    const sessionKey = ctx.sessionKey ?? "";
+    const sessionJobId = parseCronJobIdFromSessionKey(sessionKey);
+    if ((sessionKey.includes("cron:") || isCronActive(sessionJobId)) && event.toolCallId) {
       markCronToolCall(event.toolCallId);
       // 存储 runId，供 call_device_tool 在 ALS 缺失时构造合成 SessionContext
       if (event.runId) {
@@ -494,9 +508,13 @@ function registerFullHooks(api: OpenClawPluginApi) {
         // 真正失败的 run（无 end）由 120s 安全超时兜底 flush 缓冲文本。
         if (phase !== "end") return;
         const sessionKey = event?.sessionKey ?? "";
-        if (sessionKey.startsWith("cron:") || sessionKey.includes(":cron:") || isCronActive()) {
-          logger.log(`[XY-CRON] Cron run lifecycle end, sessionKey=${sessionKey || "unknown"}`);
-          notifyCronAgentEnd();
+        // 从 sessionKey（agent:<id>:cron:<jobId>:run:<ts>）解析 jobId，只结束
+        // 该 job 的 turn；isCronActive(jobId) 作为无 cron 前缀版本的兜底（按
+        // jobId 精确判断，普通对话的 lifecycle end 不会命中）。
+        const cronJobId = parseCronJobIdFromSessionKey(sessionKey);
+        if (sessionKey.includes("cron:") || sessionKey.startsWith("cron:") || isCronActive(cronJobId)) {
+          logger.log(`[XY-CRON] Cron run lifecycle end, sessionKey=${sessionKey || "unknown"}, jobId=${cronJobId ?? "-"}`);
+          notifyCronAgentEnd(cronJobId);
         }
       } catch (err) {
         logger.error(`[XY-CRON] Error in cron lifecycle subscription:`, err);

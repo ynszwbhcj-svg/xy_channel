@@ -28,6 +28,8 @@ import {
   getWaitState,
   hasWaitState,
   markParentSettled,
+  markTurnInflight,
+  clearTurnInflight,
   cacheXYConfig,
 } from "../conversation/conversation-manager.js";
 import type { A2AJsonRpcRequest } from "../types.js";
@@ -499,16 +501,25 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
 
     log.log(`[BOT-DISPATCH] withReplyDispatcher starting, sessionKey=${route.sessionKey}`);
 
+    // 🔑 登记本 turn 在途（onIdle 入口 / onSettled 兜底清除）：subagent 终态
+    // 帧的时机门控据此判断"session 内仍有 turn 在流式输出"，防止 final:true
+    // 提前截断在途回复。steer 直接注入成功的路径在上方已 return，不会登记。
+    markTurnInflight(parsed.sessionId, parsed.taskId);
+
     await core.channel.reply.withReplyDispatcher({
       dispatcher,
       onSettled: async () => {
         log.log(`[BOT] onSettled`);
 
+        // 🔑 兜底清除本 turn 在途标记（正常路径 onIdle 入口已清除；onIdle
+        // 未执行的异常路径靠此处，避免时机门控永久推迟 subagent 终态帧）。
+        clearTurnInflight(parsed.sessionId, parsed.taskId);
+
         // Subagent wait state: if parent has pending subagents, mark settled
         // and defer finalization. Cleanup is suppressed so the session stays alive.
-        const pendingWait = getWaitState(parsed.sessionId, parsed.taskId);
+        const pendingWait = getWaitState(parsed.sessionId, parsed.taskId) ?? getWaitState(parsed.sessionId);
         if (pendingWait && !pendingWait.parentSettled) {
-          const transition = markParentSettled(parsed.sessionId, parsed.taskId);
+          const transition = markParentSettled(parsed.sessionId, pendingWait.taskId);
           if (transition?.shouldFinalize) {
             // All completions arrived before parent settled → finalize now
             const { deliverSubagentFinalResult } = await import("../conversation/conversation-manager.js");
@@ -521,6 +532,20 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
             log.log(`[BOT] Subagent wait active, preserving session context for completion`);
           }
           return;
+        }
+
+        // 🔑 安全网：等待态已就绪（父 settled + 全部完成）但尚未交付 ——
+        // 例如 finalize 因本 turn 当时在途被时机门控推迟，而本 turn 的
+        // onIdle 未走到 defer 分支（异常/竞态路径）。幂等，已交付时为 no-op。
+        if (
+          pendingWait &&
+          pendingWait.deliveredCompletions >= pendingWait.expectedCompletions
+        ) {
+          const { deliverSubagentFinalResult } = await import("../conversation/conversation-manager.js");
+          await deliverSubagentFinalResult({
+            state: pendingWait,
+            reason: "ready-at-onsettled",
+          });
         }
 
         // cleanup 已由 onIdleComplete 在 onIdle 的 finally 中执行。
@@ -581,6 +606,11 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
 
         // 清理 taskId
         completeTask(sessionId);
+        // 清理在途标记（dispatch 中途异常时 onIdle/onSettled 可能未执行，
+        // 避免残留标记让 subagent 终态帧的时机门控永久推迟）
+        if (errTaskId) {
+          clearTurnInflight(sessionId, errTaskId);
+        }
 
         errLog.log(`[BOT] Cleanup completed after error`);
       }

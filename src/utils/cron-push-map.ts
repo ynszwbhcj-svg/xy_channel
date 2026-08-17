@@ -12,6 +12,7 @@
 import { promises as fs } from "fs";
 import * as path from "path";
 import { logger } from "./logger.js";
+import { withAsyncLock } from "./async-mutex.js";
 
 const CRON_PUSH_MAP_FILE = "/home/sandbox/.openclaw/cron-push-map.json";
 
@@ -91,12 +92,15 @@ export async function setJobPushId(
     return;
   }
   try {
-    const map = await readMap();
-    map.entries[jobId] = { ...entry, createdAt: Date.now() };
-    await writeMap(map);
-    logger.log(
-      `[CronPushMap] Saved jobId=${jobId}, source=${entry.source ?? "?"}, pushId=${entry.pushId.substring(0, 20)}...`,
-    );
+    // 读→改→写 整体加互斥锁，防并发写覆盖丢映射。
+    await withAsyncLock(async () => {
+      const map = await readMap();
+      map.entries[jobId] = { ...entry, createdAt: Date.now() };
+      await writeMap(map);
+      logger.log(
+        `[CronPushMap] Saved jobId=${jobId}, source=${entry.source ?? "?"}, pushId=${entry.pushId.substring(0, 20)}...`,
+      );
+    });
   } catch (error) {
     logger.error(`[CronPushMap] Failed to setJobPushId:`, error);
     // 不抛出，避免影响主流程
@@ -125,12 +129,14 @@ export async function getPushIdByJobId(
 export async function removeJob(jobId: string): Promise<void> {
   if (!jobId) return;
   try {
-    const map = await readMap();
-    if (map.entries[jobId]) {
-      delete map.entries[jobId];
-      await writeMap(map);
-      logger.log(`[CronPushMap] Removed jobId=${jobId}`);
-    }
+    await withAsyncLock(async () => {
+      const map = await readMap();
+      if (map.entries[jobId]) {
+        delete map.entries[jobId];
+        await writeMap(map);
+        logger.log(`[CronPushMap] Removed jobId=${jobId}`);
+      }
+    });
   } catch (error) {
     logger.error(`[CronPushMap] Failed to removeJob:`, error);
   }
@@ -139,18 +145,20 @@ export async function removeJob(jobId: string): Promise<void> {
 /** 对账：删除 openclaw 里已不存在的 job，避免映射无限增长。 */
 export async function pruneStale(existingJobIds: Set<string>): Promise<void> {
   try {
-    const map = await readMap();
-    let removed = 0;
-    for (const key of Object.keys(map.entries)) {
-      if (!existingJobIds.has(key)) {
-        delete map.entries[key];
-        removed++;
+    await withAsyncLock(async () => {
+      const map = await readMap();
+      let removed = 0;
+      for (const key of Object.keys(map.entries)) {
+        if (!existingJobIds.has(key)) {
+          delete map.entries[key];
+          removed++;
+        }
       }
-    }
-    if (removed > 0) {
-      await writeMap(map);
-      logger.log(`[CronPushMap] Pruned ${removed} stale entries`);
-    }
+      if (removed > 0) {
+        await writeMap(map);
+        logger.log(`[CronPushMap] Pruned ${removed} stale entries`);
+      }
+    });
   } catch (error) {
     logger.error(`[CronPushMap] Failed to pruneStale:`, error);
   }

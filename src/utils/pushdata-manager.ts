@@ -3,6 +3,7 @@ import { promises as fs } from "fs";
 import * as path from "path";
 import { randomUUID } from "crypto";
 import { logger } from "./logger.js";
+import { withAsyncLock } from "./async-mutex.js";
 
 const PUSHDATA_FILE = "/home/sandbox/.openclaw/pushData.json";
 const MAX_PUSHDATA_ITEMS = 1000; // 最多保留 1000 条记录
@@ -112,18 +113,21 @@ export async function savePushData(
     ...(meta?.cronTitle ? { cronTitle: meta.cronTitle } : {}),
   };
 
-  try {
-    const list = await readPushDataList();
-    list.push(item);
-    await writePushDataList(list);
+  // 读→改→写 整体加互斥锁：并发 cron flush / 工具调用下后写覆盖先写会丢记录。
+  return withAsyncLock(async () => {
+    try {
+      const list = await readPushDataList();
+      list.push(item);
+      await writePushDataList(list);
 
-    logger.log(`[PushDataManager] Saved pushData: id=${pushDataId}, time=${time}, dataLength=${dataDetail.length}, totalItems=${list.length}`);
+      logger.log(`[PushDataManager] Saved pushData: id=${pushDataId}, time=${time}, dataLength=${dataDetail.length}, totalItems=${list.length}`);
 
-    return pushDataId;
-  } catch (error) {
-    logger.error(`[PushDataManager] Failed to save pushData:`, error);
-    throw error;
-  }
+      return pushDataId;
+    } catch (error) {
+      logger.error(`[PushDataManager] Failed to save pushData:`, error);
+      throw error;
+    }
+  });
 }
 
 /**
@@ -194,10 +198,12 @@ export async function getAllPushData(): Promise<PushDataItem[]> {
  * 清空所有推送数据（用于测试或重置）
  */
 export async function clearAllPushData(): Promise<void> {
-  try {
-    await writePushDataList([]);
-    logger.log(`[PushDataManager] Cleared all pushData`);
-  } catch (error) {
-    logger.error(`[PushDataManager] Failed to clear pushData:`, error);
-  }
+  await withAsyncLock(async () => {
+    try {
+      await writePushDataList([]);
+      logger.log(`[PushDataManager] Cleared all pushData`);
+    } catch (error) {
+      logger.error(`[PushDataManager] Failed to clear pushData:`, error);
+    }
+  });
 }

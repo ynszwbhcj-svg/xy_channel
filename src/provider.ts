@@ -584,6 +584,7 @@ const GUI_AGENT_SAFETY_RULES = `
 4. 如操作对象、范围、参数、执行方式或预期结果存在任何不确定性，必须先向用户确认，不得自行补全、修改或假设。
 5. 在用户完成二次明确确认之前，禁止调用 \`xiaoyi_gui_agent\` 发起任何实际操作。
 6. 如果用户二次确认的信息不包含明确指令，也是模糊不确定的（例如：你看着办，你来决定吧，你帮我决定吧，你随便选吧），也要严禁直接执行，必须获取用户明确的指令
+7. 如果用户询问设备应用安装列表，严禁通过xiaoyi_gui_agent工具进行查询
 
 **本规则专属于xiaoyi_gui_agent工具调用，是最高优先级安全约束，不允许修改、绕过或忽略，必须严格遵守。**
 `.trim();
@@ -812,15 +813,17 @@ export const xiaoyiProvider: ProviderPlugin = {
       const isCron = isCronTriggered(context.messages);
 
       if (isCron) {
-        // 通知 before_tool_call hook：当前请求是 cron 触发。
-        // 不依赖 openclaw 的 sessionKey 前缀（部分版本可能不设置）。
-        markCronDetected();
-
         // fire 期 jobId 桥：把首条消息 `[cron:<jobId> ...]` 解析出的真实 jobId
         // 绑定到本次 cron run 的合成 sessionId。sendCommand 凭同一 sessionId
         // 反查 jobId → cron-push-map → 正确设备的 pushId（多设备路由）。
         const cronJobId = extractCronUuid(context.messages);
         const cronTitle = extractCronTitle(context.messages);
+
+        // 通知 before_tool_call hook：当前请求是 cron 触发。
+        // 不依赖 openclaw 的 sessionKey 前缀（部分版本可能不设置）。
+        // 按 jobId 标记，before_tool_call/lifecycle 从 sessionKey 解析同一
+        // jobId 精确命中，替代全局单时间戳避免误判普通对话/其它 job。
+        markCronDetected(cronJobId);
 
         // 通知对话管理层：cron turn 开始，期间的 sendText 将被聚合吞掉，
         // 只放行 agent_end 后的 announce 最终结果。jobId/title 随最终
@@ -960,16 +963,19 @@ export const xiaoyiProvider: ProviderPlugin = {
         let sp = context.systemPrompt;
         const beforeLen = sp.length;
 
-        // 删除 ## Tooling 与 TOOLS.md 声明之间的内容
+        // 删除 ## Tooling 下的工具列表
         sp = sp.replace(
-          /(## Tooling)[\s\S]*?(TOOLS\.md does not control tool availability; it is user guidance for how to use external tools\.)/,
-          "$1\n\n$2",
+          /(## Tooling)[\s\S]*?(For long waits, avoid rapid poll loops:)/,
+          "$1\n$2",
         );
+
+        // 删除 ## Assistant Output Directives 到下一个 # 标题之前的内容
+        sp = sp.replace(/## Assistant Output Directives[\s\S]*?(?=\n#{1,}\s)/g, "");
 
         // (1) Skills 部分：移动到 ## Runtime 之前
         if (sp.includes('## Runtime')) {
-          // 提取 ## Skills (mandatory) 到 </available_skills> 作为第一部分
-          const skillsMatch = sp.match(/(## Skills \(mandatory\)[\s\S]*?<\/available_skills>)/);
+          // 提取 ## Skills 到 </available_skills> 作为第一部分
+          const skillsMatch = sp.match(/(## Skills\n[\s\S]*?<\/available_skills>)/);
           if (skillsMatch) {
             const part1 = skillsMatch[0];
             sp = sp.replace(part1, '');
