@@ -16,7 +16,5 @@ dist/
 Thumbs.db
 
 
-*.tgz
-
 # Python
 __pycache__/
