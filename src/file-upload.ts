@@ -156,6 +156,15 @@ export class XYFileUploadService {
    * Uses completeAndQuery endpoint to get the file URL directly.
    */
   async uploadFileAndGetUrl(filePath: string, objectType: string = "TEMPORARY_MATERIAL_DOC"): Promise<string> {
+    const { fileUrl } = await this.uploadFileAndGetIdAndUrl(filePath, objectType);
+    return fileUrl;
+  }
+
+  /**
+   * Upload a file and return both the objectId (fileId) and its publicly accessible URL.
+   * Same flow as uploadFileAndGetUrl (completeAndQuery in phase 3).
+   */
+  async uploadFileAndGetIdAndUrl(filePath: string, objectType: string = "TEMPORARY_MATERIAL_DOC"): Promise<{ fileId: string; fileUrl: string }> {
     let localFilePath = filePath;
     let isTempFile = false;
 
@@ -255,8 +264,8 @@ export class XYFileUploadService {
         throw new Error("No file URL returned from completeAndQuery");
       }
 
-      logger.log(`[XY File Upload] File upload successful`);
-      return fileUrl;
+      logger.log(`[XY File Upload] File upload successful: ${fileName} → objectId=${objectId}`);
+      return { fileId: objectId, fileUrl };
     } catch (error) {
       logger.error(`[XY File Upload] File upload with URL retrieval failed for ${filePath}:`, error);
       throw error;
