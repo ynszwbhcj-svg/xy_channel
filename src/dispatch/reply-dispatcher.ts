@@ -21,6 +21,7 @@ import {
   deliverSubagentFinalResult,
 } from "../conversation/conversation-manager.js";
 import { StreamAssembler } from "../conversation/stream-assembler.js";
+import { sendTurnFinalStepCard } from "../step-progress.js";
 
 // ⚙️ 前缀是 openclaw 系统消息稳定标记（infra/system-message.ts SYSTEM_MARK）。
 // ACP 绑定会话 turn 结束会以 kind=final 尾随投递系统诊断通知（如
@@ -455,6 +456,21 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
                   }),
               });
 
+              // step 进度收口：下发 DisplayTaskCardData final 帧（「已完成」，
+              // index = 最后一张卡 +1）。本轮没发过进度卡片时内部为 no-op。
+              outboundQueue.enqueue({
+                taskId: terminalTaskId,
+                label: "step-final-card",
+                delayMs: terminalFrameDelayMs,
+                send: () =>
+                  sendTurnFinalStepCard({
+                    config,
+                    sessionId,
+                    taskId: terminalTaskId,
+                    messageId: terminalMessageId,
+                  }),
+              });
+
               // 🔑 最终帧携带权威全文本（append:false 整体替换）—— 流式期间
               // 缺失的尾部在此补齐。空文本属异常路径，回退旧的空帧语义
               // （append:true 仅标记流结束），避免把客户端已展示内容刷空。
@@ -602,37 +618,6 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
 
       onToolStart: async ({ name, phase }) => {
         scopedLog().log(`[TOOL-START] Tool: ${name}, phase: ${phase}`);
-
-        if (phase === "start") {
-          const toolName = name || "unknown";
-
-          // call_device_tool 由自身 execute() 内部发送具体子工具名的状态更新
-          // get_xxx_tool_schema 是给 LLM 查 schema 用的，无需向用户展示
-          if (toolName === "call_device_tool" || toolName.endsWith("_tool_schema") || toolName === "huawei_id_tool") {
-            scopedLog().log(`[TOOL-START] Skipping generic status for ${toolName}`);
-            return;
-          }
-
-          try {
-            const toolTaskId = getActiveTaskId();
-            outboundQueue.enqueue({
-              taskId: toolTaskId,
-              label: "tool-start-status",
-              send: () =>
-                sendStatusUpdate({
-                  config,
-                  sessionId,
-                  taskId: toolTaskId,
-                  messageId: getActiveMessageId(),
-                  text: `正在使用工具: ${toolName}...`,
-                  state: "working",
-                }),
-            });
-            scopedLog().log(`[TOOL-START] Sent status update for tool start: ${toolName}`);
-          } catch (err) {
-            scopedLog().error(`[TOOL-START] Failed to send tool start status:`, err);
-          }
-        }
       },
 
       onToolResult: async (payload: ReplyPayload) => {
