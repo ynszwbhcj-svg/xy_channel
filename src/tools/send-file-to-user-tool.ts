@@ -232,15 +232,15 @@ b. 操作超时时间为2分钟（120秒），请勿重复调用此工具，如�
 
     }
 
-    // Upload all local files and get fileIds
-    const uploadedFiles: Array<{ fileName: string; fileId: string; mimeType: string }> = [];
+    // Upload all local files and get fileIds + fileUrls
+    const uploadedFiles: Array<{ fileName: string; fileId: string; fileUrl: string; mimeType: string }> = [];
 
     for (let i = 0; i < allLocalPaths.length; i++) {
       const localPath = allLocalPaths[i];
 
       try {
-        // Upload file using three-phase upload
-        const fileId = await uploadService.uploadFile(localPath);
+        // Upload file using three-phase upload (completeAndQuery returns both fileId and URL)
+        const { fileId, fileUrl } = await uploadService.uploadFileAndGetIdAndUrl(localPath);
 
         if (!fileId) {
           throw new Error(`Failed to upload file: ${localPath}`);
@@ -250,7 +250,7 @@ b. 操作超时时间为2分钟（120秒），请勿重复调用此工具，如�
         const fileName = localPath.split("/").pop() || "unknown";
         const mimeType = getMimeTypeFromFilename(fileName);
 
-        uploadedFiles.push({ fileName, fileId, mimeType });
+        uploadedFiles.push({ fileName, fileId, fileUrl, mimeType });
       } catch (error) {
         throw new Error(`Failed to upload file ${localPath}: ${error instanceof Error ? error.message : String(error)}`);
       }
@@ -271,7 +271,7 @@ b. 操作超时时间为2分钟（120秒），请勿重复调用此工具，如�
     let cachedSentFilesForReturn: SentFileCard[] = [];
 
     for (const uploadedFile of uploadedFiles) {
-      const { fileName, fileId, mimeType } = uploadedFile;
+      const { fileName, fileId, fileUrl, mimeType } = uploadedFile;
 
       const agentResponse: OutboundWebSocketMessage = {
         msgType: "agent_response",
@@ -295,6 +295,7 @@ b. 操作超时时间为2分钟（120秒），请勿重复调用此工具，如�
                     name: fileName,
                     mimeType: mimeType,
                     fileId: fileId,
+                    fileUrl: fileUrl,
                   },
                 },
               ],
