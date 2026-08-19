@@ -176,12 +176,13 @@ export function registerStepProgressHook(api: OpenClawPluginApi): void {
 
       // 所有使用到工具的场景都下发配对标（不区分技能场景），
       // stepName 与 text 保持一致、共享同一序号。
-      const text = `正在使用：${innerName}`;
+      const loading_text = `正在使用：${innerName}`;
+      const finish_text = `调用工具： ${innerName}`;
       const index = takeNextIndex(ids.sessionId, ids.taskId);
 
       const commands: A2ACommand[] = [
-        buildTaskCard(ids.taskUniqId, index, text, false),
-        buildToolCard(ids.taskUniqId, index, text),
+        buildTaskCard(ids.taskUniqId, index, loading_text, false),
+        buildToolCard(ids.taskUniqId, index, finish_text),
       ];
 
       await sendCommand({
