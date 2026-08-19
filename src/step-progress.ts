@@ -12,8 +12,8 @@
 //     配对标共享同一序号）。
 //   - isDisplayTaskCardData 恒为 true。
 //   - turn 结束时（reply-dispatcher / subagent 终态路径）下发 DisplayTaskCardData
-//     final 帧：isFinal=true、stepName 固定「已完成」、index = 最后一张卡 +1，
-//     只发这一张（不发 DisplayExecuteStatusCard）；本轮没发过卡片则不发。
+//     final 帧：isFinal=true、stepName 固定「已完成」、index 与最后一张工具卡相同
+//     （不再 +1），只发这一张（不发 DisplayExecuteStatusCard）；本轮没发过卡片则不发。
 //
 // 仅主会话对话路径生效：sessionKey 未绑定 A2A 身份的（cron/subagent）一律跳过。
 // 钩子体全 try/catch：before_tool_call 抛错会 block 工具执行，卡片推送失败
@@ -109,8 +109,8 @@ export async function sendTurnFinalStepCard(params: {
     turnNextIndex.delete(key);
 
     const taskUniqId = buildTaskUniqId(params.taskId);
-    // index = 最后一张卡的序号 +1（next 即为最后序号的下一位）
-    const command = buildTaskCard(taskUniqId, next, "已完成", true);
+    // index 与最后一张工具卡的序号一致：next 是最后序号的下一位，取 next - 1。
+    const command = buildTaskCard(taskUniqId, next - 1, "已完成", true);
     await sendCommand({
       config: params.config,
       sessionId: params.sessionId,
@@ -118,7 +118,7 @@ export async function sendTurnFinalStepCard(params: {
       messageId: params.messageId,
       command,
     });
-    logger.log(`[STEP-PROGRESS] Sent turn final card, index=${next}`);
+    logger.log(`[STEP-PROGRESS] Sent turn final card, index=${next - 1}`);
   } catch (err) {
     logger.error(`[STEP-PROGRESS] Failed to send turn final card:`, err);
   }

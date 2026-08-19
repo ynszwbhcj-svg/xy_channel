@@ -457,7 +457,7 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
               });
 
               // step 进度收口：下发 DisplayTaskCardData final 帧（「已完成」，
-              // index = 最后一张卡 +1）。本轮没发过进度卡片时内部为 no-op。
+              // index 与最后一张工具卡一致）。本轮没发过进度卡片时内部为 no-op。
               outboundQueue.enqueue({
                 taskId: terminalTaskId,
                 label: "step-final-card",
