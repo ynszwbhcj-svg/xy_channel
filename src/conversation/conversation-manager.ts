@@ -535,12 +535,29 @@ export async function deliverSubagentFinalResult(params: {
       append: false,
       final: true,
     });
+  // step 进度收口：与 reply-dispatcher onIdle 同一收口语义。
+  // 动态 import 规避 conversation-manager ↔ step-progress 的静态循环依赖。
+  const sendStepFinalCard = async () => {
+    const { sendTurnFinalStepCard } = await import("../step-progress.js");
+    return sendTurnFinalStepCard({
+      config,
+      sessionId: state.sessionId,
+      taskId: effectiveTaskId,
+      messageId: effectiveMessageId,
+    });
+  };
   if (session) {
     session.outboundQueue.enqueue({
       taskId: effectiveTaskId,
       label: "subagent-terminal-status",
       delayMs: terminalFrameDelayMs,
       send: sendCompletedStatus,
+    });
+    session.outboundQueue.enqueue({
+      taskId: effectiveTaskId,
+      label: "subagent-step-final-card",
+      delayMs: terminalFrameDelayMs,
+      send: sendStepFinalCard,
     });
     session.outboundQueue.enqueue({
       taskId: effectiveTaskId,
@@ -551,6 +568,7 @@ export async function deliverSubagentFinalResult(params: {
     await session.outboundQueue.whenIdle();
   } else {
     await sendCompletedStatus();
+    await sendStepFinalCard();
     await sendFinal();
   }
 
