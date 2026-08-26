@@ -25,8 +25,25 @@ import {
 } from "./src/conversation/conversation-manager.js";
 import { notifyCronAgentEnd } from "./src/conversation/cron-buffer.js";
 import { logger } from "./src/utils/logger.js";
-import { extractSkillNameFromPath, resolveActualToolName } from "./src/utils/skill-path.js";
-import { registerStepProgressHook } from "./src/step-progress.js";
+
+/**
+ * Parse a file path string to detect if it refers to a SKILL.md file within
+ * a skills directory. Returns the skill name (parent directory) if so.
+ *
+ * Matches paths like:
+ *   ~/.openclaw/workspace/skills/my-skill/SKILL.md
+ *   /home/user/core_skills/my-skill/SKILL.md
+ *   skills/my-skill/SKILL.md
+ */
+function extractSkillNameFromPath(filePath: unknown): string | null {
+  if (typeof filePath !== "string" || !filePath) return null;
+  // Normalize common path prefixes
+  const normalized = filePath.replace(/^~\//, "/home/").replace(/\\/g, "/");
+  // Match: .../skills/<skillName>/SKILL.md  or  .../skills/<skillName>/...
+  // Also match: .../core_skills/<skillName>/SKILL.md
+  const match = normalized.match(/\/(?:core_)?skills\/([^/]+)\/SKILL\.md$/i);
+  return match ? match[1] : null;
+}
 
 /**
  * Register the skills diagnostic event listener via after_tool_call hook.
@@ -54,6 +71,17 @@ function registerSkillsDiagnosticHook(api: OpenClawPluginApi) {
   const TOOL_SKILL_MAP: Record<string, string> = Object.fromEntries(
     Object.entries(SKILL_TOOLS).flatMap(([skill, tools]) => tools.map((t) => [t, skill])),
   );
+
+  // Resolve the actual tool name from call_device_tool wrapper.
+  // The model calls call_device_tool({ toolName: "...", arguments: {...} })
+  // — the real tool name is inside params, not event.toolName.
+  function resolveActualToolName(event: { toolName: string; params: Record<string, unknown> }): string {
+    if (event.toolName === "call_device_tool") {
+      const inner = event.params?.toolName;
+      if (typeof inner === "string" && inner.length > 0) return inner;
+    }
+    return event.toolName;
+  }
 
   // Log skill usage for known device tools on before_tool_call
   api.on("before_tool_call", async (event, _ctx) => {
@@ -556,8 +584,6 @@ const plugin: OpenClawPluginDefinition = definePluginEntry({
       registerCronRecoveryHook(api);
       // Skills diagnostic hook: log skill usage (detected via SKILL.md reads)
       registerSkillsDiagnosticHook(api);
-      // Step progress hook: push skill/tool progress cards (UserInteraction commands)
-      registerStepProgressHook(api);
     }
   },
 });
