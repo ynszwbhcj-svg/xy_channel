@@ -15,8 +15,5 @@ dist/
 .DS_Store
 Thumbs.db
 
-
-*.tgz
-
 # Python
 __pycache__/
