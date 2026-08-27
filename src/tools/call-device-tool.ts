@@ -23,7 +23,6 @@ import { saveFileToPhoneTool } from "./save-file-to-phone-tool.js";
 import { sendEmailTool } from "./send-email-tool.js";
 import { searchEmailTool } from "./search-email-tool.js";
 import { getCachedXYWebSocketManager } from "../transport/client.js";
-import { sendStatusUpdate } from "../formatter.js";
 import { getCurrentSessionContext, runWithSessionContext, isCronToolCall, getCronToolRunInfo } from './session-manager.js';
 import type { SessionContext } from './session-manager.js';
 
@@ -109,19 +108,7 @@ export const callDeviceTool = {
 
     const { toolName, arguments: toolArgs } = params;
 
-    // 向用户端发送具体工具名的状态更新
-    try {
-      await sendStatusUpdate({
-        config,
-        sessionId,
-        taskId,
-        messageId,
-        text: `调用工具：${toolName}`,
-        state: "working",
-      });
-    } catch (_) {
-      // 状态更新失败不影响工具执行
-    }
+    // 「调用工具：xxx」状态帧由 tool-status-hook 的 before_tool_call 钩子统一下发
 
     const tool = deviceToolRegistry.get(toolName);
     if (!tool) {

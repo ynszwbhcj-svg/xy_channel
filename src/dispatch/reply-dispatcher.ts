@@ -600,41 +600,6 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
       suppressToolErrorWarnings: true,
       onModelSelected: prefixContext.onModelSelected,
 
-      onToolStart: async ({ name, phase }) => {
-        scopedLog().log(`[TOOL-START] Tool: ${name}, phase: ${phase}`);
-
-        if (phase === "start") {
-          const toolName = name || "unknown";
-
-          // call_device_tool 由自身 execute() 内部发送具体子工具名的状态更新
-          // get_xxx_tool_schema 是给 LLM 查 schema 用的，无需向用户展示
-          if (toolName === "call_device_tool" || toolName.endsWith("_tool_schema") || toolName === "huawei_id_tool") {
-            scopedLog().log(`[TOOL-START] Skipping generic status for ${toolName}`);
-            return;
-          }
-
-          try {
-            const toolTaskId = getActiveTaskId();
-            outboundQueue.enqueue({
-              taskId: toolTaskId,
-              label: "tool-start-status",
-              send: () =>
-                sendStatusUpdate({
-                  config,
-                  sessionId,
-                  taskId: toolTaskId,
-                  messageId: getActiveMessageId(),
-                  text: `调用工具：${toolName}`,
-                  state: "working",
-                }),
-            });
-            scopedLog().log(`[TOOL-START] Sent status update for tool start: ${toolName}`);
-          } catch (err) {
-            scopedLog().error(`[TOOL-START] Failed to send tool start status:`, err);
-          }
-        }
-      },
-
       onToolResult: async (payload: ReplyPayload) => {
         const text = payload.text ?? "";
         const hasMedia = Boolean(payload.mediaUrl || (payload.mediaUrls?.length ?? 0) > 0);

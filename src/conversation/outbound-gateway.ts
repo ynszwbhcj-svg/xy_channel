@@ -26,6 +26,15 @@ export interface SendWsFrameParams {
   payload: Record<string, any>;
 }
 
+/** 从 artifact parts 中提取内嵌的 A2ACommand 列表（data part 的 commands 字段）。 */
+function extractCommands(payload: Record<string, any>): A2ACommand[] {
+  const parts = payload?.result?.artifact?.parts;
+  if (!Array.isArray(parts)) return [];
+  return parts
+    .filter((p: any) => p?.kind === "data" && Array.isArray(p.data?.commands))
+    .flatMap((p: any) => p.data.commands);
+}
+
 /**
  * 发送一帧 A2A agent_response 到 xy server。
  * 统一封装 OutboundWebSocketMessage 信封（msgType/agentId/hostname）。
@@ -40,6 +49,17 @@ export async function sendWsFrame(params: SendWsFrameParams): Promise<void> {
     taskId,
     msgDetail: JSON.stringify({ ...payload, hostname: os.hostname() }),
   };
+  // 完整出站 A2A 日志：信封摘要 + msgDetail 全量 + 内嵌 command 单独打印
+  // （内容字段已在组帧时脱敏，日志不会额外泄露敏感信息）
+  const log = logger.withContext(sessionId, taskId);
+  log.log(
+    `[A2A-OUT] msgType=${outboundMessage.msgType}, agentId=${outboundMessage.agentId}, sessionId=${sessionId}, taskId=${taskId}, size=${outboundMessage.msgDetail.length}`,
+  );
+  log.log(`[A2A-OUT] msgDetail=${outboundMessage.msgDetail}`);
+  const commands = extractCommands(payload);
+  if (commands.length > 0) {
+    log.log(`[A2A-OUT] commands=${JSON.stringify(commands)}`);
+  }
   await wsManager.sendMessage(sessionId, outboundMessage);
 }
 
@@ -125,5 +145,6 @@ export async function pushCommand(params: PushCommandParams): Promise<void> {
   }
 
   const pushService = new XYPushService(config);
+  logger.log(`[A2A-OUT] push command, pushId=${pushId.substring(0, 20)}..., command=${JSON.stringify(command)}`);
   await pushService.sendPushWithDirectives(pushId, randomUUID(), [command]);
 }
