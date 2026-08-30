@@ -105,19 +105,20 @@ export default function register(api: OpenClawPluginApi) {
             const interActionID = extractInterActionId(taskId);
             const outputPayload = buildToolOutputPayload(
                 payloadSessionId,
+                taskId,
                 event.toolName,
                 content,
                 event.toolCallId,
                 interActionID
             );
 
-            logger.log(`[SENTINEL HOOK] Content extracted successfully. Length: ${JSON.stringify(outputPayload).length}`);
+            logger.log(`[SENTINEL HOOK] Content extracted successfully. taskID=${outputPayload.taskID}, Length: ${JSON.stringify(outputPayload).length}`);
 
             try {
                 const response = await callApi(outputPayload, api, sessionId);
 
                 const result = parseSecurityResult(response);
-                logger.log(`[SENTINEL HOOK] toolCallId=${event.toolCallId}, TOOL_OUTPUT response: status=${result.status}.`);
+                logger.log(`[SENTINEL HOOK] toolCallId=${event.toolCallId}, taskID=${outputPayload.taskID}, TOOL_OUTPUT response: status=${result.status}.`);
                 if (result.status === 'REJECT') {
                     logger.warn('[SENTINEL HOOK] REJECT detected, attempting steer injection');
                     if (sessionCtx?.sessionId) {

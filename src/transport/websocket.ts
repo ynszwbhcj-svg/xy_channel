@@ -492,6 +492,45 @@ export class XYWebSocketManager extends EventEmitter {
     return dataEvent;
   }
 
+  /**
+   * 定制逻辑：AgentEvent.UploadExeResult 事件附带回一帧空白 final 帧
+   * （append:false 全量替换、空 text、final:true），仅作终态 ack，
+   * 不影响后续 data-event 等正常分发。
+   *
+   * 不走 formatter/sendA2AResponse：formatter → outbound-gateway → client
+   * 会与本模块形成循环依赖，故直接用 this.sendMessage 手组信封，
+   * 帧结构与 sendA2AResponse 组帧（含 hostname）对齐。
+   */
+  private sendEmptyFinalFrame(sessionId: string, taskId: string, messageId: string): void {
+    const msgDetail = {
+      jsonrpc: "2.0",
+      id: messageId,
+      result: {
+        taskId,
+        kind: "artifact-update",
+        append: false,
+        lastChunk: true,
+        final: true,
+        artifact: {
+          artifactId: uuidv4(),
+          parts: [{ kind: "text", text: "" }],
+        },
+      },
+      hostname: os.hostname(),
+    };
+    const envelope: OutboundWebSocketMessage = {
+      msgType: "agent_response",
+      agentId: this.config.agentId,
+      sessionId,
+      taskId,
+      msgDetail: JSON.stringify(msgDetail),
+    };
+    this.log(`[XY] AgentEvent.UploadExeResult detected, sending empty final frame, taskId=${taskId}, messageId=${messageId}`);
+    void this.sendMessage(sessionId, envelope).catch((err) =>
+      this.error(`[XY] sendEmptyFinalFrame failed, taskId=${taskId}:`, err)
+    );
+  }
+
   private toCrossDeviceTaskResultEvent(item: any, sessionId: string): CrossDeviceTaskResultEvent | null {
     if (item?.header?.namespace !== "DistributionInteraction" || item?.header?.name !== "CrossTaskExecuteResult") {
       return null;
@@ -709,6 +748,10 @@ export class XYWebSocketManager extends EventEmitter {
             log.log(`[XY] Processing ${events.length} events from data.events`);
             for (const item of events) {
               log.log(`[XY] Raw event: header=${JSON.stringify(item?.header)}, payloadKeys=${Object.keys(item?.payload ?? {}).join(",")}`);
+              // 定制：AgentEvent.UploadExeResult 附带空白 final 帧 ack，随后照常走 data-event 等分发
+              if (item.header?.namespace === "AgentEvent" && item.header?.name === "UploadExeResult") {
+                this.sendEmptyFinalFrame(sessionId, taskId, a2aRequest.id);
+              }
               const dataEvent = this.toUploadExeDataEvent(item);
               const crossDeviceTaskResult = this.toCrossDeviceTaskResultEvent(item, sessionId);
               if (dataEvent) {
@@ -833,6 +876,14 @@ export class XYWebSocketManager extends EventEmitter {
               log.log(`[XY] Processing ${events.length} events from data.events`);
               for (const item of events) {
                 log.log(`[XY] Raw event (wrapped): header=${JSON.stringify(item?.header)}, payloadKeys=${Object.keys(item?.payload ?? {}).join(",")}`);
+                // 定制：AgentEvent.UploadExeResult 附带空白 final 帧 ack，随后照常走 data-event 等分发
+                if (item.header?.namespace === "AgentEvent" && item.header?.name === "UploadExeResult") {
+                  this.sendEmptyFinalFrame(
+                    inboundMsg.sessionId || a2aRequest.params?.sessionId,
+                    inboundMsg.taskId || a2aRequest.params?.id || "",
+                    a2aRequest.id,
+                  );
+                }
                 const dataEvent = this.toUploadExeDataEvent(item);
                 const crossDeviceTaskResult = this.toCrossDeviceTaskResultEvent(
                   item,
