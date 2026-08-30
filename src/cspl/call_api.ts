@@ -6,16 +6,11 @@ import https from 'https';
 import http from 'http';
 import crypto from 'crypto';
 import {URL} from 'url';
-import * as fs from 'fs';
-import * as path from 'path';
-import {fileURLToPath} from 'url';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 
 import type {OpenClawPluginApi} from 'openclaw/plugin-sdk';
 
 import {getConfig} from './config.js';
+import {logger} from '../utils/logger.js';
 import {
     ApiResponse,
     HttpHeaders,
@@ -26,10 +21,14 @@ import {
     MAX_TRACE_ID_LENGTH
 } from './constants.js';
 
-// 安全扫描接口 trace-id：sessionId 为空时降级为 uuid，超过 MAX_TRACE_ID_LENGTH 截断
+// 安全扫描接口 trace-id：sessionID&时间戳 保证唯一性；sessionId 为空时降级为 uuid；
+// 为时间戳后缀预留长度，避免超过 MAX_TRACE_ID_LENGTH 截断时把时间戳裁掉
 function buildTraceId(sessionId: string): string {
-    const traceId = sessionId ? sessionId : crypto.randomUUID();
-    return traceId.length > MAX_TRACE_ID_LENGTH ? traceId.substring(0, MAX_TRACE_ID_LENGTH) : traceId;
+    const base = sessionId ? sessionId : crypto.randomUUID();
+    const suffix = `&${Date.now()}`;
+    const maxBaseLength = MAX_TRACE_ID_LENGTH - suffix.length;
+    const truncatedBase = base.length > maxBaseLength ? base.substring(0, maxBaseLength) : base;
+    return truncatedBase + suffix;
 }
 
 function buildHeadersForCelia(config: { uid: string; apiKey: string; skillId: string; requestFrom: string }, sessionId: string): HttpHeaders {
@@ -129,6 +128,7 @@ export async function callApi(payload: CallApiPayload, api: OpenClawPluginApi, s
     const httpBody = JSON.stringify(payloadWithUid);
 
     const apiUrl = `${config.api.url}${API_URL_SUFFIX}`;
+    logger.log(`[SENTINEL HOOK] callApi request: traceId=${headersForCelia['x-hag-trace-id']}, taskID=${payload.taskID}, subSceneID=${payload.subSceneID}, url=${apiUrl}`);
 
     return new Promise((resolve, reject) => {
         const options = buildRequestOptions(apiUrl, headersForCelia as HttpHeaders, config.api.timeout);
@@ -159,28 +159,12 @@ export async function callSkillScanApi(url_suffix: string, payload: object, api:
     // 确保 uid 存在于消息体中（从 config 注入）
     const payloadWithUid = { ...payload, uid: config.uid, packageName:"com.huawei.hmos.vassistant", ansDone:false, userId:config.uid};
     const httpBody = JSON.stringify(payloadWithUid);
-    console.log(`TOOL_input headersForCelia: ${JSON.stringify(headersForCelia)}`)
-    console.log(`TOOL_input httpBody: ${JSON.stringify(httpBody)}`)
 
-    // 将headersForCelia和httpBody写入当前目录的txt文件
-    const logFile = path.join(__dirname, 'api_request_log.txt');
-    const logContent = [
-        `==============================`,
-        `Timestamp: ${new Date().toISOString()}`,
-        `Session ID: ${sessionId}`,
-        ``,
-        `--- headersForCelia ---`,
-        JSON.stringify(headersForCelia, null, 2),
-        ``,
-        `--- httpBody ---`,
-        JSON.stringify(httpBody, null, 2),
-        `==============================`
-    ].join('\n');
-    fs.writeFileSync(logFile, logContent, 'utf8');
-    api.logger.info(`[ai-security-plugin][skill_scope_hook] Request log written to ${logFile}`);
+    const url = config.api.url + url_suffix;
+    const payloadTaskId = (payload as Record<string, unknown>).taskID;
+    logger.log(`[SENTINEL HOOK] callSkillScanApi request: traceId=${headersForCelia['x-hag-trace-id']}, taskID=${payloadTaskId}, url=${url}`);
 
     return new Promise((resolve, reject) => {
-        const url = config.api.url + url_suffix;
         const options = buildRequestOptions(url, headersForCelia as HttpHeaders, config.api.timeout);
         const protocol = url.startsWith('https://') ? https : http;
         const req = protocol.request(options, (res) => {

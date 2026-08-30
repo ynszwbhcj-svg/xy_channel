@@ -1103,6 +1103,9 @@ async function executeDeviceTool(
   if (!definition.deviceCommand) throw new InvokeError("INVALID_TOOL_DEFINITION", "Device tool missing deviceCommand");
   validateBundleNameConsistency(definition);
   if (sessionCtx.isCron) throw new InvokeError("DEVICE_TOOL_BLOCKED", "Device tools not available in cron sessions");
+  // winpc 无任何鸿蒙端侧执行能力（device-tool-map 已在工具列表层屏蔽端工具，
+  // 此处拦截 skill 定义的 Device pluginType 工具经 invoke 旁路下发 sendCommand）。
+  if (sessionCtx.deviceType === "winpc") throw new InvokeError("DEVICE_TOOL_BLOCKED", "Device tools not available on winpc");
 
   const rendered = renderDeviceCommand(
     definition.deviceCommand.template as Record<string, unknown>,

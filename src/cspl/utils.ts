@@ -247,6 +247,12 @@ export function extractInterActionId(taskId: string): number {
     return 1;
 }
 
+// 生成请求体 taskID：taskId（sessionCtx.taskId 或 event.runId）拼接时间戳保证唯一性；
+// taskId 为空时降级为 uuid。拼接后与既有 & 分隔约定兼容（sessionID&interActionID&timestamp）
+function buildPayloadTaskId(taskId: string): string {
+    return taskId ? `${taskId}&${Date.now()}` : crypto.randomUUID();
+}
+
 // reqTime 生成工具函数
 export function formatReqTime(): string {
     const now = new Date();
@@ -259,6 +265,7 @@ export function formatReqTime(): string {
 // 构建工具输入新消息体（新接口格式）
 export function buildToolInputPayload(
     sessionID: string,
+    taskID: string,
     toolName: string,
     toolArguments: string,
     toolCallId: string,
@@ -276,7 +283,7 @@ export function buildToolInputPayload(
         callObj.file = [options.file];
     }
     return {
-        taskID: crypto.randomUUID(),
+        taskID: buildPayloadTaskId(taskID),
         sessionID,
         businessID: 'voiceassistant',
         sceneID: 'XIAOYI_CLAW',
@@ -298,13 +305,14 @@ export function buildToolInputPayload(
 // 构建工具输出新消息体（新接口格式）
 export function buildToolOutputPayload(
     sessionID: string,
+    taskID: string,
     funcName: string,
     content: string,
     toolCallId: string,
     interActionID: number
 ): CallApiPayload {
     return {
-        taskID: crypto.randomUUID(),
+        taskID: buildPayloadTaskId(taskID),
         sessionID,
         businessID: 'voiceassistant',
         sceneID: 'XIAOYI_CLAW',
@@ -332,7 +340,7 @@ export function buildToolOutputPayload(
 async function sendToolInputRequest(payload: CallApiPayload, api: OpenClawPluginApi, sessionId: string, toolCallId: string): Promise<{ status: 'ACCEPT' | 'REJECT' }> {
     const response = await callApi(payload, api, sessionId);
     const result = parseSecurityResult(response);
-    logger.log(`[SENTINEL HOOK] toolCallId=${toolCallId}, TOOL_INPUT response: status=${result.status}`);
+    logger.log(`[SENTINEL HOOK] toolCallId=${toolCallId}, taskID=${payload.taskID}, TOOL_INPUT response: status=${result.status}`);
     return result;
 }
 
@@ -376,6 +384,7 @@ export async function handleExecToolInput(event: any, api: OpenClawPluginApi, se
 
             const toolInputPayload = buildToolInputPayload(
                 sessionId,
+                taskId,
                 'exec',
                 command,
                 event.toolCallId,
@@ -383,7 +392,7 @@ export async function handleExecToolInput(event: any, api: OpenClawPluginApi, se
                 { file: { type: 'doc', url: obsUrl, hash: fileHash, size: fileSize, body: bodyContent } }
             );
 
-            logger.log(`[SENTINEL HOOK] Sending TOOL_INPUT for file: ${path.basename(filePath)}, body length: ${JSON.stringify(toolInputPayload).length}`);
+            logger.log(`[SENTINEL HOOK] Sending TOOL_INPUT for file: ${path.basename(filePath)}, taskID=${toolInputPayload.taskID}, body length: ${JSON.stringify(toolInputPayload).length}`);
             try {
                 lastResult = await sendToolInputRequest(toolInputPayload, api, sessionId, event.toolCallId);
                 if (lastResult.status === 'REJECT') {
@@ -407,12 +416,13 @@ export async function handleExecToolInput(event: any, api: OpenClawPluginApi, se
 
         const toolInputPayload = buildToolInputPayload(
             sessionId,
+            taskId,
             'exec',
             command,
             event.toolCallId,
             interActionID
         );
-        logger.log(`[SENTINEL HOOK] Sending TOOL_INPUT for direct code execution, body length: ${JSON.stringify(toolInputPayload).length}`);
+        logger.log(`[SENTINEL HOOK] Sending TOOL_INPUT for direct code execution, taskID=${toolInputPayload.taskID}, body length: ${JSON.stringify(toolInputPayload).length}`);
 
         return await sendToolInputRequest(toolInputPayload, api, sessionId, event.toolCallId);
     }
@@ -432,13 +442,14 @@ export async function handleMessageToolInput(event: any, api: OpenClawPluginApi,
 
     const toolInputPayload = buildToolInputPayload(
         sessionId,
+        taskId,
         'message',
         message,
         event.toolCallId,
         interActionID
     );
 
-    logger.log(`[SENTINEL HOOK] Sending TOOL_INPUT for message, body length: ${JSON.stringify(toolInputPayload).length}`);
+    logger.log(`[SENTINEL HOOK] Sending TOOL_INPUT for message, taskID=${toolInputPayload.taskID}, body length: ${JSON.stringify(toolInputPayload).length}`);
 
     return await sendToolInputRequest(toolInputPayload, api, sessionId, event.toolCallId);
 }
@@ -564,13 +575,14 @@ export async function handleOtherToolInput(event: any, api: OpenClawPluginApi, s
 
     const toolInputPayload = buildToolInputPayload(
         sessionId,
+        taskId,
         event.toolName,
         paramsJson,
         event.toolCallId,
         interActionID
     );
 
-    logger.log(`[SENTINEL HOOK] Sending TOOL_INPUT for ${event.toolName}, body length: ${JSON.stringify(toolInputPayload).length}`);
+    logger.log(`[SENTINEL HOOK] Sending TOOL_INPUT for ${event.toolName}, taskID=${toolInputPayload.taskID}, body length: ${JSON.stringify(toolInputPayload).length}`);
 
     return await sendToolInputRequest(toolInputPayload, api, sessionId, event.toolCallId);
 }
