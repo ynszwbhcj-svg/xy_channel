@@ -19,7 +19,6 @@ const DEVICE_TOOL_POLICY: Partial<Record<DeviceType, DeviceToolPolicy>> = {
   "2in1": {
     allowlist: false,
     tools: [
-      "xiaoyi_gui_agent",
       "call_phone",
       "send_message",
       "search_message",
