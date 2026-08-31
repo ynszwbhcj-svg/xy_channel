@@ -274,10 +274,10 @@ export const xyOutbound: ChannelOutboundAdapter = {
       throw new Error("mediaUrl is required for sendMedia");
     }
 
-    // Upload file
-    const fileId = await uploadService.uploadFile(mediaUrl);
+    // Upload file (completeAndQuery returns both fileId and fileUrl)
+    const { fileId, fileUrl } = await uploadService.uploadFileAndGetIdAndUrl(mediaUrl);
 
-    // Check if fileId is empty (should not happen if uploadFile throws on failure)
+    // Check if fileId is empty (should not happen if uploadFileAndGetIdAndUrl throws on failure)
     if (!fileId) {
       logger.error(`File upload returned empty fileId for: ${mediaUrl}`);
       throw new Error(`File upload returned empty fileId for: ${mediaUrl}`);
@@ -285,6 +285,7 @@ export const xyOutbound: ChannelOutboundAdapter = {
 
     logger.log(`[xyOutbound.sendMedia] File uploaded:`, {
       fileId,
+      fileUrl,
       taskId,
     });
 
@@ -311,6 +312,7 @@ export const xyOutbound: ChannelOutboundAdapter = {
                 name: fileName,
                 mimeType: mimeType,
                 fileId: fileId,
+                fileUrl: fileUrl,
               },
             },
           ],
