@@ -377,6 +377,84 @@ function registerCronRecoveryHook(api: OpenClawPluginApi): void {
   });
 }
 
+// ── Cron lifecycle observation: cron_changed hook ──────────────────────────
+
+/**
+ * Register the cron_changed hook.
+ *
+ * openclaw 的 gateway 在 cron 任务生命周期变化（added/updated/removed/
+ * started/finished）时发射该钩子，事件载荷为 PluginHookCronChangedEvent，
+ * ctx 为 PluginHookGatewayContext（实际只注入 config 与 getCron 两个字段，
+ * 不含 port/workspaceDir）。
+ *
+ * 这里注册一个观察处理器：把钩子内能拿到的全量上下文序列化成一行日志
+ * （event 全量 + ctx 键名 + ctx.config 全量 + ctx.getCron() 服务快照），
+ * 写入 /tmp/openclaw/xiaoyi-channel-<日期>.log，用于排查外部唤醒调度器
+ * 同步、任务对账等问题。getCron() 返回的是 gateway 活实例，list() 结果
+ * 只作日志快照，到期判断与执行仍以 openclaw 自身为准。
+ */
+function registerCronChangedHook(api: OpenClawPluginApi): void {
+  api.on("cron_changed", async (event, ctx) => {
+    const logTag = "[XY-CRON-CHANGED]";
+
+    // 防御性序列化：容忍 bigint、循环引用与不可序列化值，保证单行输出不炸
+    const safeJson = (value: unknown): string => {
+      const seen = new WeakSet();
+      try {
+        return JSON.stringify(value, (_key, v) => {
+          if (typeof v === "bigint") return `${v}n`;
+          if (typeof v === "object" && v !== null) {
+            if (seen.has(v)) return "[Circular]";
+            seen.add(v);
+          }
+          return v;
+        });
+      } catch (err) {
+        return `[unserializable: ${err instanceof Error ? err.message : String(err)}]`;
+      }
+    };
+
+    // getCron() 服务快照：方法名 + 当前任务列表（仅取对账所需关键字段）
+    let cronSnapshot: unknown = null;
+    const cronService = ctx?.getCron?.();
+    if (cronService) {
+      const methods = Object.keys(cronService);
+      try {
+        const jobs = await cronService.list();
+        cronSnapshot = {
+          methods,
+          jobCount: jobs.length,
+          jobs: jobs.map((job) => ({
+            id: job.id,
+            name: job.name,
+            agentId: job.agentId,
+            enabled: job.enabled,
+            nextRunAtMs: job.state?.nextRunAtMs,
+            lastRunStatus: job.state?.lastRunStatus,
+          })),
+        };
+      } catch (err) {
+        cronSnapshot = {
+          methods,
+          listError: err instanceof Error ? err.message : String(err),
+        };
+      }
+    }
+
+    // 一行日志输出全量上下文
+    logger.log(
+      `${logTag} ${safeJson({
+        event,
+        ctx: {
+          ctxKeys: Object.keys(ctx ?? {}),
+          config: ctx?.config,
+          getCron: cronSnapshot,
+        },
+      })}`,
+    );
+  });
+}
+
 /**
  * 从 sessions_spawn 工具结果中提取 ACP child sessionKey。
  * 兼容三种 result 形态：{status, childSessionKey} 直返、JSON 字符串、
@@ -583,6 +661,8 @@ const plugin: OpenClawPluginDefinition = definePluginEntry({
       registerCLIHook(api);
       // Cron recovery hook: prunes stale cron-push-map and pushData on gateway startup
       registerCronRecoveryHook(api);
+      // Cron lifecycle observation hook: logs full cron_changed context in one line
+      registerCronChangedHook(api);
       // Skills diagnostic hook: log skill usage (detected via SKILL.md reads)
       registerSkillsDiagnosticHook(api);
       // Tool status hook: push 「调用工具：xxx」status-update frame on every tool call
