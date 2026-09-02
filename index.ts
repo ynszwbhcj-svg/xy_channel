@@ -16,6 +16,7 @@ import { createBeforePromptBuildHandler } from "./src/skill-retriever/hooks.js";
 import { normalizeToolRetrieverConfig } from "./src/skill-retriever/config.js";
 import { registerCLIHook } from "./src/tools/hmos-cli.js";
 import { registerToolStatusHook } from "./src/tool-status-hook.js";
+import { registerStepInfoHook } from "./src/tools/step-info-tool.js";
 import { recoverCronState } from "./src/cron-recovery.js";
 import type { CronRecoveryResult } from "./src/cron-recovery.js";
 import { writeSkillUsage } from "./src/utils/skills-logger.js";
@@ -667,6 +668,11 @@ const plugin: OpenClawPluginDefinition = definePluginEntry({
       registerSkillsDiagnosticHook(api);
       // Tool status hook: push 「调用工具：xxx」status-update frame on every tool call
       registerToolStatusHook(api);
+      // Step-info hook (skill usage merged in): push Common/StepInfo command on
+      // every classified tool call/result (tool_call 带 arguments,
+      // tool_result 带 success+result), and Common/Action skill commands on
+      // cd-into-skill-dir / SKILL.md reads (查看技能/使用技能)
+      registerStepInfoHook(api);
     }
   },
 });
