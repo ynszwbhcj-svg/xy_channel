@@ -16,6 +16,13 @@ export interface XYChannelConfig {
   pushUrl?: string;
   defaultSessionId?: string;
   terminalFrameDelayMs?: number;
+  /**
+   * 固定 A2A sessionId 列表（如 ["00000000"]）。这些会话的 sessionId 永不变化，
+   * clearContext 无法靠客户端换 sessionId 天然隔离，因此 channel 会在收到
+   * clearContext 时显式调用 gateway sessions.reset 轮换 openclaw 侧会话。
+   * 显式配置为空数组可禁用该行为。
+   */
+  pinnedSessionIds: string[];
 }
 
 // ============================================================================

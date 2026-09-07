@@ -56,6 +56,12 @@ export const xyConfigSchema = {
       description: "Delay in ms before sending terminal frames (completed status + final) so the content artifact clears downstream pipelines first; 0 disables",
       default: 300,
     },
+    pinnedSessionIds: {
+      type: "array",
+      items: { type: "string" },
+      description: "A2A sessionIds that never change (e.g. [\"00000000\"]). For these, clearContext triggers an explicit openclaw session reset (sessions.reset) to isolate context. Set to [] to disable.",
+      default: ["00000000"],
+    },
   },
   required: ["apiKey", "agentId", "uid", "apiId", "pushId"],
 } as const;

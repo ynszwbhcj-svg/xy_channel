@@ -2,6 +2,7 @@
 import type { ClawdbotConfig, RuntimeEnv, ReplyPayload } from "openclaw/plugin-sdk";
 import { resolveRuntimeConversationBindingRoute } from "openclaw/plugin-sdk/conversation-runtime";
 import { updateSessionStoreEntry, updateSessionStore, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import { callGatewayTool } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { getXYRuntime } from "../runtime.js";
 import { createXYReplyDispatcher } from "./reply-dispatcher.js";
 import { parseA2AMessage, extractTextFromParts, extractFileParts, extractPushId, extractDeviceType, extractAppVer, extractSdkApiVersion, extractModelName, extractTriggerData, extractRunCrossTaskContext, isClearContextMessage, isTasksCancelMessage } from "../parser.js";
@@ -31,7 +32,10 @@ import {
   markTurnInflight,
   clearTurnInflight,
   cacheXYConfig,
+  getCurrentTaskId,
+  clearWaitState,
 } from "../conversation/conversation-manager.js";
+import { clearPendingApproval } from "../approval-bridge.js";
 import type { A2AJsonRpcRequest } from "../types.js";
 import { logger } from "../utils/logger.js";
 
@@ -81,6 +85,18 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
         sessionId,
         messageId: message.id,
       });
+
+      // 🔑 固定会话特殊处理：pinnedSessionIds（默认 "00000000"）的 A2A sessionId
+      // 永不变化，clearContext 无法靠客户端换 sessionId 天然隔离上下文，因此
+      // 显式调 gateway sessions.reset 在同一个 sessionKey 下轮换 openclaw 内层
+      // sessionId（归档旧 transcript、abort 在途 run），A2A 层 sessionId 不变。
+      //
+      // 时序保证：先回响应（reset 可能因 abort 在途 run 耗时数秒，不让客户端等），
+      // 再 await reset 完成后才返回——monitor 按 sessionId 串行排队，本函数不返回
+      // 下一条消息就不会开始处理，确保其读到的是 reset 后的新会话。
+      if (config.pinnedSessionIds.includes(sessionId)) {
+        await resetPinnedOpenclawSession({ cfg, core, accountId, sessionId });
+      }
       return;
     }
 
@@ -620,6 +636,66 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
     }
 
     // ❌ Don't re-throw: message processing error should not affect gateway stability
+  }
+}
+
+/**
+ * 固定会话（pinnedSessionIds，如 "00000000"）的 clearContext 隔离实现。
+ *
+ * 通过 gateway RPC `sessions.reset` 在同一 sessionKey 下轮换 openclaw 内层
+ * sessionId：归档旧 transcript、abort 在途 run、停 subagent、清 bootstrap
+ * 缓存，下一条消息即进入全新上下文。sessionKey 与 A2A sessionId 均不变，
+ * 因此 sessionKey 反解、bindSessionKey、ACP binding 等映射全部不受影响。
+ *
+ * reset 失败只记日志不抛出（clearContext 响应已先行发出，不能让客户端挂起）；
+ * finally 中清理 channel 侧以 A2A sessionId 为 key 的内存态，避免残留导致
+ * 下一条消息被 hasActiveTask 误判为 steer、或被残留 wait state 抑制 cleanup。
+ */
+async function resetPinnedOpenclawSession(params: {
+  cfg: ClawdbotConfig;
+  core: any;
+  accountId: string;
+  sessionId: string;
+}): Promise<void> {
+  const { cfg, core, accountId, sessionId } = params;
+  const log = logger.withContext(sessionId, "");
+  try {
+    // 用与正常消息相同的路由推导拿到 sessionKey（agent:main:direct:<sessionId>）
+    const route = core.channel.routing.resolveAgentRoute({
+      cfg,
+      channel: "xiaoyi-channel",
+      accountId,
+      peer: {
+        kind: "direct" as const,
+        id: sessionId,
+      },
+    });
+    log.log(`[CLEAR_CONTEXT] Resetting pinned session via gateway RPC, sessionKey=${route.sessionKey}`);
+    // 在途 run 的 abort+等待可能长达 ~15s（openclaw 内部超时），RPC 超时给足余量
+    await callGatewayTool(
+      "sessions.reset",
+      { timeoutMs: 25_000 },
+      { key: route.sessionKey, reason: "new" },
+    );
+    log.log(`[CLEAR_CONTEXT] sessions.reset succeeded, sessionKey=${route.sessionKey}`);
+  } catch (err) {
+    log.error(`[CLEAR_CONTEXT] sessions.reset failed (context may not be isolated):`, err);
+  } finally {
+    try {
+      const currentTaskId = getCurrentTaskId(sessionId);
+      if (currentTaskId) {
+        clearTurnInflight(sessionId, currentTaskId);
+      }
+      // clearWaitState 单次只清一条，循环清空该会话的全部残留等待态
+      while (clearWaitState(sessionId, "clear-context")) {
+        // keep draining
+      }
+      completeTask(sessionId);
+      clearPendingApproval(sessionId);
+      log.log(`[CLEAR_CONTEXT] Local conversation state cleaned`);
+    } catch (cleanupErr) {
+      log.error(`[CLEAR_CONTEXT] Failed to clean local conversation state:`, cleanupErr);
+    }
   }
 }
 
