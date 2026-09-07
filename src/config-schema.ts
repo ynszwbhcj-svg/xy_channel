@@ -71,6 +71,12 @@ export const xyConfigSchema = {
       description: "First reconnect attempt is uniformly spread over [0, this] ms so mass reconnects after a server outage don't arrive as one burst",
       default: 3000,
     },
+    pinnedSessionIds: {
+      type: "array",
+      items: { type: "string" },
+      description: "A2A sessionIds that never change (e.g. [\"00000000\"]). For these, clearContext triggers an explicit openclaw session reset (sessions.reset) to isolate context. Set to [] to disable.",
+      default: ["00000000"],
+    },
   },
   required: ["apiKey", "agentId", "uid", "apiId", "pushId"],
 } as const;

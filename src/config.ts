@@ -35,6 +35,10 @@ export function resolveXYConfig(cfg: ClawdbotConfig): XYChannelConfig {
     pushUrl: xyConfig.pushUrl,
     defaultSessionId: xyConfig.defaultSessionId,
     terminalFrameDelayMs: xyConfig.terminalFrameDelayMs ?? 300,
+    // 固定会话列表：缺省默认 ["00000000"]；显式配置 [] 表示禁用 reset 特殊处理
+    pinnedSessionIds: Array.isArray(xyConfig.pinnedSessionIds)
+      ? xyConfig.pinnedSessionIds.filter((id: unknown) => typeof id === "string" && id.trim() !== "")
+      : ["00000000"],
   };
 }
 
