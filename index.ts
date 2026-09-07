@@ -15,6 +15,8 @@ import { registerSelfEvolutionToolResultNudge } from "./src/self-evolution-tool-
 import { createBeforePromptBuildHandler } from "./src/skill-retriever/hooks.js";
 import { normalizeToolRetrieverConfig } from "./src/skill-retriever/config.js";
 import { registerCLIHook } from "./src/tools/hmos-cli.js";
+import { registerToolStatusHook } from "./src/tool-status-hook.js";
+import { registerStepInfoHook } from "./src/tools/step-info-tool.js";
 import { recoverCronState } from "./src/cron-recovery.js";
 import type { CronRecoveryResult } from "./src/cron-recovery.js";
 import { writeSkillUsage } from "./src/utils/skills-logger.js";
@@ -25,8 +27,25 @@ import {
 } from "./src/conversation/conversation-manager.js";
 import { notifyCronAgentEnd } from "./src/conversation/cron-buffer.js";
 import { logger } from "./src/utils/logger.js";
-import { extractSkillNameFromPath, resolveActualToolName } from "./src/utils/skill-path.js";
-import { registerStepProgressHook } from "./src/step-progress.js";
+
+/**
+ * Parse a file path string to detect if it refers to a SKILL.md file within
+ * a skills directory. Returns the skill name (parent directory) if so.
+ *
+ * Matches paths like:
+ *   ~/.openclaw/workspace/skills/my-skill/SKILL.md
+ *   /home/user/core_skills/my-skill/SKILL.md
+ *   skills/my-skill/SKILL.md
+ */
+function extractSkillNameFromPath(filePath: unknown): string | null {
+  if (typeof filePath !== "string" || !filePath) return null;
+  // Normalize common path prefixes
+  const normalized = filePath.replace(/^~\//, "/home/").replace(/\\/g, "/");
+  // Match: .../skills/<skillName>/SKILL.md  or  .../skills/<skillName>/...
+  // Also match: .../core_skills/<skillName>/SKILL.md
+  const match = normalized.match(/\/(?:core_)?skills\/([^/]+)\/SKILL\.md$/i);
+  return match ? match[1] : null;
+}
 
 /**
  * Register the skills diagnostic event listener via after_tool_call hook.
@@ -54,6 +73,17 @@ function registerSkillsDiagnosticHook(api: OpenClawPluginApi) {
   const TOOL_SKILL_MAP: Record<string, string> = Object.fromEntries(
     Object.entries(SKILL_TOOLS).flatMap(([skill, tools]) => tools.map((t) => [t, skill])),
   );
+
+  // Resolve the actual tool name from call_device_tool wrapper.
+  // The model calls call_device_tool({ toolName: "...", arguments: {...} })
+  // — the real tool name is inside params, not event.toolName.
+  function resolveActualToolName(event: { toolName: string; params: Record<string, unknown> }): string {
+    if (event.toolName === "call_device_tool") {
+      const inner = event.params?.toolName;
+      if (typeof inner === "string" && inner.length > 0) return inner;
+    }
+    return event.toolName;
+  }
 
   // Log skill usage for known device tools on before_tool_call
   api.on("before_tool_call", async (event, _ctx) => {
@@ -348,6 +378,84 @@ function registerCronRecoveryHook(api: OpenClawPluginApi): void {
   });
 }
 
+// ── Cron lifecycle observation: cron_changed hook ──────────────────────────
+
+/**
+ * Register the cron_changed hook.
+ *
+ * openclaw 的 gateway 在 cron 任务生命周期变化（added/updated/removed/
+ * started/finished）时发射该钩子，事件载荷为 PluginHookCronChangedEvent，
+ * ctx 为 PluginHookGatewayContext（实际只注入 config 与 getCron 两个字段，
+ * 不含 port/workspaceDir）。
+ *
+ * 这里注册一个观察处理器：把钩子内能拿到的全量上下文序列化成一行日志
+ * （event 全量 + ctx 键名 + ctx.config 全量 + ctx.getCron() 服务快照），
+ * 写入 /tmp/openclaw/xiaoyi-channel-<日期>.log，用于排查外部唤醒调度器
+ * 同步、任务对账等问题。getCron() 返回的是 gateway 活实例，list() 结果
+ * 只作日志快照，到期判断与执行仍以 openclaw 自身为准。
+ */
+function registerCronChangedHook(api: OpenClawPluginApi): void {
+  api.on("cron_changed", async (event, ctx) => {
+    const logTag = "[XY-CRON-CHANGED]";
+
+    // 防御性序列化：容忍 bigint、循环引用与不可序列化值，保证单行输出不炸
+    const safeJson = (value: unknown): string => {
+      const seen = new WeakSet();
+      try {
+        return JSON.stringify(value, (_key, v) => {
+          if (typeof v === "bigint") return `${v}n`;
+          if (typeof v === "object" && v !== null) {
+            if (seen.has(v)) return "[Circular]";
+            seen.add(v);
+          }
+          return v;
+        });
+      } catch (err) {
+        return `[unserializable: ${err instanceof Error ? err.message : String(err)}]`;
+      }
+    };
+
+    // getCron() 服务快照：方法名 + 当前任务列表（仅取对账所需关键字段）
+    let cronSnapshot: unknown = null;
+    const cronService = ctx?.getCron?.();
+    if (cronService) {
+      const methods = Object.keys(cronService);
+      try {
+        const jobs = await cronService.list();
+        cronSnapshot = {
+          methods,
+          jobCount: jobs.length,
+          jobs: jobs.map((job) => ({
+            id: job.id,
+            name: job.name,
+            agentId: job.agentId,
+            enabled: job.enabled,
+            nextRunAtMs: job.state?.nextRunAtMs,
+            lastRunStatus: job.state?.lastRunStatus,
+          })),
+        };
+      } catch (err) {
+        cronSnapshot = {
+          methods,
+          listError: err instanceof Error ? err.message : String(err),
+        };
+      }
+    }
+
+    // 一行日志输出全量上下文
+    logger.log(
+      `${logTag} ${safeJson({
+        event,
+        ctx: {
+          ctxKeys: Object.keys(ctx ?? {}),
+          config: ctx?.config,
+          getCron: cronSnapshot,
+        },
+      })}`,
+    );
+  });
+}
+
 /**
  * 从 sessions_spawn 工具结果中提取 ACP child sessionKey。
  * 兼容三种 result 形态：{status, childSessionKey} 直返、JSON 字符串、
@@ -554,10 +662,17 @@ const plugin: OpenClawPluginDefinition = definePluginEntry({
       registerCLIHook(api);
       // Cron recovery hook: prunes stale cron-push-map and pushData on gateway startup
       registerCronRecoveryHook(api);
+      // Cron lifecycle observation hook: logs full cron_changed context in one line
+      registerCronChangedHook(api);
       // Skills diagnostic hook: log skill usage (detected via SKILL.md reads)
       registerSkillsDiagnosticHook(api);
-      // Step progress hook: push skill/tool progress cards (UserInteraction commands)
-      registerStepProgressHook(api);
+      // Tool status hook: push 「调用工具：xxx」status-update frame on every tool call
+      registerToolStatusHook(api);
+      // Step-info hook (skill usage merged in): push Common/StepInfo command on
+      // every classified tool call/result (tool_call 带 arguments,
+      // tool_result 带 success+result), and Common/Action skill commands on
+      // cd-into-skill-dir / SKILL.md reads (查看技能/使用技能)
+      registerStepInfoHook(api);
     }
   },
 });

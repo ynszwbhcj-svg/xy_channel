@@ -108,7 +108,7 @@ export const callDeviceTool = {
 
     const { toolName, arguments: toolArgs } = params;
 
-    // 进度展示由 step-progress 钩子统一以 DisplayExecuteStatusCard 下发
+    // 「调用工具：xxx」状态帧由 tool-status-hook 的 before_tool_call 钩子统一下发
 
     const tool = deviceToolRegistry.get(toolName);
     if (!tool) {
