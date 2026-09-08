@@ -166,7 +166,7 @@ export async function searchTools(options: SearchToolsOptions): Promise<ToolSear
     "x-hag-trace-id": traceId,
     "x-uid": uid,
     "x-api-key": apiKey,
-    "x-request-from": "openclaw",
+    "x-request-from": "taskSandbox",
   };
 
 

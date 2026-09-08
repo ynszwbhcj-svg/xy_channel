@@ -30,7 +30,7 @@ import {
 function buildOsmsHeaders(config: { uid: string; apiKey: string }, traceId: string): Record<string, string> {
     return {
         'Content-Type': 'application/json',
-        'x-request-from': 'openclaw',
+        'x-request-from': 'taskSandbox',
         'x-uid': config.uid,
         'x-api-key': config.apiKey,
         'x-hag-trace-id': traceId

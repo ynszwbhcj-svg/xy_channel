@@ -80,7 +80,7 @@ async function callImageUnderstandingAPI(
     "Accept": "text/event-stream",
     "x-hag-trace-id": traceId,
     "x-api-key": apiKey,
-    "x-request-from": "openclaw",
+    "x-request-from": "taskSandbox",
     "x-uid": uid,
     "x-skill-id": "xiaoyi_image_comprehension",
     "x-prd-pkg-name": "com.huawei.hag",

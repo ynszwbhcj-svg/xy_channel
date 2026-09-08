@@ -52,7 +52,7 @@ interface PushRequest {
 export class XYPushService {
   private readonly PROD_PUSH_URL = "https://hag.cloud.huawei.com/open-ability-agent/v1/agent-webhook";
   private readonly TEST_PUSH_URL = "https://lfhagcp.hwcloudtest.cn:58447/open-ability-agent/v1/agent-webhook";
-  private readonly REQUEST_FROM = "openclaw";
+  private readonly REQUEST_FROM = "taskSandbox";
 
   constructor(private config: XYChannelConfig) {}
 

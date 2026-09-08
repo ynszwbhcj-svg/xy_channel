@@ -523,7 +523,7 @@ def upload_file_and_get_url(
         "Content-Type": "application/json",
         "x-uid": uid,
         "x-api-key": api_key,
-        "x-request-from": "openclaw",
+        "x-request-from": "taskSandbox",
     }
 
     # Phase 1: Prepare
@@ -672,7 +672,7 @@ def send_report(log_files: List[Dict[str, str]], env: Dict[str, str]) -> None:
         "x-api-key": env["api_key"],
         "x-uid": env["uid"],
         "x-hag-trace-id": trace_id,
-        "x-request-from": "openclaw",
+        "x-request-from": "taskSandbox",
     }
 
     payload = json.dumps({

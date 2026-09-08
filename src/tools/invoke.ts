@@ -755,7 +755,7 @@ function buildHeaders(config: CloudConfig, skillName: string, protocol: Protocol
     "x-hag-trace-id": taskId,
     "x-uid": config.uid,
     "x-api-key": config.apiKey,
-    "x-request-from": "openclaw",
+    "x-request-from": "taskSandbox",
     "x-skill-id": skillName,
     "x-prd-pkg-name": "com.huawei.hag",
   };

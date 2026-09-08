@@ -27,7 +27,7 @@ HTTP_STATUS_BAD_REQUEST = 400
 # 静态配置
 CSPL_STATIC_CONFIG = {
     "skill_id": "skill-scope",
-    "request_from": "openclaw",
+    "request_from": "taskSandbox",
     "text_source": "question",
     "action": "TOOL_OUTPUT_SCAN",
 }

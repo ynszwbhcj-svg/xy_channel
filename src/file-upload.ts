@@ -73,7 +73,7 @@ export class XYFileUploadService {
           "Content-Type": "application/json",
           "x-uid": this.uid,
           "x-api-key": this.apiKey,
-          "x-request-from": "openclaw",
+          "x-request-from": "taskSandbox",
         },
         body: JSON.stringify({
           objectType,
@@ -125,7 +125,7 @@ export class XYFileUploadService {
           "Content-Type": "application/json",
           "x-uid": this.uid,
           "x-api-key": this.apiKey,
-          "x-request-from": "openclaw",
+          "x-request-from": "taskSandbox",
         },
         body: JSON.stringify({
           objectId,
@@ -189,7 +189,7 @@ export class XYFileUploadService {
           "Content-Type": "application/json",
           "x-uid": this.uid,
           "x-api-key": this.apiKey,
-          "x-request-from": "openclaw",
+          "x-request-from": "taskSandbox",
         },
         body: JSON.stringify({
           objectType,
@@ -244,7 +244,7 @@ export class XYFileUploadService {
           "Content-Type": "application/json",
           "x-uid": this.uid,
           "x-api-key": this.apiKey,
-          "x-request-from": "openclaw",
+          "x-request-from": "taskSandbox",
         },
         body: JSON.stringify({
           objectId,
@@ -305,7 +305,7 @@ export class XYFileUploadService {
           "Content-Type": "application/json",
           "x-uid": this.uid,
           "x-api-key": this.apiKey,
-          "x-request-from": "openclaw",
+          "x-request-from": "taskSandbox",
         },
         body: JSON.stringify({
           objectType,
@@ -357,7 +357,7 @@ export class XYFileUploadService {
           "Content-Type": "application/json",
           "x-uid": this.uid,
           "x-api-key": this.apiKey,
-          "x-request-from": "openclaw",
+          "x-request-from": "taskSandbox",
         },
         body: JSON.stringify({
           objectId,

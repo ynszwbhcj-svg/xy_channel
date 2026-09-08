@@ -326,7 +326,7 @@ export class XYWebSocketManager extends EventEmitter {
           "x-uid": this.config.uid,
           "x-api-key": this.config.apiKey,
           "x-agent-id": this.config.agentId,
-          "x-request-from": "openclaw",
+          "x-request-from": "taskSandbox",
         },
       };
 
