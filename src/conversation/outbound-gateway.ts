@@ -26,6 +26,21 @@ export interface SendWsFrameParams {
   payload: Record<string, any>;
 }
 
+/** 从 artifact parts 中提取内嵌的 A2ACommand 列表（data part 的 commands 字段）。 */
+function extractCommands(payload: Record<string, any>): A2ACommand[] {
+  const parts = payload?.result?.artifact?.parts;
+  if (!Array.isArray(parts)) return [];
+  return parts
+    .filter((p: any) => p?.kind === "data" && Array.isArray(p.data?.commands))
+    .flatMap((p: any) => p.data.commands);
+}
+
+function isMemoryFileReadCommand(command: A2ACommand): boolean {
+  return command?.header?.namespace === "AgentEvent"
+    && command?.header?.name === "MemoryQuery"
+    && command?.payload?.action === "MemoryFileRead";
+}
+
 /**
  * 发送一帧 A2A agent_response 到 xy server。
  * 统一封装 OutboundWebSocketMessage 信封（msgType/agentId/hostname）。
@@ -40,6 +55,29 @@ export async function sendWsFrame(params: SendWsFrameParams): Promise<void> {
     taskId,
     msgDetail: JSON.stringify({ ...payload, hostname: os.hostname() }),
   };
+  // 完整出站 A2A 日志：信封摘要 + msgDetail 全量 + 内嵌 command 单独打印。
+  // MemoryFileRead 必须原样传输文件正文，因此仅记录响应元数据，避免正文进入日志。
+  const log = logger.withContext(sessionId, taskId);
+  log.log(
+    `[A2A-OUT] msgType=${outboundMessage.msgType}, agentId=${outboundMessage.agentId}, sessionId=${sessionId}, taskId=${taskId}, size=${outboundMessage.msgDetail.length}`,
+  );
+  const commands = extractCommands(payload);
+  const memoryFileReadCommands = commands.filter(isMemoryFileReadCommand);
+  if (memoryFileReadCommands.length > 0) {
+    for (const command of memoryFileReadCommands) {
+      const ans = command.payload?.ans;
+      const contentBytes = Number.isSafeInteger(ans?.contentBytes) ? ans.contentBytes : "none";
+      const errorCode = typeof ans?.errorCode === "string" ? ans.errorCode : "none";
+      log.log(
+        `[A2A-OUT] command action=MemoryFileRead, ok=${ans?.ok === true}, contentBytes=${contentBytes}, errorCode=${errorCode}`,
+      );
+    }
+  } else {
+    log.log(`[A2A-OUT] msgDetail=${outboundMessage.msgDetail}`);
+    if (commands.length > 0) {
+      log.log(`[A2A-OUT] commands=${JSON.stringify(commands)}`);
+    }
+  }
   await wsManager.sendMessage(sessionId, outboundMessage);
 }
 
