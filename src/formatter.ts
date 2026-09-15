@@ -45,6 +45,23 @@ function redactMessagePayload(value: any, currentKey?: string): any {
   return value;
 }
 
+/** 文件同步合同要求按原始 UTF-8 正文返回；其他字段仍按通用规则脱敏。 */
+function isSuccessfulMemoryFileReadCommand(command: any): boolean {
+  return command?.header?.namespace === "AgentEvent"
+    && command?.header?.name === "MemoryQuery"
+    && command?.payload?.action === "MemoryFileRead"
+    && command?.payload?.ans?.ok === true
+    && typeof command?.payload?.ans?.content === "string";
+}
+
+function redactCommandForTransport(command: any): any {
+  const redactedCommand = redactMessagePayload(command);
+  if (isSuccessfulMemoryFileReadCommand(command)) {
+    redactedCommand.payload.ans.content = command.payload.ans.content;
+  }
+  return redactedCommand;
+}
+
 function buildTextPreview(text: string): string {
   if (typeof text !== "string" || text.length === 0) {
     return "";
@@ -343,6 +360,7 @@ export async function sendCommand(params: SendCommandParams): Promise<void> {
 
   // Build artifact update with command as data
   // Wrap command in commands array as per protocol requirement
+  const transportCommands = commands.map(redactCommandForTransport);
   const artifact: A2ATaskArtifactUpdateEvent = {
     taskId,
     kind: "artifact-update",
@@ -355,15 +373,12 @@ export async function sendCommand(params: SendCommandParams): Promise<void> {
         {
           kind: "data",
           data: {
-            commands,
+            commands: transportCommands,
           },
         },
       ],
     },
   };
-
-  // 对消息内容字段做敏感信息脱敏
-  artifact.artifact.parts = redactMessagePayload(artifact.artifact.parts, "parts");
 
   // Build JSON-RPC response
   const jsonRpcResponse = {
