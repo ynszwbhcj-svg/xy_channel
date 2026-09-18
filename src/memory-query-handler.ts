@@ -3,7 +3,17 @@
 // handles memory state read/write and MEMORY.md/USER.md file queries.
 import * as os from "os";
 import * as path from "path";
-import { readFileSync, writeFileSync } from "fs";
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  renameSync,
+  unlinkSync,
+  writeFileSync,
+} from "fs";
+import { randomUUID } from "crypto";
 import { sendCommand } from "./formatter.js";
 import { resolveXYConfig } from "./config.js";
 import { logger } from "./utils/logger.js";
@@ -11,6 +21,22 @@ import { logger } from "./utils/logger.js";
 const XIAOYIRUNTIME_PATH_PRIMARY = "/home/sandbox/.openclaw/.xiaoyiruntime";
 const XIAOYIRUNTIME_PATH_FALLBACK = `${os.homedir()}/.openclaw/.xiaoyiruntime`;
 const MEMORY_STATE_KEY = "MEMORYSTATE";
+export const MEMORY_FILE_ROOT = "/home/sandbox/.openclaw/workspace/memory/celia_memory";
+
+type MemoryFileErrorCode = "INVALID_REQUEST" | "INVALID_PATH" | "NOT_FOUND" | "IO_ERROR";
+type MemoryFileFailure = { ok: false; errorCode: MemoryFileErrorCode; message: string };
+type MemoryFileWriteResult = { ok: true; bytesWritten: number } | MemoryFileFailure;
+type MemoryFileReadResult = { ok: true; content: string; contentBytes: number } | MemoryFileFailure;
+
+class MemoryFileError extends Error {
+  constructor(
+    readonly errorCode: MemoryFileErrorCode,
+    message: string,
+  ) {
+    super(message);
+    this.name = "MemoryFileError";
+  }
+}
 
 /** Resolve writable .xiaoyiruntime path: try sandbox path first, fallback to user home. */
 function resolveXiaoyiRuntimePath(): string {
@@ -33,7 +59,7 @@ function resolveXiaoyiRuntimePath(): string {
   return XIAOYIRUNTIME_PATH_FALLBACK;
 }
 
-export async function handleMemoryQueryEvent(context: any, cfg: any): Promise<void> {
+export async function handleMemoryQueryEvent(context: any, cfg: any): Promise<any> {
   const { action, params, sessionId, taskId, messageId } = context;
   const log = logger.withContext(sessionId ?? "", taskId ?? "");
   log.log(`[MEMORY-QUERY] Received event: action=${action}`);
@@ -57,6 +83,12 @@ export async function handleMemoryQueryEvent(context: any, cfg: any): Promise<vo
       case "MemoryHistory":
         result = handleMemoryHistory();
         break;
+      case "MemoryFileWrite":
+        result = handleMemoryFileWrite(params);
+        break;
+      case "MemoryFileRead":
+        result = handleMemoryFileRead(params);
+        break;
       default:
         log.error(`[MEMORY-QUERY] Unknown action: ${action}`);
         result = { error: `Unknown action: ${action}` };
@@ -67,7 +99,13 @@ export async function handleMemoryQueryEvent(context: any, cfg: any): Promise<vo
     result = { error: errorMsg };
   }
 
-  log.log(`[MEMORY-QUERY] Result for action=${action}: ${JSON.stringify(result)}`);
+  if (action === "MemoryFileWrite" || action === "MemoryFileRead") {
+    log.log(
+      `[MEMORY-QUERY] Result for action=${action}: ok=${result?.ok === true}, errorCode=${result?.errorCode ?? "none"}`,
+    );
+  } else {
+    log.log(`[MEMORY-QUERY] Result for action=${action}: ${JSON.stringify(result)}`);
+  }
 
   // Send result back via sendCommand
   if (cfg && sessionId && taskId && messageId) {
@@ -97,6 +135,161 @@ export async function handleMemoryQueryEvent(context: any, cfg: any): Promise<vo
     }
   } else {
     log.warn(`[MEMORY-QUERY] Missing cfg/sessionId/taskId/messageId, skipping sendCommand`);
+  }
+
+  return result;
+}
+
+function sanitizeFileNameForLog(value: unknown): string {
+  if (typeof value !== "string") return "<invalid>";
+  return value.replace(/[\u0000-\u001f\u007f]/g, "?").slice(0, 512);
+}
+
+function validateFileName(value: unknown): string {
+  if (typeof value !== "string" || value.length === 0) {
+    throw new MemoryFileError("INVALID_REQUEST", "fileName must be a non-empty string");
+  }
+  if (
+    value === "." ||
+    value === ".." ||
+    value.includes("/") ||
+    value.includes("\\") ||
+    /[\u0000-\u001f\u007f]/.test(value) ||
+    Buffer.byteLength(value, "utf-8") > 255
+  ) {
+    throw new MemoryFileError("INVALID_PATH", "fileName must be a single valid file name");
+  }
+  return value;
+}
+
+function resolveReadPath(fileName: string, rootDir: string): string {
+  const realRoot = realpathSync(rootDir);
+  const targetPath = path.join(realRoot, fileName);
+  const targetLstat = lstatSync(targetPath);
+  if (targetLstat.isSymbolicLink()) {
+    throw new MemoryFileError("INVALID_PATH", "Symbolic link files are not allowed");
+  }
+  if (!targetLstat.isFile()) {
+    throw new MemoryFileError("INVALID_PATH", "Target must be a regular file");
+  }
+  return targetPath;
+}
+
+function resolveWritePath(fileName: string, rootDir: string): string {
+  if (!path.isAbsolute(rootDir)) {
+    throw new MemoryFileError("IO_ERROR", "Memory file root is invalid");
+  }
+  mkdirSync(rootDir, { recursive: true });
+  const realRoot = realpathSync(rootDir);
+  const targetPath = path.join(realRoot, fileName);
+  if (existsSync(targetPath)) {
+    const targetLstat = lstatSync(targetPath);
+    if (targetLstat.isSymbolicLink() || !targetLstat.isFile()) {
+      throw new MemoryFileError("INVALID_PATH", "Target must be a regular file");
+    }
+  }
+  return targetPath;
+}
+
+function toMemoryFileFailure(error: unknown): MemoryFileFailure {
+  if (error instanceof MemoryFileError) {
+    return { ok: false, errorCode: error.errorCode, message: error.message };
+  }
+
+  const errorCode = typeof error === "object" && error !== null && "code" in error
+    ? String((error as { code?: unknown }).code)
+    : "";
+  if (errorCode === "ENOENT") {
+    return { ok: false, errorCode: "NOT_FOUND", message: "File does not exist" };
+  }
+  if (errorCode === "EISDIR" || errorCode === "ENOTDIR" || errorCode === "ELOOP") {
+    return { ok: false, errorCode: "INVALID_PATH", message: "Target is not a valid regular file" };
+  }
+  return { ok: false, errorCode: "IO_ERROR", message: "File operation failed" };
+}
+
+function logMemoryFileFailure(
+  operation: "MemoryFileWrite" | "MemoryFileRead",
+  fileName: string,
+  failure: MemoryFileFailure,
+  error: unknown,
+): void {
+  const message = `[MEMORY-QUERY] ${operation} failed: fileName=${fileName}, errorCode=${failure.errorCode}`;
+  if (failure.errorCode === "NOT_FOUND") {
+    logger.log(message);
+  } else if (failure.errorCode === "IO_ERROR") {
+    logger.error(message, error);
+  } else {
+    logger.warn(message);
+  }
+}
+
+/** Atomically write UTF-8 text beneath the fixed memory file root. */
+export function handleMemoryFileWrite(
+  params: any,
+  rootDir = MEMORY_FILE_ROOT,
+): MemoryFileWriteResult {
+  const startedAt = Date.now();
+  const body = params?.body ?? params;
+  const fileNameForLog = sanitizeFileNameForLog(body?.fileName);
+  let tmpPath: string | undefined;
+
+  try {
+    const fileName = validateFileName(body?.fileName);
+    if (typeof body?.content !== "string") {
+      throw new MemoryFileError("INVALID_REQUEST", "content must be a string");
+    }
+    const contentBytes = Buffer.byteLength(body.content, "utf-8");
+
+    logger.log(`[MEMORY-QUERY] MemoryFileWrite received: fileName=${fileNameForLog}, contentBytes=${contentBytes}`);
+    const targetPath = resolveWritePath(fileName, rootDir);
+    tmpPath = path.join(path.dirname(targetPath), `.memory-file.tmp.${process.pid}.${randomUUID()}`);
+    writeFileSync(tmpPath, body.content, { encoding: "utf-8", flag: "wx" });
+    renameSync(tmpPath, targetPath);
+    tmpPath = undefined;
+
+    logger.log(
+      `[MEMORY-QUERY] MemoryFileWrite completed: fileName=${fileNameForLog}, contentBytes=${contentBytes}, durationMs=${Date.now() - startedAt}`,
+    );
+    return { ok: true, bytesWritten: contentBytes };
+  } catch (error) {
+    if (tmpPath) {
+      try {
+        unlinkSync(tmpPath);
+      } catch {
+        // The temporary file may not exist or may already have been renamed.
+      }
+    }
+    const failure = toMemoryFileFailure(error);
+    logMemoryFileFailure("MemoryFileWrite", fileNameForLog, failure, error);
+    return failure;
+  }
+}
+
+/** Read UTF-8 text beneath the fixed memory file root without interpreting it. */
+export function handleMemoryFileRead(
+  params: any,
+  rootDir = MEMORY_FILE_ROOT,
+): MemoryFileReadResult {
+  const startedAt = Date.now();
+  const body = params?.body ?? params;
+  const fileNameForLog = sanitizeFileNameForLog(body?.fileName);
+
+  try {
+    const fileName = validateFileName(body?.fileName);
+    logger.log(`[MEMORY-QUERY] MemoryFileRead received: fileName=${fileNameForLog}`);
+    const targetPath = resolveReadPath(fileName, rootDir);
+    const contentBuffer = readFileSync(targetPath);
+    const content = contentBuffer.toString("utf-8");
+
+    logger.log(
+      `[MEMORY-QUERY] MemoryFileRead completed: fileName=${fileNameForLog}, contentBytes=${contentBuffer.byteLength}, durationMs=${Date.now() - startedAt}`,
+    );
+    return { ok: true, content, contentBytes: contentBuffer.byteLength };
+  } catch (error) {
+    const failure = toMemoryFileFailure(error);
+    logMemoryFileFailure("MemoryFileRead", fileNameForLog, failure, error);
+    return failure;
   }
 }
 
