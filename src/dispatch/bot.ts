@@ -38,6 +38,11 @@ import {
 import { clearPendingApproval } from "../approval-bridge.js";
 import type { A2AJsonRpcRequest } from "../types.js";
 import { logger } from "../utils/logger.js";
+import {
+  isImageAttachment,
+  resolveModelCapabilities,
+  withImagePreservingFollowupQueue,
+} from "../model-capabilities.js";
 
 /**
  * Parameters for handling an XY message.
@@ -366,6 +371,17 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
     const downloadedFiles = await downloadFilesFromParts(fileParts);
     log.log(`[BOT] Downloaded ${downloadedFiles.length} file(s)`);
     mediaPayload = buildXYMediaPayload(downloadedFiles);
+    const hasImageAttachment = downloadedFiles.some(isImageAttachment);
+    const selectedModelCapabilities = modelName
+      ? resolveModelCapabilities({ modelId: modelName, config: cfg })
+      : undefined;
+    if (hasImageAttachment) {
+      log.log(
+        `[MODEL-CAPABILITY] model=${modelName || "(session/default)"} nativeImageInput=` +
+        `${selectedModelCapabilities?.supportsNativeImages ?? "unknown"} ` +
+        `source=${selectedModelCapabilities?.source ?? "session-model"}`,
+      );
+    }
 
     // 🔑 对于 steer 消息，将文件路径附加到消息文本中。
     // auto-reply 管道的 steer 注入只携带 prompt 文本（followupRun.prompt），
@@ -385,7 +401,16 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
     // 直接注入失败时，落回普通 tasks/send 派发作为全新 turn（不再使用
     // /steer 命令体 + steered dispatcher 兜底）：此时旧 run 已结束，用户侧
     // 感知对话连续（新 turn 立即发送自己的 working 状态帧）。
-    if (isUpdate && route.sessionKey) {
+    // Live steer accepts text only. When the selected model supports native
+    // images (or the message omitted modelName and the session model is not
+    // known here), use the normal dispatcher with follow-up queue mode so the
+    // image blocks survive until the active run finishes.
+    const preserveImageForQueuedTurn =
+      isUpdate &&
+      hasImageAttachment &&
+      (!selectedModelCapabilities || selectedModelCapabilities.supportsNativeImages);
+
+    if (isUpdate && route.sessionKey && !preserveImageForQueuedTurn) {
       const steerResult = tryDirectSteer({
         sessionId: parsed.sessionId,
         sessionKey: route.sessionKey,
@@ -418,6 +443,13 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
         bindSessionKey(route.sessionKey, parsed.sessionId, parsed.taskId, parsed.messageId);
         log.log(`[BOT-STEER] Rebound sessionKey to new taskId (no active run, no pending subagent wait)`);
       }
+    }
+
+    const dispatchCfg = preserveImageForQueuedTurn
+      ? withImagePreservingFollowupQueue(cfg as Record<string, any>) as ClawdbotConfig
+      : cfg;
+    if (preserveImageForQueuedTurn) {
+      log.log(`[BOT-STEER] Image-bearing multimodal turn will use image-preserving followup queue`);
     }
 
     // Resolve envelope format options (following feishu pattern)
@@ -579,7 +611,7 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
           try {
             const result = await core.channel.reply.dispatchReplyFromConfig({
               ctx: ctxPayload,
-              cfg,
+              cfg: dispatchCfg,
               dispatcher,
               replyOptions,
             });

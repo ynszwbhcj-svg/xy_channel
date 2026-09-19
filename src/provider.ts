@@ -15,6 +15,7 @@ import { notifyCronDetected } from "./conversation/cron-buffer.js";
 import { selfEvolutionManager } from "./utils/self-evolution-manager.js";
 import { setCompactionConfig, setCompactionSessionSnapshot } from "./compaction-provider.js";
 import { sendStatusUpdate } from "./formatter.js";
+import { resolveModelCapabilities } from "./model-capabilities.js";
 
 // ── Retry config ──────────────────────────────────────────────
 const RETRY_DELAYS_MS = [10_000, 20_000, 40_000, 60_000, 60_000];
@@ -689,6 +690,11 @@ export const xiaoyiProvider: ProviderPlugin = {
       baseUrl = (ctx.config as any)?.models?.providers?.zai?.baseUrl;
     }
     if (!baseUrl || typeof baseUrl !== "string") return null;
+    const capabilities = resolveModelCapabilities({
+      modelId: ctx.modelId,
+      config: ctx.config,
+      providerConfig: ctx.providerConfig,
+    });
     return {
       id: ctx.modelId,
       name: ctx.modelId,
@@ -696,7 +702,7 @@ export const xiaoyiProvider: ProviderPlugin = {
       provider: "xiaoyiprovider",
       baseUrl,
       reasoning: true,
-      input: ["text"],
+      input: capabilities.input,
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: 256_000,
       maxTokens: 64_000,
@@ -714,6 +720,21 @@ export const xiaoyiProvider: ProviderPlugin = {
             [HEADER_SESSION_ID]: globalTraceContext.sessionId,
             [HEADER_INTERACTION_ID]: globalTraceContext.interactionId,
           } } : {})),
+    };
+  },
+
+  /**
+   * Apply capability metadata to both configured and dynamically resolved
+   * models before OpenClaw decides whether to load native image blocks.
+   */
+  normalizeResolvedModel: (ctx) => {
+    const capabilities = resolveModelCapabilities({
+      modelId: ctx.modelId,
+      config: ctx.config,
+    });
+    return {
+      ...ctx.model,
+      input: capabilities.input,
     };
   },
 
@@ -1046,7 +1067,20 @@ export const xiaoyiProvider: ProviderPlugin = {
       const modelNameOverride = getCurrentSessionContext()?.modelName;
       if (modelNameOverride && modelNameOverride.trim() !== "" && modelNameOverride.toLowerCase() !== "none") {
         logger.log(`[xiaoyiprovider] overriding model.id: ${model.id} → ${modelNameOverride}`);
-        model = { ...model, id: modelNameOverride };
+        const capabilities = resolveModelCapabilities({
+          modelId: modelNameOverride,
+          config: ctx.config,
+        });
+        model = {
+          ...model,
+          id: modelNameOverride,
+          name: modelNameOverride,
+          input: capabilities.input,
+        };
+        logger.log(
+          `[MODEL-CAPABILITY] model=${modelNameOverride} nativeImageInput=` +
+          `${capabilities.supportsNativeImages} source=${capabilities.source}`,
+        );
       }
 
       // ── Retry-capable streaming ──────────────────────────────
@@ -1086,11 +1120,21 @@ export const xiaoyiProvider: ProviderPlugin = {
           ? sessionCtx.sessionId
           : undefined;
 
+      const fallbackCapabilities = resolveModelCapabilities({
+        modelId: KIMI_K3_FALLBACK_MODEL_ID,
+        config: ctx.config,
+      });
+
       return createRetryingStream(makeStream, {
         cronJob,
         retryOnAnyError: isKimiK3,
         fallbackCreateStream: isKimiK3
-          ? () => underlying({ ...model, id: KIMI_K3_FALLBACK_MODEL_ID, name: KIMI_K3_FALLBACK_MODEL_ID }, context, streamCallOptions)
+          ? () => underlying({
+              ...model,
+              id: KIMI_K3_FALLBACK_MODEL_ID,
+              name: KIMI_K3_FALLBACK_MODEL_ID,
+              input: fallbackCapabilities.input,
+            }, context, streamCallOptions)
           : undefined,
         onFallback: isKimiK3 ? notifyKimiK3Fallback : undefined,
         onFallbackDone: isKimiK3
