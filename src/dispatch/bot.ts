@@ -1,7 +1,7 @@
 // Message dispatch engine - following feishu/bot.ts pattern (simplified)
 import type { ClawdbotConfig, RuntimeEnv, ReplyPayload } from "openclaw/plugin-sdk";
 import { resolveRuntimeConversationBindingRoute } from "openclaw/plugin-sdk/conversation-runtime";
-import { updateSessionStoreEntry, updateSessionStore, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import { getSessionEntry, updateSessionStoreEntry, updateSessionStore, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { callGatewayTool } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { getXYRuntime } from "../runtime.js";
 import { createXYReplyDispatcher } from "./reply-dispatcher.js";
@@ -38,6 +38,16 @@ import {
 import { clearPendingApproval } from "../approval-bridge.js";
 import type { A2AJsonRpcRequest } from "../types.js";
 import { logger } from "../utils/logger.js";
+import {
+  isImageAttachment,
+  normalizeModelName,
+  resolveConfiguredDefaultModelName,
+  resolveEffectiveModelName,
+  resolveModelCapabilities,
+  resolveSessionEntryModelName,
+  shouldPreserveImageForQueuedTurn,
+  withImagePreservingFollowupQueue,
+} from "../model-capabilities.js";
 
 /**
  * Parameters for handling an XY message.
@@ -213,9 +223,9 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
     }
 
     // Extract modelName if present (used by provider.ts to override model.id)
-    const modelName = extractModelName(parsed.parts);
-    if (modelName) {
-      log.log(`[BOT] Extracted modelName: ${modelName}`);
+    const explicitModelName = normalizeModelName(extractModelName(parsed.parts));
+    if (explicitModelName) {
+      log.log(`[BOT] Extracted modelName: ${explicitModelName}`);
     }
     const runCrossTaskContext = extractRunCrossTaskContext(parsed.parts);
 
@@ -267,21 +277,49 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
       );
     }
 
+    // Image turns from the current A2A client often carry modelName="". Reuse
+    // the existing OpenClaw session override rather than maintaining a second
+    // channel-side model map. An explicit model on this turn always wins and
+    // is persisted below for subsequent image-only turns.
+    const storePath = resolveStorePath();
+    let sessionModelName: string | undefined;
+    try {
+      const sessionEntry = getSessionEntry({ storePath, sessionKey: route.sessionKey });
+      sessionModelName = resolveSessionEntryModelName(sessionEntry);
+    } catch (readErr) {
+      log.error(`[MODEL-RESOLVE] Failed to read session model override:`, readErr);
+    }
+    const defaultModelName = resolveConfiguredDefaultModelName(cfg);
+    const effectiveModel = resolveEffectiveModelName({
+      explicitModelName,
+      sessionModelName,
+      defaultModelName,
+    });
+    const effectiveModelName = effectiveModel.modelName;
+    const selectedModelCapabilities = effectiveModelName
+      ? resolveModelCapabilities({ modelId: effectiveModelName, config: cfg })
+      : undefined;
+    log.log(
+      `[MODEL-RESOLVE] explicitModel=${explicitModelName ?? "(none)"} ` +
+      `sessionModel=${sessionModelName ?? "(none)"} ` +
+      `defaultModel=${defaultModelName ?? "(none)"} ` +
+      `effectiveModel=${effectiveModelName ?? "(unknown)"} source=${effectiveModel.source}`,
+    );
+
     // ALS only: no registerSession. The sessionContext built below is handed
     // to runWithSessionContext() inside withReplyDispatcher.run, which is the
     // single wrap point for the whole agent turn.
     // 🔑 Sync A2A modelName to OpenClaw session store so that session_status
     // reports the correct model. Without this, session_status returns the
     // configured default model instead of the A2A-specified one.
-    if (modelName && modelName.trim() !== "" && modelName.toLowerCase() !== "none") {
+    if (explicitModelName) {
       try {
-        const storePath = resolveStorePath();
         const result = await updateSessionStoreEntry({
           storePath,
           sessionKey: route.sessionKey,
           update: async () => ({
             providerOverride: "xiaoyiprovider",
-            modelOverride: modelName,
+            modelOverride: explicitModelName,
             modelOverrideSource: "user",
             model: "",
             modelProvider: "",
@@ -301,15 +339,15 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
                 sessionId: parsed.sessionId,
                 updatedAt: Date.now(),
                 providerOverride: "xiaoyiprovider",
-                modelOverride: modelName,
+                modelOverride: explicitModelName,
                 modelOverrideSource: "user",
                 contextTokens: 256_000,
               } as any;
             }
           });
-          log.log(`[BOT] Created session entry with model override: xiaoyiprovider/${modelName}`);
+          log.log(`[BOT] Created session entry with model override: xiaoyiprovider/${explicitModelName}`);
         } else {
-          log.log(`[BOT] Patched session store model override: xiaoyiprovider/${modelName}`);
+          log.log(`[BOT] Patched session store model override: xiaoyiprovider/${explicitModelName}`);
         }
       } catch (patchErr) {
         log.error(`[BOT] Failed to patch session model override:`, patchErr);
@@ -366,6 +404,14 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
     const downloadedFiles = await downloadFilesFromParts(fileParts);
     log.log(`[BOT] Downloaded ${downloadedFiles.length} file(s)`);
     mediaPayload = buildXYMediaPayload(downloadedFiles);
+    const hasImageAttachment = downloadedFiles.some(isImageAttachment);
+    if (hasImageAttachment) {
+      log.log(
+        `[MODEL-CAPABILITY] model=${effectiveModelName ?? "(unknown)"} nativeImageInput=` +
+        `${selectedModelCapabilities?.supportsNativeImages ?? "unknown"} ` +
+        `source=${selectedModelCapabilities?.source ?? "conservative-default"}`,
+      );
+    }
 
     // 🔑 对于 steer 消息，将文件路径附加到消息文本中。
     // auto-reply 管道的 steer 注入只携带 prompt 文本（followupRun.prompt），
@@ -385,7 +431,17 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
     // 直接注入失败时，落回普通 tasks/send 派发作为全新 turn（不再使用
     // /steer 命令体 + steered dispatcher 兜底）：此时旧 run 已结束，用户侧
     // 感知对话连续（新 turn 立即发送自己的 working 状态帧）。
-    if (isUpdate && route.sessionKey) {
+    // Live steer accepts text only. Native-image models must use the normal
+    // dispatcher with follow-up queue mode so image blocks survive until the
+    // active run finishes. Unknown/text-only models retain the legacy steer +
+    // image_reading fallback behavior.
+    const preserveImageForQueuedTurn = shouldPreserveImageForQueuedTurn({
+      isUpdate,
+      hasImageAttachment,
+      capabilities: selectedModelCapabilities,
+    });
+
+    if (isUpdate && route.sessionKey && !preserveImageForQueuedTurn) {
       const steerResult = tryDirectSteer({
         sessionId: parsed.sessionId,
         sessionKey: route.sessionKey,
@@ -418,6 +474,13 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
         bindSessionKey(route.sessionKey, parsed.sessionId, parsed.taskId, parsed.messageId);
         log.log(`[BOT-STEER] Rebound sessionKey to new taskId (no active run, no pending subagent wait)`);
       }
+    }
+
+    const dispatchCfg = preserveImageForQueuedTurn
+      ? withImagePreservingFollowupQueue(cfg as Record<string, any>) as ClawdbotConfig
+      : cfg;
+    if (preserveImageForQueuedTurn) {
+      log.log(`[BOT-STEER] Image-bearing multimodal turn will use image-preserving followup queue`);
     }
 
     // Resolve envelope format options (following feishu pattern)
@@ -511,7 +574,8 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
       deviceType,
       appVer: appVer ?? undefined,
       sdkApiVersion: sdkApiVersion ?? undefined,
-      modelName,
+      modelName: effectiveModelName,
+      modelCapabilities: selectedModelCapabilities,
       runCrossTaskContext: runCrossTaskContext ?? undefined,
     };
 
@@ -579,7 +643,7 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
           try {
             const result = await core.channel.reply.dispatchReplyFromConfig({
               ctx: ctxPayload,
-              cfg,
+              cfg: dispatchCfg,
               dispatcher,
               replyOptions,
             });

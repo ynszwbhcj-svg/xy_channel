@@ -25,7 +25,13 @@
           "agentId": { "type": "string", "description": "Agent ID for this bot instance" },
           "apiId": { "type": "string", "description": "API ID for push messages" },
           "fileUploadUrl": { "type": "string", "description": "Base URL for file upload service" },
-          "pushUrl": { "type": "string", "description": "URL for push message service" }
+          "pushUrl": { "type": "string", "description": "URL for push message service" },
+          "nativeImageModels": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Dynamic model IDs that accept native image input (exact, case-insensitive match)",
+            "default": ["Kimi_K3"]
+          }
         },
         "required": []
       },
