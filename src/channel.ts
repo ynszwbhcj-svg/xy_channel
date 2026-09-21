@@ -8,6 +8,7 @@ import { xyOnboardingAdapter } from "./onboarding.js";
 import { filterToolsByDevice } from "./tools/device-tool-map.js";
 import { getCurrentSessionContext } from "./tools/session-manager.js";
 import { logger } from "./utils/logger.js";
+import { filterToolsForModelCapabilities } from "./model-capabilities.js";
 
 // Static tool imports (3.24 pattern)
 import { locationTool } from "./tools/location-tool.js";
@@ -110,8 +111,14 @@ export const xyPlugin: ChannelPlugin = {
   /** Static tool list (3.24 pattern). Tools read SessionContext at execute time via ALS. */
   agentTools: () => {
     const ctx = getCurrentSessionContext();
-    const filtered = filterToolsByDevice(ALL_TOOLS, ctx?.deviceType);
-    logger.log(`[DEVICE-FILTER] deviceType=${ctx?.deviceType ?? "(none)"}, tools: ${ALL_TOOLS.length} → ${filtered.length} (${filtered.map(t => t.name).join(", ")})`);
+    const deviceFiltered = filterToolsByDevice(ALL_TOOLS, ctx?.deviceType);
+    const filtered = filterToolsForModelCapabilities(deviceFiltered, ctx?.modelCapabilities);
+    logger.log(
+      `[TOOL-FILTER] deviceType=${ctx?.deviceType ?? "(none)"} ` +
+      `model=${ctx?.modelName ?? "(unknown)"} ` +
+      `nativeImageInput=${ctx?.modelCapabilities?.supportsNativeImages ?? "unknown"}, ` +
+      `tools: ${ALL_TOOLS.length} → ${filtered.length} (${filtered.map(t => t.name).join(", ")})`,
+    );
     return filtered;
   },
 

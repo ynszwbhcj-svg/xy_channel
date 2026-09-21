@@ -28,6 +28,19 @@ export interface ResolveModelCapabilitiesParams {
   nativeImageModels?: readonly string[];
 }
 
+export type EffectiveModelSource = "explicit" | "session" | "default" | "unknown";
+
+export interface EffectiveModelResolution {
+  modelName?: string;
+  source: EffectiveModelSource;
+}
+
+export interface ResolveEffectiveModelNameParams {
+  explicitModelName?: unknown;
+  sessionModelName?: unknown;
+  defaultModelName?: unknown;
+}
+
 /** Known multimodal model IDs used when the channel option is omitted. */
 export const DEFAULT_NATIVE_IMAGE_MODELS = ["Kimi_K3"] as const;
 
@@ -37,10 +50,68 @@ function normalizeModelId(value: unknown): string {
   return typeof value === "string" ? value.trim().toLowerCase() : "";
 }
 
+/** Normalize model values supplied by A2A, the session store, or config. */
+export function normalizeModelName(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.toLowerCase() === "none") return undefined;
+
+  // OpenClaw default/session refs can be provider-qualified, while A2A sends
+  // the bare dynamic model ID expected by xiaoyiprovider.
+  return trimmed.replace(/^xiaoyiprovider\//i, "");
+}
+
 function asRecord(value: unknown): Record<string, any> | undefined {
   return value && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, any>
     : undefined;
+}
+
+/**
+ * Resolve the model that is actually in effect for this turn.
+ *
+ * A2A image turns currently often omit modelName, so the persisted OpenClaw
+ * session override is the authoritative fallback. If the client changes the
+ * UI model and its first new turn still omits modelName, the server cannot
+ * observe that change and will necessarily retain the previous session model.
+ */
+export function resolveEffectiveModelName(
+  params: ResolveEffectiveModelNameParams,
+): EffectiveModelResolution {
+  const explicitModelName = normalizeModelName(params.explicitModelName);
+  if (explicitModelName) return { modelName: explicitModelName, source: "explicit" };
+
+  const sessionModelName = normalizeModelName(params.sessionModelName);
+  if (sessionModelName) return { modelName: sessionModelName, source: "session" };
+
+  const defaultModelName = normalizeModelName(params.defaultModelName);
+  if (defaultModelName) return { modelName: defaultModelName, source: "default" };
+
+  return { source: "unknown" };
+}
+
+/** Read the configured OpenClaw default model ID, if one is available. */
+export function resolveConfiguredDefaultModelName(config: unknown): string | undefined {
+  const root = asRecord(config);
+  const defaults = asRecord(asRecord(root?.agents)?.defaults);
+  const configuredModel = defaults?.model;
+  const rawDefault = typeof configuredModel === "string"
+    ? configuredModel
+    : asRecord(configuredModel)?.primary;
+  const normalized = normalizeModelName(rawDefault);
+  if (!normalized || typeof rawDefault !== "string") return undefined;
+
+  // Do not reinterpret another provider's qualified default as a Xiaoyi
+  // dynamic model ID. Bare IDs remain valid for legacy configurations.
+  if (rawDefault.includes("/") && !/^xiaoyiprovider\//i.test(rawDefault.trim())) return undefined;
+  return normalized;
+}
+
+/** Read the persisted model override/model value from an OpenClaw session entry. */
+export function resolveSessionEntryModelName(sessionEntry: unknown): string | undefined {
+  const entry = asRecord(sessionEntry);
+  if (!entry) return undefined;
+  return normalizeModelName(entry.modelOverride) ?? normalizeModelName(entry.model);
 }
 
 function readProviderConfig(config: unknown, providerConfig: unknown): Record<string, any> | undefined {
@@ -127,6 +198,26 @@ export function isImageAttachment(file: { name?: string; path?: string; mimeType
   if (file.mimeType?.trim().toLowerCase().startsWith("image/")) return true;
   const candidatePath = file.name || file.path || "";
   return /\.(?:avif|bmp|gif|heic|heif|jpe?g|png|tiff?|webp)$/i.test(candidatePath);
+}
+
+/** Hide the image-reading fallback when the active model receives native images. */
+export function filterToolsForModelCapabilities<T extends { name?: string }>(
+  tools: readonly T[],
+  capabilities?: ResolvedModelCapabilities,
+): T[] {
+  if (!capabilities?.supportsNativeImages) return [...tools];
+  return tools.filter((tool) => tool.name !== "image_reading");
+}
+
+/** Decide whether an active-run image turn must bypass text-only live steer. */
+export function shouldPreserveImageForQueuedTurn(params: {
+  isUpdate: boolean;
+  hasImageAttachment: boolean;
+  capabilities?: ResolvedModelCapabilities;
+}): boolean {
+  return params.isUpdate &&
+    params.hasImageAttachment &&
+    params.capabilities?.supportsNativeImages === true;
 }
 
 /**
