@@ -9,6 +9,7 @@ import { randomUUID } from "crypto";
 import { getXYWebSocketManager } from "../transport/client.js";
 import { XYPushService } from "../transport/push.js";
 import { getAllPushIds } from "../utils/pushid-manager.js";
+import { getOrCreateConvId } from "../utils/cron-conv-map.js";
 import { logger } from "../utils/logger.js";
 import type {
   XYChannelConfig,
@@ -102,7 +103,23 @@ export interface PushBroadcastResult {
 }
 
 /**
+ * 生成 syncInteractionId（48 位）：`00` + 13 位毫秒时间戳 + `_` + 32 位 UUID（去连字符）。
+ * 前 15 位时间戳段定长 → 字典序即时间序，天然支持方向分页（> / <）、增量拉取、取最新一条。
+ */
+export function generateSyncInteractionId(): string {
+  return `00${Date.now()}_${randomUUID().replace(/-/g, "")}`;
+}
+
+/**
  * 向所有已注册 pushId 广播推送通知（单 pushId 失败不影响其他）。
+ *
+ * cron 推送（带 cronJobId）时：
+ * - 在此解析 convId：cronId↔convId 一一映射持久化于 cron-conv-map.json，
+ *   首次命中自动生成 16 位随机 convId 落盘，之后同一 cronId 复用；解析失败
+ *   不阻塞 push（convId 缺省不下发）。
+ * - 整个广播生成一个 syncInteractionId（00+13位毫秒时间戳+_+32位UUID，48 位，
+ *   字典序即时间序），随 kind="data" 下发给所有设备且保持一致，作为客户端
+ *   多设备消息同步的对齐锚点。
  */
 export async function pushBroadcast(params: PushBroadcastParams): Promise<PushBroadcastResult> {
   const { config, text, title, to, pushDataId, cronJobId, cronTitle } = params;
@@ -117,13 +134,27 @@ export async function pushBroadcast(params: PushBroadcastParams): Promise<PushBr
     pushIdList = [String(config.pushId)];
   }
 
+  // cron 推送：解析 convId（无映射则生成并持久化）
+  let convId: string | undefined;
+  if (cronJobId) {
+    try {
+      convId = (await getOrCreateConvId(cronJobId)) ?? undefined;
+    } catch (error) {
+      logger.error(`[outbound-gateway] Failed to resolve convId for cronId=${cronJobId}:`, error);
+    }
+  }
+
+  // cron 推送：整个广播只生成一个 syncInteractionId，保证所有设备收到的 push 一致
+  // （客户端多设备消息同步的对齐锚点）；非 cron 推送不下发该字段。
+  const syncInteractionId = cronJobId ? generateSyncInteractionId() : undefined;
+
   const pushService = new XYPushService(config);
   let successCount = 0;
   let failureCount = 0;
 
   for (const pushId of pushIdList) {
     try {
-      await pushService.sendPush(text, title, undefined, to, pushDataId, pushId, cronJobId, cronTitle);
+      await pushService.sendPush(text, title, undefined, to, pushDataId, pushId, cronJobId, cronTitle, convId, syncInteractionId);
       successCount++;
       logger.log(`[outbound-gateway] Push sent to pushId: ${pushId.substring(0, 20)}...`);
     } catch (error) {

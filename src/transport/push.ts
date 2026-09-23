@@ -33,8 +33,12 @@ interface PushRequest {
                   pushDataId: string;
                   /** cron 推送时携带：任务 jobId（线上字段名 cronId，客户端据此识别 push 来源） */
                   cronId?: string;
+                  /** cron 推送时携带：与 cronId 一一映射的会话标识 */
+                  convId?: string;
                   /** cron 推送时携带：任务标题 */
                   cronTitle?: string;
+                  /** cron 推送时携带：多端同步交互标识（同一广播内所有设备一致，48 位：00+13位毫秒时间戳+_+32位UUID） */
+                  syncInteractionId?: string;
                 }
               | {
                   directives: any[];
@@ -87,6 +91,8 @@ export class XYPushService {
    * @param pushId - Push ID to use (required)
    * @param cronJobId - Optional cron job ID（仅 cron 推送，随 kind="data" 下发，线上字段名 cronId）
    * @param cronTitle - Optional cron job 标题（仅 cron 推送，随 kind="data" 下发）
+   * @param convId - Optional 与 cronId 一一映射的会话标识（仅 cron 推送，随 kind="data" 下发）
+   * @param syncInteractionId - Optional 多端同步交互标识（仅 cron 推送，由广播方生成一次，同一广播内所有设备一致）
    */
   async sendPush(
     content: string,
@@ -96,7 +102,9 @@ export class XYPushService {
     pushDataId?: string,
     pushId?: string,
     cronJobId?: string,
-    cronTitle?: string
+    cronTitle?: string,
+    convId?: string,
+    syncInteractionId?: string
   ): Promise<void> {
     const pushUrl = this.resolvePushUrl();
     const traceId = this.generateTraceId();
@@ -106,7 +114,7 @@ export class XYPushService {
 
     logger.log(`[PUSH] Preparing to send push message with pushId: ${actualPushId.substring(0, 20)}...`);
     if (cronJobId || cronTitle) {
-      logger.log(`[PUSH] Cron push: pushDataId=${pushDataId ?? "-"} cronId=${cronJobId ?? "-"} cronTitle=${cronTitle ?? "-"}`);
+      logger.log(`[PUSH] Cron push: pushDataId=${pushDataId ?? "-"} cronId=${cronJobId ?? "-"} convId=${convId ?? "-"} cronTitle=${cronTitle ?? "-"} syncInteractionId=${syncInteractionId ?? "-"}`);
     }
 
     try {
@@ -130,7 +138,9 @@ export class XYPushService {
                         pushDataId: pushDataId,
                         // 线上协议字段名 cronId（内部变量沿用 cronJobId）
                         ...(cronJobId ? { cronId: cronJobId } : {}),
+                        ...(convId ? { convId } : {}),
                         ...(cronTitle ? { cronTitle } : {}),
+                        ...(syncInteractionId ? { syncInteractionId } : {}),
                       },
                     },
                   ]

@@ -756,6 +756,14 @@ export class XYWebSocketManager extends EventEmitter {
                   taskId: a2aRequest.params?.id,
                   messageId: a2aRequest.id,
                 });
+              } else if (item.header?.namespace === "AgentEvent" && item.header?.name === "UpdateTaskConvId") {
+                log.log("[XY] AgentEvent.UpdateTaskConvId detected, emitting update-task-conv-id-event");
+                this.emit("update-task-conv-id-event", {
+                  ...(item.payload ?? {}),
+                  sessionId,
+                  taskId: a2aRequest.params?.id,
+                  messageId: a2aRequest.id,
+                });
               } else if (item.header?.namespace === "AgentEvent" && item.header?.name === "MemoryQuery") {
                 log.log("[XY] AgentEvent.MemoryQuery detected, emitting memory-query-event");
                 this.emit("memory-query-event", {
@@ -865,6 +873,14 @@ export class XYWebSocketManager extends EventEmitter {
                 } else if (item.header?.namespace === "AgentEvent" && item.header?.name === "CronQuery") {
                   log.log("[XY] AgentEvent.CronQuery detected (wrapped format), emitting cron-query-event");
                   this.emit("cron-query-event", {
+                    ...(item.payload ?? {}),
+                    sessionId: inboundMsg.sessionId || a2aRequest.params?.sessionId,
+                    taskId: inboundMsg.taskId || a2aRequest.params?.id,
+                    messageId: a2aRequest.id,
+                  });
+                } else if (item.header?.namespace === "AgentEvent" && item.header?.name === "UpdateTaskConvId") {
+                  log.log("[XY] AgentEvent.UpdateTaskConvId detected (wrapped format), emitting update-task-conv-id-event");
+                  this.emit("update-task-conv-id-event", {
                     ...(item.payload ?? {}),
                     sessionId: inboundMsg.sessionId || a2aRequest.params?.sessionId,
                     taskId: inboundMsg.taskId || a2aRequest.params?.id,
