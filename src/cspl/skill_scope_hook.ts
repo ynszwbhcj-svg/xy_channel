@@ -2,7 +2,6 @@
  * 版权所有 (c) 华为技术有限公司 2026-2026
  */
 
-import crypto from 'crypto';
 import type {OpenClawPluginApi} from "openclaw/plugin-sdk";
 
 // Types matching PluginHookBeforeInstallEvent / PluginHookBeforeInstallResult in the SDK
@@ -39,8 +38,19 @@ interface BeforeInstallContext {
 
 import {getConfig} from './config.js';
 import {callSkillScanApi} from './call_api.js';
-import {calculateProjectHash, createAndUploadZip, getOriginType, loadSkillContent, parseSecurityResult, formatReqTime} from './utils.js';
-import {API_URL_SUFFIX} from './constants.js';
+import {calculateProjectHash, createAndUploadZip, getOriginType, loadSkillContent, parseSecurityResult, buildExtraJson, truncateQuestionText} from './utils.js';
+import {
+    API_URL_SUFFIX,
+    RISK_BUSINESS_ID,
+    IF1_ACTION,
+    IF1_LANGUAGE,
+    IF1_TEXT_STATUS,
+    IF1_IS_XIAOYI_APP,
+    IF1_ENABLE_EXPERIENCE_PLAN,
+    IF1_COUNTRY_CODE,
+    SKILL_INSTALL_TEXT_SOURCE,
+    If1RequestPayload
+} from './constants.js';
 
 export default function register(api: OpenClawPluginApi) {
     api.on("before_install", async (event: BeforeInstallEvent, ctx: BeforeInstallContext): Promise<BeforeInstallResult | void> => {
@@ -124,10 +134,6 @@ export default function register(api: OpenClawPluginApi) {
     });
 }
 
-function generateUUid(): string {
-    return crypto.randomUUID();
-}
-
 export function buildSkillScanPayload(
     targetHash: string,
     downloadUrl: string,
@@ -135,27 +141,17 @@ export function buildSkillScanPayload(
     skillContent: string,
     config: { apiKey: string; uid: string; serviceUrl: string; },
     sessionID: string
-): {
-    taskID: string; sessionID: string; interActionID: number; uid: string; businessID: string;
-    reqTime: string; action: string; checkPoint: number; message: object
-} {
-    const taskID = generateUUid();
-    const interActionID = 1;
-    const action = "XIAOYI_CLAW";
-    const businessID = "voiceassistant";
-    const reqTime = formatReqTime();
-    const checkPoint = 7;
+): If1RequestPayload {
     const availableSkillBodyLen = 10240;
     const skillBody = skillContent.length > availableSkillBodyLen ? skillContent.substring(0, availableSkillBodyLen) : skillContent;
     const callObj: Record<string, any> = {
-        type: "function",       // 保持默认值
-        name: "install_skill",  // 保持默认值
-        arguments: "{}",        // 保持默认值
-        index: 0,               // 保持默认值
-        id: "0",                // 保持默认值
+        function: { name: 'install_skill', arguments: '{}' },
+        index: 0,
+        id: '0',
+        type: 'function',
         file: [
             {
-                type: "doc",   // 保持默认值
+                type: 'doc',
                 url: downloadUrl,
                 hash: targetHash,
                 size: skillContent.length,
@@ -164,21 +160,21 @@ export function buildSkillScanPayload(
             }
         ]
     };
+    // 截断优先级：file.0.body（questionText JSON 整体 ≤ 8192，接口约束）
+    const questionText = truncateQuestionText(callObj, ['file.0.body']);
     return {
-        taskID: taskID,
-        sessionID: sessionID,
-        interActionID: interActionID,
-        uid: config.uid,
-        businessID: businessID,
-        action: action,
-        reqTime: reqTime,
-        checkPoint: checkPoint,
-        message: {
-            input: {
-                toolIn: [{
-                    toolCalls: [callObj]
-                }]
-            }
-        }
+        action: IF1_ACTION,
+        businessId: RISK_BUSINESS_ID,
+        sessionID,
+        seqNo: 1,
+        questionText,
+        answerText: '',
+        language: IF1_LANGUAGE,
+        textSource: SKILL_INSTALL_TEXT_SOURCE,
+        textStatus: IF1_TEXT_STATUS,
+        extra: buildExtraJson(config.uid),
+        isXiaoyiAPP: IF1_IS_XIAOYI_APP,
+        enableExperiencePlan: IF1_ENABLE_EXPERIENCE_PLAN,
+        countryCode: IF1_COUNTRY_CODE
     };
 }

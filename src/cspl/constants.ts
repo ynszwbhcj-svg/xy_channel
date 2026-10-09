@@ -9,7 +9,10 @@ export interface HttpHeaders {
     'x-api-key': string;
     'x-request-from': string;
     'x-skill-id': string;
+    'X-businessid': string;
     'content-type': string;
+    'x-session-id'?: string;
+    'x-interaction-id'?: string;
     [key: string]: string;
 }
 
@@ -19,44 +22,39 @@ export interface ApiPayload {
     action: string;
 }
 
-// resultCode 错误码映射
-export const RESULT_CODE_MAP: Record<number, string> = {
-    0: 'Success',
-    1: 'Parameter is invalid',
-    2: "Parameter's format is invalid",
-    3: 'The request frequency exceeds the limit',
-    4: "Parameter's size is invalid",
-    5: 'The text detection is abnormal',
+// retCode 错误码映射（风控 IF1 接口，string -> string）
+export const RESULT_CODE_MAP: Record<string, string> = {
+    '0': 'Success',
+    '1001': 'System inner error',
+    '2002': 'Parameter error',
 };
 
-// 新接口请求/响应类型定义
-export interface NewRequestPayload {
-    taskID: string;
-    sessionID: string;
-    uid: string;
-    businessID: string;
-    sceneID: string;
-    checkPoint: number;
-    // 原 interActionID，新接口更名为 seqNo（值仍从 taskId 第一个&和第二个&之间提取）
-    seqNo: number;
-    loginType?: string;
-    reqTime?: string;
-    message: object;
+// 风控 IF1 接口请求体（扁平结构，对齐 claw_desktop behavior-security buildBehaviorBody）
+export interface If1RequestPayload {
+    action: string;             // 垂域 action，工具扫描固定 'tool'
+    businessId: string;         // 业务标识（与 X-businessid 头同值）
+    sessionID: string;          // 会话 ID（安全检测必选）
+    seqNo: number;              // 会话轮次（安全检测必选）
+    questionText: string;       // 待审核内容（JSON 字符串，≤ MAX_QUESTION_TEXT_LENGTH）
+    answerText: string;         // 大模型回复内容（工具扫描场景为空串）
+    language: string;
+    textSource: string;         // toolInput / toolOutput / skillInstall
+    textStatus: string;         // partial / complete，缺省 complete
+    extra: string;              // JSON 字符串：deviceType/isKidsMode/packageName/deviceId/userId/timeStamp
+    isXiaoyiAPP: boolean;
+    enableExperiencePlan: boolean;
+    countryCode: string;
+    isFinalEqualsLastText?: boolean;  // toolOutput 场景固定 false
 }
 
-export interface NewApiResponse {
-    data: {
-        taskID: string;
-        resultCode: number;
-        resultMessage?: string;
-        securityResult: string;
-        riskLabels?: string[];
-        riskDegree?: Array<{ riskLabel: string; score: number }>;
-        riskLabelCount?: Array<{ riskLabel: string; count: number }>;
-        actionRiskResult?: { riskScore: number; riskTag: string[] };
-    };
-    retCode?: string;
+// 风控 IF1 接口响应
+export interface If1ApiResponse {
+    retCode?: string;           // '0' 成功 / '1001' 系统内部错误 / '2002' 参数错误
     retMsg?: string;
+    data?: {
+        securityResult: string; // ACCEPT / REJECT / CLARIFY（疑似风险，需用户澄清）
+        [key: string]: any;
+    };
 }
 
 export interface ApiResponse {
@@ -110,20 +108,27 @@ export const MAX_COMMAND_LENGTH = 1024;
 export const CODE_FILE_EXTENSIONS = ['py', 'pl', 'sh', 'js', 'ts'];
 export const FILE_EXTENSION_REGEX = /[^a-zA-Z0-9./]{1,5}/;
 
-// TOOL_INPUT 默认值
-export const TOOL_INPUT_DEFAULT = {
-    subSceneID: 'TOOL_INPUT',
-    tool: '',
-    hash: '',
-    url: '',
-    size: 0,
-    source: '',
-    content: ''
-} as const;
+// 风控 IF1 接口固定字段（对齐 claw_desktop behavior-security）
+export const RISK_BUSINESS_ID = 'XIAOYI_CLAW';
+export const IF1_ACTION = 'tool';
+export const IF1_LANGUAGE = 'zh-CN';
+export const IF1_TEXT_STATUS = 'complete';
+export const IF1_IS_XIAOYI_APP = true;
+export const IF1_ENABLE_EXPERIENCE_PLAN = true;
+export const IF1_COUNTRY_CODE = 'CN';
 
-// 安全扫描 action 常量
-export const TOOL_INPUT_ACTION = 'TOOL_INPUT_SCAN';
-export const TOOL_OUTPUT_ACTION = 'TOOL_OUTPUT_SCAN';
+// 安全扫描 textSource 枚举（IF1 接口）
+export const TOOL_INPUT_TEXT_SOURCE = 'toolInput';
+export const TOOL_OUTPUT_TEXT_SOURCE = 'toolOutput';
+export const SKILL_INSTALL_TEXT_SOURCE = 'skillInstall';
+
+// IF1 接口 questionText 最大长度（接口约束 8192）
+export const MAX_QUESTION_TEXT_LENGTH = 8192;
+
+// extra 子字段固定值（本端无 deviceId，置空串）
+export const EXTRA_DEVICE_TYPE = 'phone';
+export const EXTRA_PACKAGE_NAME = 'com.huawei.hmos.vassistant';
+export const EXTRA_IS_KIDS_MODE = false;
 
 // OBS上传相关常量
 export const MAX_TIMES = 3;

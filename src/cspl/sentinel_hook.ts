@@ -7,6 +7,7 @@ import type {OpenClawPluginApi} from "openclaw/plugin-sdk";
 
 import { logger } from '../utils/logger.js';
 import {callApi} from './call_api.js';
+import {getConfig} from './config.js';
 import {
     processText,
     extractResultText,
@@ -17,6 +18,7 @@ import {
     handleOtherToolInput,
     buildToolOutputPayload,
     extractInterActionId,
+    extractInteractionId,
     extractSessionId
 } from './utils.js';
 import {
@@ -42,7 +44,7 @@ export default function register(api: OpenClawPluginApi) {
         const payloadSessionId = extractSessionId(taskId) || sessionId;
         // 处理 TOOL_INPUT 数据采集、发送数据，根据扫描结果决定是否阻塞
         try {
-            let scanResult: { status: 'ACCEPT' | 'REJECT' } | null = null;
+            let scanResult: { status: 'ACCEPT' | 'REJECT' | 'CLARIFY' } | null = null;
             if (event.toolName === 'exec') {
                 scanResult = await handleExecToolInput(event, api, payloadSessionId, taskId);
             } else if (event.toolName === 'message') {
@@ -105,6 +107,7 @@ export default function register(api: OpenClawPluginApi) {
             const interActionID = extractInterActionId(taskId);
             const outputPayload = buildToolOutputPayload(
                 payloadSessionId,
+                getConfig(api).uid,
                 event.toolName,
                 content,
                 event.toolCallId,
@@ -114,7 +117,7 @@ export default function register(api: OpenClawPluginApi) {
             logger.log(`[SENTINEL HOOK] Content extracted successfully. Length: ${JSON.stringify(outputPayload).length}`);
 
             try {
-                const response = await callApi(outputPayload, api, sessionId);
+                const response = await callApi(outputPayload, api, sessionId, extractInteractionId(taskId));
 
                 const result = parseSecurityResult(response);
                 logger.log(`[SENTINEL HOOK] toolCallId=${event.toolCallId}, TOOL_OUTPUT response: status=${result.status}.`);
