@@ -128,7 +128,7 @@ function normalizeField(value: unknown): unknown {
 // ── 技能检测 ───────────────────────────────────────────────────────
 
 /** 从路径/文本中提取技能名：.../skills/<name> 或 .../core_skills/<name>。 */
-function extractSkillNameFromPathText(text: string): string | null {
+export function extractSkillNameFromPathText(text: string): string | null {
   const normalized = text.replace(/\\/g, "/");
   const m = normalized.match(/(?:^|[/\s"';&|])(?:core_)?skills\/([^/'"\s;&|]+)/i);
   return m ? m[1] : null;
