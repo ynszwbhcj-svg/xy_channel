@@ -198,8 +198,34 @@ export function getCurrentSessionContext(): SessionContext | null {
   return null;
 }
 
-function normalizeSentFileCard(card: SentFileCard): SentFileCard | null {
-  if (!card || typeof card !== "object") {
+/**
+ * P0-2 防御纵深：用户定向副作用（发文件 / 发卡片）发送前的归属校验。
+ *
+ * 工具入口捕获的 ctx 与当前 ALS 的 sessionId 不一致，说明执行中途被挂到了
+ * 其它 session 的异步树上（ALS 污染）——发错文件到他人设备是隐私事故，
+ * 宁可失败不可错发，直接抛错拒绝。
+ *
+ * 只在 ALS scope 内校验（live 为 null 时放行，如 cron 路径）；
+ * 只比对 sessionId（taskId 会被 getCurrentSessionContext 按最新任务动态富化，
+ * 不构成归属依据）。直接读 asyncLocalStorage.getStore() 而非
+ * getCurrentSessionContext()，避免 [ALS-PROOF] 日志噪音与富化副作用。
+ */
+export function assertSessionNotPolluted(entryCtx: SessionContext, where: string): void {
+  const live = asyncLocalStorage.getStore() ?? null;
+  if (!live) return;
+  if (live.sessionId !== entryCtx.sessionId) {
+    logger.error(
+      `[ALS-GUARD] ${where} session mismatch: entry sessionId=${entryCtx.sessionId}, ` +
+      `live sessionId=${live.sessionId} — refusing cross-session side effect`,
+    );
+    throw new Error(
+      `Session context mismatch in ${where}: tool was registered for session ${entryCtx.sessionId} ` +
+      `but is executing under session ${live.sessionId}; aborting to avoid cross-session side effect`,
+    );
+  }
+}
+
+function normalizeSentFileCard(card: SentFileCard): SentFileCard | null {  if (!card || typeof card !== "object") {
     return null;
   }
 

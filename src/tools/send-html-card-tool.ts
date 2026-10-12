@@ -3,7 +3,7 @@ import type { ChannelAgentTool } from "openclaw/plugin-sdk";
 import { XYFileUploadService } from "../file-upload.js";
 import { sendCard } from "../formatter.js";
 import type { SessionContext } from "./session-manager.js";
-import { getCurrentSessionContext } from './session-manager.js';
+import { getCurrentSessionContext, assertSessionNotPolluted } from './session-manager.js';
 
 import { logger } from "../utils/logger.js";
 
@@ -92,6 +92,9 @@ c. 仅当用户或者skill中显示说明使用send_html_card工具时才调用�
           },
         ];
 
+        // P0-2 防御纵深：发送前校验当前 ALS 与入口捕获 ctx 的归属一致，
+        // 不一致说明执行被挂到了别的 session 的异步树上，宁可失败不可错发。
+        assertSessionNotPolluted(_c, "send_html_card");
         // Send card via sendCard
         await sendCard({
           config,

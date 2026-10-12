@@ -3,7 +3,7 @@ import type { ChannelAgentTool } from "openclaw/plugin-sdk";
 import { getCachedXYWebSocketManager } from "../transport/client.js";
 import { XYFileUploadService } from "../file-upload.js";
 import os from "os";
-import { appendRunCrossTaskSentFiles, type SessionContext, getCurrentSessionContext } from './session-manager.js';
+import { appendRunCrossTaskSentFiles, type SessionContext, getCurrentSessionContext, assertSessionNotPolluted } from './session-manager.js';
 import { logger } from "../utils/logger.js";
 import type { OutboundWebSocketMessage, SentFileCard } from "../types.js";
 
@@ -49,26 +49,40 @@ function getMimeTypeFromFilename(filename: string): string {
 }
 
 /**
- * Normalize parameter to array (supports both array and JSON string)
+ * Normalize parameter to array (supports both array and JSON string).
+ * Validates that every element is a non-empty string — an object element
+ * (e.g. [{"result.json": "..."}]) would otherwise flow down to
+ * filePath.startsWith and crash with an unreadable TypeError.
  */
 function normalizeToArray(param: any): string[] {
-  if (Array.isArray(param)) {
-    return param;
-  }
+  let arr: any[];
 
-  if (typeof param === 'string') {
+  if (Array.isArray(param)) {
+    arr = param;
+  } else if (typeof param === 'string') {
     try {
       const parsed = JSON.parse(param);
       if (Array.isArray(parsed)) {
-        return parsed;
+        arr = parsed;
+      } else {
+        throw new Error("Parameter must be an array or a JSON string representing an array");
       }
-      throw new Error("Parameter must be an array or a JSON string representing an array");
     } catch (parseError) {
       throw new Error(`Parameter must be a valid JSON array string. Parse error: ${parseError instanceof Error ? parseError.message : String(parseError)}`);
     }
+  } else {
+    throw new Error(`Parameter must be an array or a JSON string, got ${typeof param}`);
   }
 
-  throw new Error(`Parameter must be an array or a JSON string, got ${typeof param}`);
+  for (let i = 0; i < arr.length; i++) {
+    if (typeof arr[i] !== 'string' || !arr[i]) {
+      throw new Error(
+        `数组第 ${i} 项必须是字符串类型的文件路径/URL，收到 ${typeof arr[i]}: ${JSON.stringify(arr[i])?.slice(0, 200)}`,
+      );
+    }
+  }
+
+  return arr;
 }
 
 /**
@@ -133,12 +147,18 @@ b. 操作超时时间为2分钟（120秒），请勿重复调用此工具，如�
     type: "object",
     properties: {
       fileLocalUrls: {
+        type: "array",
+        items: { type: "string" },
         description: "本地文件路径数组，包含用户需要回传的文件在本地的地址",
       },
       fileRemoteUrls: {
+        type: "array",
+        items: { type: "string" },
         description: "公网地址数组，包含用户需要回传的文件的公网地址（会先下载到本地再发送），注意不要对原始url做任何截断（例如裁减掉链接后面的鉴权信息或者修改域名后缀），必须使用上下文中完整的文件地址",
       },
       fileNames: {
+        type: "array",
+        items: { type: "string" },
         description: "文件名数组，与 fileRemoteUrls 一一对应，用于指定下载后的文件名。必须从 search_file 工具返回结果中提取每个文件的原始文件名，根据uoploadfile工具的顺序传入。",
       },
     },
@@ -307,14 +327,17 @@ b. 操作超时时间为2分钟（120秒），请勿重复调用此工具，如�
       };
 
       logger.log(`[SEND-FILE-TO-USER] EXEC sending, fileName=${fileName}`);
+      // P0-2 防御纵深：发送前校验当前 ALS 与入口捕获 ctx 的归属一致，
+      // 不一致说明执行被挂到了别的 session 的异步树上，宁可失败不可错发。
+      assertSessionNotPolluted(_c, "send_file_to_user");
       // Send WebSocket message
       await wsManager.sendMessage(sessionId, agentResponse);
       logger.log(`[SEND-FILE-TO-USER] send ${fileName} file to user success`)
-      if (getCurrentSessionContext().runCrossTaskContext) {
+      if (_c.runCrossTaskContext) {
         const sentFileCard: SentFileCard = { fileName, fileId, mimeType };
         const cachedSentFiles = appendRunCrossTaskSentFiles(
           [sentFileCard],
-          getCurrentSessionContext().runCrossTaskContext,
+          _c.runCrossTaskContext,
         );
         cachedSentFilesForReturn = cachedSentFiles;
         logger.log(`[RunCrossTask] cached file card for cross-task result, fileName=${fileName}, cachedFileCardCount=${cachedSentFiles.length}`);

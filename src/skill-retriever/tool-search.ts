@@ -3,7 +3,6 @@ import * as path from "path";
 import * as os from "os";
 import type { EnvConfig, FormattedSkill, RawSkill, ToolSearchResult } from "./types.js";
 import { logger } from "../utils/logger.js";
-import { getCurrentSessionContext } from "../tools/session-manager.js";
 import { filterDisabledSkills, parseSkillFrontmatter } from "./skill-status.js";
 
 const SKILL_ID = "celia_find_skills";
@@ -129,6 +128,9 @@ export interface SearchToolsOptions {
   timeoutMs?: number;
   configExcludedSkills?: string[];
   dynamicSkillEnabled?: boolean;
+  /** 调用方（钩子）从事件 ctx.sessionKey 解析出的归属标识，作为 x-hag-trace-id。
+   *  不读 ALS——并发 session 下 ALS 可能属于别的异步树，trace-id 会挂错任务。 */
+  traceId?: string;
 }
 
 export async function searchTools(options: SearchToolsOptions): Promise<ToolSearchResult | null> {
@@ -142,6 +144,7 @@ export async function searchTools(options: SearchToolsOptions): Promise<ToolSear
     timeoutMs = 10000,
     configExcludedSkills,
     dynamicSkillEnabled,
+    traceId: callerTraceId,
   } = options;
 
   const envConfig = readEnvFile(envFilePath);
@@ -156,8 +159,9 @@ export async function searchTools(options: SearchToolsOptions): Promise<ToolSear
     return null;
   }
 
-  const alsCtx = getCurrentSessionContext();
-  const traceId = alsCtx?.taskId ?? crypto.randomUUID();
+  // trace-id 由调用方从钩子事件的 sessionKey 解析传入（ground truth），
+  // 不再从 ALS 取 taskId——污染窗口内 ALS 可能属于并发 session。
+  const traceId = callerTraceId ?? crypto.randomUUID();
   const apiUrl = `${serviceUrl}/celia-claw/v1/rest-api/skill/execute`;
 
   const headers: Record<string, string> = {

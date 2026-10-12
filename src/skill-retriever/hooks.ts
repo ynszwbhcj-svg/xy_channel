@@ -233,6 +233,17 @@ export function createBeforePromptBuildHandler(config: ToolRetrieverConfig) {
     }
 
     try {
+      // trace-id 从钩子事件的 sessionKey 解析（openclaw 传的 ground truth），
+      // 不读 ALS——并发 session 下 ALS 可能属于别的异步树，trace-id 会挂错任务。
+      // xiaoyi-channel 的 sessionKey 末段即 A2A sessionId。
+      const sessionKeyTraceId = (() => {
+        const sk = ctx?.sessionKey;
+        if (!sk) return undefined;
+        const lastColon = sk.lastIndexOf(":");
+        const id = lastColon >= 0 ? sk.slice(lastColon + 1).trim() : "";
+        return id || undefined;
+      })();
+
       const searchResult = await searchTools({
         query: extractedQuery,
         maxTools: config.maxTools,
@@ -243,7 +254,8 @@ export function createBeforePromptBuildHandler(config: ToolRetrieverConfig) {
         uid: config.uid,
         timeoutMs: config.timeoutMs,
         configExcludedSkills: config.excludedSkills,
-        dynamicSkillEnabled
+        dynamicSkillEnabled,
+        traceId: sessionKeyTraceId,
       });
 
       if (!searchResult) {

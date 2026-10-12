@@ -6,7 +6,7 @@ import { xyConfigSchema } from "./config-schema.js";
 import { xyOutbound } from "./dispatch/outbound.js";
 import { xyOnboardingAdapter } from "./onboarding.js";
 import { filterToolsByDevice } from "./tools/device-tool-map.js";
-import { getCurrentSessionContext } from "./tools/session-manager.js";
+import { getCurrentSessionContext, runWithSessionContext } from "./tools/session-manager.js";
 import { logger } from "./utils/logger.js";
 
 // Static tool imports (3.24 pattern)
@@ -106,10 +106,26 @@ export const xyPlugin: ChannelPlugin = {
 
   /** Static tool list (3.24 pattern). Tools read SessionContext at execute time via ALS. */
   agentTools: () => {
-    const ctx = getCurrentSessionContext();
-    const filtered = filterToolsByDevice(ALL_TOOLS, ctx?.deviceType);
-    logger.log(`[DEVICE-FILTER] deviceType=${ctx?.deviceType ?? "(none)"}, tools: ${ALL_TOOLS.length} → ${filtered.length} (${filtered.map(t => t.name).join(", ")})`);
-    return filtered;
+    // P0-1（ALS 上下文污染根因修复）：agentTools 在 dispatch init 的同步段被
+    // openclaw 调用，此刻 ALS 必然属于本条消息的 session。但工具 execute 的
+    // 实际执行点由 openclaw 的 Lane 队列 / SSE 事件泵调度，事件回调的 ALS 取的
+    // 是 emit() 时刻的环境值——并发 session 下 A 的工具可能被挂到 B 的异步树上
+    // 执行，导致 send_file_to_user 等工具把副作用打到别的 session。
+    // 修复：注册时捕获当前 ctx，给每个工具的 execute 包一层显式重入。无论宿主
+    // 把工具调用调度到哪棵树，工具读到的都是注册它的那个 session。
+    const captured = getCurrentSessionContext();
+    const filtered = filterToolsByDevice(ALL_TOOLS, captured?.deviceType);
+    logger.log(`[DEVICE-FILTER] deviceType=${captured?.deviceType ?? "(none)"}, tools: ${ALL_TOOLS.length} → ${filtered.length} (${filtered.map(t => t.name).join(", ")})`);
+    if (!captured) {
+      // cron / 非 ALS 路径（agentTools 在 turn 之外被调）：无 ctx 可捕获，直接透传
+      return filtered;
+    }
+    logger.log(`[ALS-GUARD] agentTools captured ctx sessionId=${captured.sessionId} taskId=${captured.taskId}, wrapping ${filtered.length} tool executes`);
+    return filtered.map((t) => ({
+      ...t,
+      execute: (toolCallId: string, params: any) =>
+        runWithSessionContext(captured, () => t.execute(toolCallId, params)),
+    }));
   },
 
   messaging: {
