@@ -71,6 +71,12 @@ export const xyConfigSchema = {
       description: "First reconnect attempt is uniformly spread over [0, this] ms so mass reconnects after a server outage don't arrive as one burst",
       default: 3000,
     },
+    nativeImageModels: {
+      type: "array",
+      items: { type: "string" },
+      description: "Dynamic model IDs that accept native image input (exact, case-insensitive match). Unknown models remain text-only. Set to [] to disable the Kimi_K3 default.",
+      default: ["Kimi_K3"],
+    },
     pinnedSessionIds: {
       type: "array",
       items: { type: "string" },

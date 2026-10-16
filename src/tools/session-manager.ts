@@ -12,6 +12,7 @@
 // 不需要 getCurrentSessionContext。所以这里不保留任何全局回退。
 import { AsyncLocalStorage } from "async_hooks";
 import type { RunCrossTaskContext, SentFileCard, XYChannelConfig } from "../types.js";
+import type { ResolvedModelCapabilities } from "../model-capabilities.js";
 import { logger } from "../utils/logger.js";
 import { getCurrentTaskId, getCurrentMessageId } from "../conversation/conversation-manager.js";
 
@@ -27,9 +28,10 @@ export interface SessionContext {
   appVer?: string;
   /** SDK API version extracted from A2A systemVariables (variables.systemVariables.sdk_api_version). */
   sdkApiVersion?: string;
-  /** Model name extracted from A2A user variables (variables.clientVariables.modelName).
-   *  When set, provider.ts replaces model.id in the OpenAI request body. */
+  /** Effective model for this turn: explicit A2A model, session override, or default. */
   modelName?: string;
+  /** Capabilities resolved from the full OpenClaw config before agentTools runs. */
+  modelCapabilities?: ResolvedModelCapabilities;
   runCrossTaskContext?: RunCrossTaskContext;
   /** When true, this context was created for a cron/scheduled task execution.
    *  Tools should use the push channel instead of WebSocket sendCommand. */
@@ -270,4 +272,3 @@ export function clearRunCrossTaskSentFiles(
 
   runCrossTaskContext.sentFiles = [];
 }
-

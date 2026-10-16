@@ -23,6 +23,11 @@ export interface XYChannelConfig {
   /** First reconnect attempt is uniformly spread over [0, this] ms to dilute mass-reconnect storms (default 3000) */
   reconnectFirstMaxMs?: number;
   /**
+   * Dynamic model IDs that accept native image input. Matching is exact and
+   * case-insensitive. Set to [] to disable the built-in Kimi_K3 default.
+   */
+  nativeImageModels: string[];
+  /**
    * 固定 A2A sessionId 列表（如 ["00000000"]）。这些会话的 sessionId 永不变化，
    * clearContext 无法靠客户端换 sessionId 天然隔离，因此 channel 会在收到
    * clearContext 时显式调用 gateway sessions.reset 轮换 openclaw 侧会话。

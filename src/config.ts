@@ -1,6 +1,7 @@
 // Configuration parsing and validation
 import type { ClawdbotConfig } from "openclaw/plugin-sdk";
 import type { XYChannelConfig } from "./types.js";
+import { DEFAULT_NATIVE_IMAGE_MODELS } from "./model-capabilities.js";
 
 /**
  * Resolve and validate Xiaoyi channel configuration from ClawdbotConfig.
@@ -35,6 +36,11 @@ export function resolveXYConfig(cfg: ClawdbotConfig): XYChannelConfig {
     pushUrl: xyConfig.pushUrl,
     defaultSessionId: xyConfig.defaultSessionId,
     terminalFrameDelayMs: xyConfig.terminalFrameDelayMs ?? 300,
+    nativeImageModels: Array.isArray(xyConfig.nativeImageModels)
+      ? xyConfig.nativeImageModels.filter(
+          (id: unknown): id is string => typeof id === "string" && id.trim() !== "",
+        )
+      : [...DEFAULT_NATIVE_IMAGE_MODELS],
     // 固定会话列表：缺省默认 ["00000000"]；显式配置 [] 表示禁用 reset 特殊处理
     pinnedSessionIds: Array.isArray(xyConfig.pinnedSessionIds)
       ? xyConfig.pinnedSessionIds.filter((id: unknown) => typeof id === "string" && id.trim() !== "")
