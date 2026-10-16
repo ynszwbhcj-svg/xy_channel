@@ -123,6 +123,11 @@ function parseCronRunLogEntriesFromJsonl(
 
 const GATEWAY_TIMEOUT_MS = 60_000;
 
+/** Hard bound (UTF-8 bytes) for a single list response, kept below the 64KiB WS frame limit. */
+const MAX_LIST_BODY_BYTES = 55_000;
+/** Ceiling for a caller-supplied CronQuery list page size. */
+const MAX_LIST_PAGE_LIMIT = 50;
+
 // ============================================================================
 // Main handler
 // ============================================================================
@@ -402,35 +407,48 @@ function buildUpdateParams(jobId: string, params: any): Record<string, any> {
 // Response transformers — gateway result → device format
 // ============================================================================
 
-/** Compute pagination metadata from request params and total. */
-function computePagination(
-  params: any,
-  total: number,
-): {
-  offset: number;
-  limit: number;
-  hasMore: boolean;
-  nextOffset: number | null;
-} {
-  const offset: number = params?.offset ?? 0;
-  const limit: number = params?.limit ?? total;
-  const hasMore = total > offset + limit;
-  const nextOffset = hasMore ? offset + limit : null;
-  return { offset, limit, hasMore, nextOffset };
+/** UTF-8 byte length of a string (the WS frame limit is in bytes). */
+function utf8ByteLength(value: string): number {
+  return Buffer.byteLength(value, "utf8");
 }
 
-/** list: add pagination fields + status. */
+/** list: add pagination fields + status, keep the response within a WS frame. */
 function transformListResponse(gatewayResult: any, params: any): any {
   const jobs = gatewayResult?.jobs ?? [];
   const total: number = gatewayResult?.total ?? jobs.length;
-  const pagination = computePagination(params, total);
+
+  // Honor caller-supplied pagination, clamped to a sane upper bound. When no
+  // limit is given the caller expects the full list, so default to returning
+  // everything rather than silently dropping jobs.
+  let offset = 0;
+  let limit = jobs.length;
+  if (Number.isFinite(params?.offset)) {
+    offset = Math.max(0, Math.trunc(params.offset));
+  }
+  if (Number.isFinite(params?.limit)) {
+    limit = Math.min(Math.max(1, Math.trunc(params.limit)), MAX_LIST_PAGE_LIMIT);
+  }
+  let paged = jobs.slice(offset, offset + limit);
+
+  // Back-stop: never emit a single WS frame exceeding the gateway's 64KiB
+  // limit. Shrink the page and signal hasMore so a pagination-aware client
+  // can fetch the remainder. Job content is never modified.
+  let body = JSON.stringify({ jobs: paged, total, offset, limit: paged.length });
+  while (paged.length > 1 && utf8ByteLength(body) > MAX_LIST_BODY_BYTES) {
+    paged = paged.slice(0, -1);
+    body = JSON.stringify({ jobs: paged, total, offset, limit: paged.length });
+  }
+
+  const hasMore = total > offset + paged.length;
+  const nextOffset = hasMore ? offset + paged.length : null;
+
   return {
-    jobs,
+    jobs: paged,
     total,
-    offset: pagination.offset,
-    limit: pagination.limit,
-    hasMore: pagination.hasMore,
-    nextOffset: pagination.nextOffset,
+    offset,
+    limit: paged.length,
+    hasMore,
+    nextOffset,
     deliveryPreviews: gatewayResult?.deliveryPreviews ?? {},
   };
 }
