@@ -193,6 +193,61 @@ function hasInflightTurn(sessionId: string): boolean {
   return (session?.inflightTurns?.size ?? 0) > 0;
 }
 
+// ─── 被中止 turn 跟踪（停止后首轮上下文抑制） ───────────────
+
+/**
+ * 标记 session 的某轮 turn 被用户"停止"（tasks/cancel）中止。
+ * 用于在随后第一条真实用户消息派发前注入"忽略被取消轮次"抑制指令，
+ * 防止被中止的 T-1 轮内容（已提交进 openclaw sqlite transcript）泄漏到
+ * 下一轮回答。仅最后一个任务会被保留（同轮重复 cancel 视为同一次中止）。
+ */
+export function markTurnAborted(sessionId: string, taskId: string): void {
+  const session = getOrCreateSession(sessionId);
+  session.abortedTurn = { taskId, abortedAt: Date.now() };
+  session.lastActivityAt = Date.now();
+  logger
+    .withContext(sessionId, taskId)
+    .log(`[TURN-ABORTED] Recorded aborted turn for next-turn suppression`);
+}
+
+/**
+ * 取走并消费"最近被中止 turn"标记。
+ * 在派发一条新的真实用户消息前调用：若存在被中止 turn（说明上一条被停止），
+ * 返回 true 并清除标记，调用方应在消息文本前注入"忽略被取消轮次"抑制指令。
+ * 多次注入已消费（一次性语义，避免后续消息反复携带抑制指令）。
+ */
+export function consumeAbortedTurnSuppression(sessionId: string): boolean {
+  const session = sessions.get(sessionId);
+  if (!session?.abortedTurn) {
+    return false;
+  }
+  const marker = session.abortedTurn;
+  session.abortedTurn = undefined;
+  session.lastActivityAt = Date.now();
+  logger
+    .withContext(sessionId, marker.taskId)
+    .log(`[TURN-ABORTED] Consumed aborted-turn marker, injecting next-turn suppression`);
+  return true;
+}
+
+/**
+ * 清除"最近被中止 turn"标记（无则 no-op）。
+ * 用于 clearContext 等会重置上下文的场景：上下文已清空后不再需要"忽略上一轮"
+ * 抑制指令，避免残留标记让清空后的第一条消息误带一次该指令。
+ */
+export function clearAbortedTurnSuppression(sessionId: string): void {
+  const session = sessions.get(sessionId);
+  if (!session?.abortedTurn) {
+    return;
+  }
+  const marker = session.abortedTurn;
+  session.abortedTurn = undefined;
+  session.lastActivityAt = Date.now();
+  logger
+    .withContext(sessionId, marker.taskId)
+    .log(`[TURN-ABORTED] Cleared aborted-turn marker (context reset)`);
+}
+
 // ─── SessionKey ↔ SessionId 索引 ──────────────────────────────
 
 /**

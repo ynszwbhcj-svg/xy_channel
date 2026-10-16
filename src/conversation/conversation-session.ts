@@ -18,6 +18,19 @@ export interface TaskEntry {
   updatedAt: number;
 }
 
+/**
+ * 被用户"停止"（tasks/cancel）中止的上一轮 turn 标记。
+ * 用于在随后第一条真实用户消息派发时注入"忽略被取消轮次"抑制指令，
+ * 防止被中止的 T-1 轮内容泄漏到下一轮回答（openclaw transcript 为 sqlite
+ * 存储，插件侧无法安全回滚，故采用提示词层上下文隔离方案）。
+ */
+export interface AbortedTurnMarker {
+  /** 被中止的 turn 的 taskId。 */
+  taskId: string;
+  /** 中止发生时间戳（ms）。 */
+  abortedAt: number;
+}
+
 export type SessionState =
   | "working"           // dispatcher 存活，agent turn 进行中
   | "waiting-subagent"  // 主 turn 已 idle，等待 subagent 完成
@@ -77,6 +90,11 @@ export interface ConversationSession {
    * 防止 final:true 提前截断在途回复（steer 重分发场景）。
    */
   inflightTurns: Set<string>;
+  /**
+   * 最近一次被用户"停止"中止的 turn 标记。存在时，下一条真实用户消息
+   * 派发前会注入"忽略被取消轮次"抑制指令，随后清除。
+   */
+  abortedTurn?: AbortedTurnMarker;
   lastActivityAt: number;
 }
 
@@ -88,6 +106,7 @@ export function createConversationSession(sessionId: string): ConversationSessio
     subagentWaits: [],
     outboundQueue: new OutboundQueue(sessionId),
     inflightTurns: new Set(),
+    abortedTurn: undefined,
     lastActivityAt: Date.now(),
   };
 }

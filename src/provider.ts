@@ -777,6 +777,11 @@ export const xiaoyiProvider: ProviderPlugin = {
           typeof xiaoyiProviderConfig?.apiKey === "string"
             ? (xiaoyiProviderConfig.apiKey as string)
             : undefined,
+        headers:
+          xiaoyiProviderConfig?.headers &&
+          typeof xiaoyiProviderConfig.headers === "object"
+            ? (xiaoyiProviderConfig.headers as Record<string, string>)
+            : undefined,
       });
     }
 

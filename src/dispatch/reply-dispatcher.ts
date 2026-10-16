@@ -31,6 +31,55 @@ function isSystemNoticeText(text: string): boolean {
   return text.trimStart().startsWith(SYSTEM_NOTICE_MARK);
 }
 
+// ⚠️ openclaw 侧将“上下文溢出 / 自动压缩失败 / 预压缩失败”等技术性英文失败文案
+// 直接作为最终回复下发给用户，通道层此前未做任何中文化，中文用户会看到英文报错。
+// 这里对特征鲜明、不可能出现在正常中文回复里的稳定开头做前缀匹配，整段替换为
+// 中文兜底提示，避免裸英文技术报错暴露给用户；不使用模糊子串，以免误伤正常回复。
+interface OpenclawFailureRule {
+  /** 英文失败文案的稳定开头（唯一、可区分）。 */
+  prefixRe: RegExp;
+  /** 命中后整段替换为的中文兜底文案。 */
+  replacement: string;
+}
+
+const OPENCLAW_FAILURE_RULES: OpenclawFailureRule[] = [
+  {
+    // #1 buildContextOverflowRecoveryText：Auto-compaction could not recover this turn...
+    // 前缀 ⚠️ 视 openclaw 实际输出可有可无：⚠ 与变体选择符是两个码点，必须整体用
+    // (?:⚠️)? 做成可选，不能写 ⚠️?（那样 ? 仅作用于变体选择符，⚠ 仍是强制）。
+    // 且真实消息在 this 与 turn 之间可能插入换行（this \r\nturn），
+    // 故用 [\s\S]{0,3} 容忍最多 3 个任意字符（空格/CR/LF）以兼容换行。
+    prefixRe: /^(?:⚠️)?\s*Auto-compaction could not recover this[\s\S]{0,3}turn/i,
+    replacement:
+      "⚠️ 上下文处理过程中出现异常，未能完成回复。建议清除当前上下文后重试。",
+  },
+  {
+    // #2 CONTEXT_OVERFLOW_ERROR_MESSAGE：Context overflow: prompt too large for the model...
+    prefixRe: /^(?:⚠️)?\s*Context overflow:\s*prompt too large for the model/i,
+    replacement:
+      "⚠️ 上下文长度超出模型限制，未能完成回复。建议清除当前上下文（新建/重置会话）后重试。",
+  },
+  {
+    // #3 buildPreflightCompactionFailureText：This conversation is too long...
+    prefixRe: /^(?:⚠️)?\s*This conversation is too long,\s*and OpenClaw couldn\'t shorten it\b/i,
+    replacement:
+      "⚠️ 上下文内容过长且整理失败，未能完成回复。建议清除当前上下文后重试。",
+  },
+];
+
+/** 将 openclaw 技术性英文失败文案替换为中文兜底提示；未命中则原样返回。 */
+function rewriteOpenclawFailureText(text: string): string {
+  if (!text) {
+    return text;
+  }
+  for (const rule of OPENCLAW_FAILURE_RULES) {
+    if (rule.prefixRe.test(text.trimStart())) {
+      return rule.replacement;
+    }
+  }
+  return text;
+}
+
 export interface CreateXYReplyDispatcherParams {
   cfg: ClawdbotConfig;
   runtime: RuntimeEnv;
@@ -246,6 +295,9 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
             .replace(/^🧹 Compaction not needed$/, "🧹 无需整理上下文")
             .replace(/^✅ Context compacted.*$/, "✅ 上下文整理完成，继续之前的工作。");
         }
+
+        // ⚠️ 将 openclaw 技术性英文失败文案替换为中文兜底提示（见 rewriteOpenclawFailureText）
+        text = rewriteOpenclawFailureText(text);
 
         scopedLog().log(`[DELIVER] kind=${info?.kind}, text.length=${text.length}`);
 
