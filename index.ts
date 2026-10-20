@@ -18,6 +18,7 @@ import { normalizeToolRetrieverConfig } from "./src/skill-retriever/config.js";
 import { registerCLIHook } from "./src/tools/hmos-cli.js";
 import { recoverCronState } from "./src/cron-recovery.js";
 import type { CronRecoveryResult } from "./src/cron-recovery.js";
+import { writeCronRunLog } from "./src/utils/cron-run-logger.js";
 import { writeSkillUsage } from "./src/utils/skills-logger.js";
 import {
   markSubagentSpawned,
@@ -279,6 +280,36 @@ function readJobIdFromResult(result: unknown): string | undefined {
     }
   }
   return undefined;
+}
+
+/**
+ * Register the cron run logging hook.
+ *
+ * Gateway 的 CronService 在 job 生命周期变化时触发 cron_changed 插件 hook；
+ * 仅 action === "finished" 携带本次执行的结果字段（status/durationMs/
+ * runAtMs/nextRunAtMs/sessionId/model），added/updated/removed/started 不记。
+ * 每个执行结束的 run 写一行到 /tmp/openclaw/cron-YYYYMMDD.log。
+ */
+function registerCronRunLogHook(api: OpenClawPluginApi) {
+  api.on("cron_changed", async (event) => {
+    try {
+      if (event.action !== "finished") return;
+      writeCronRunLog({
+        jobId: event.jobId,
+        name: event.job?.name ?? null,
+        createdAtMs: event.job?.createdAtMs ?? null,
+        status: event.status ?? null,
+        durationMs: event.durationMs ?? null,
+        runAtMs: event.runAtMs ?? null,
+        nextRunMs: event.nextRunAtMs ?? null,
+        sessionId: event.sessionId ?? null,
+        model: event.model ?? null,
+        error: event.error ?? null,
+      });
+    } catch (err) {
+      logger.error(`[XY-CRON-LOG] Error in cron_changed run-log hook:`, err);
+    }
+  });
 }
 
 // ── Gateway startup: cron state recovery ────────────────────────────────────
@@ -585,6 +616,8 @@ const plugin: OpenClawPluginDefinition = definePluginEntry({
       registerCLIHook(api);
       // Cron recovery hook: prunes stale cron-push-map and pushData on gateway startup
       registerCronRecoveryHook(api);
+      // Cron run log hook: write one line per finished cron run to /tmp/openclaw/cron-*.log
+      registerCronRunLogHook(api);
       // Skills diagnostic hook: log skill usage (detected via SKILL.md reads)
       registerSkillsDiagnosticHook(api);
     }
