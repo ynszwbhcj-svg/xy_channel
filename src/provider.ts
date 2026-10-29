@@ -62,13 +62,49 @@ function isKimiK3RestorePending(sessionId: string): boolean {
   return true;
 }
 
-/** Check if an errorMessage indicates a retryable provider error by type. */
-function isRetryableProviderError(message: string | undefined): boolean {
+/**
+ * undici / Node transport error codes that mean the upstream HTTP(S) connection
+ * was cut or timed out mid-flight — a transient, retryable condition. Aligned
+ * with openclaw's retryable-network-errors + retry-evidence lists, so a raw
+ * SSE termination (e.g. `terminated`, 408 timeout) is retried here instead of
+ * surfacing immediately to the user.
+ */
+const TRANSPORT_TERMINATION_RE =
+  /\b(?:terminated|UND_ERR_CONNECT_TIMEOUT|UND_ERR_DNS_RESOLVE_FAILED|UND_ERR_CONNECT|UND_ERR_SOCKET|UND_ERR_HEADERS_TIMEOUT|UND_ERR_BODY_TIMEOUT|ECONNRESET|ECONNREFUSED|ENOTFOUND|ETIMEDOUT|ESOCKETTIMEDOUT|ECONNABORTED|EPIPE|ENETDOWN|ENETUNREACH|EHOSTUNREACH|EADDRNOTAVAIL|EAI_AGAIN|EPROTO|ERR_HTTP2_INVALID_SESSION|ERR_SSL_WRONG_VERSION_NUMBER|ERR_SSL_PROTOCOL_RETURNED_AN_ERROR)\b/i;
+
+/** Short human-readable snippets that indicate a cut/timed-out transport stream. */
+const TRANSPORT_TERMINATION_SNIPPETS = [
+  "socket hang up",
+  "fetch failed",
+  "network is unreachable",
+  "temporary failure in name resolution",
+  "upstream connect error",
+  "disconnect/reset before headers",
+  "connect timeout",
+  "body timeout",
+  "headers timeout",
+  "connection reset",
+  "connection refused",
+  "connection aborted",
+  "connection lost",
+];
+
+/**
+ * Check if an errorMessage indicates a retryable provider error by type.
+ * Covers both the known transient server/rate-limit texts (from the upstream
+ * LLM gateway) and undici/Node transport-termination errors (the stream was
+ * cut or timed out mid-flight), which are safe and desirable to retry.
+ * Exported for unit tests.
+ */
+export function isRetryableProviderError(message: string | undefined): boolean {
   if (!message) return false;
   const lower = message.toLowerCase();
   if (lower.includes("the server had an error while processing your request")) return true;
   if (lower.includes("rate limit reached for requests")) return true;
   if (lower.includes("现在访问有点拥挤，稍等一下再试会更顺畅哦～")) return true;
+  // undici / Node transport termination — transient stream cut / timeout.
+  if (TRANSPORT_TERMINATION_RE.test(lower)) return true;
+  if (TRANSPORT_TERMINATION_SNIPPETS.some(snippet => lower.includes(snippet))) return true;
   return false;
 }
 
