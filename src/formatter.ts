@@ -7,6 +7,7 @@ import { isReasoningFinished as readReasoningFinished, releaseReasoningState } f
 import { releaseStatusCardSeq, getCurrentStatusCardSeq, nextStatusCardSeq } from "./utils/status-card-seq.js";
 import { releaseThinkIndex } from "./utils/think-index.js";
 import { isLegacyAppVersion, releaseAppVersion } from "./utils/app-version.js";
+import { markBodyTextSent, clearBodyTextState } from "./utils/body-text-state.js";
 import { logger } from "./utils/logger.js";
 import { redactSensitiveText, containsSensitiveInfo } from "./sensitive-redactor.js";
 import { rewriteOutboundApprovalText } from "./approval-bridge.js";
@@ -167,6 +168,13 @@ export async function sendA2AResponse(params: SendA2AResponseParams): Promise<vo
   }
 
   // Send via WebSocket（经 outbound-gateway 收口）
+  // 非空正文帧发送前置位"本轮正文首帧已发出"：此后产生的工具调用，其
+  // stepinfo command（状态卡等）将被抑制 —— 命令已不可能先于正文
+  // （见 utils/body-text-state.ts）。在 sendWsFrame 之前置位，保证帧
+  // 在途期间进入的钩子也能读到。
+  if (typeof bridgedText === "string" && bridgedText.length > 0) {
+    markBodyTextSent(taskId);
+  }
   if (shouldLog) {
     const redactedText = redactSensitiveText(bridgedText ?? "");
     log.log(`[A2A_RESPONSE] Sending artifact-update, append=${append}, final=${final}, lastChunk=${artifact.lastChunk}, streamingTextId=${artifact.streamingTextId}, taskUniqIndexId=${artifact.taskUniqIndexId}, isReasoningFinished=${artifact.isReasoningFinished}, text=${buildTextPreview(redactedText)}, files=${files?.length ?? 0}, sensitive=${containsSensitiveInfo(bridgedText ?? "")}`);
@@ -182,6 +190,7 @@ export async function sendA2AResponse(params: SendA2AResponseParams): Promise<vo
     releaseStatusCardSeq(taskId);
     releaseThinkIndex(taskId);
     releaseAppVersion(taskId);
+    clearBodyTextState(taskId);
   }
   if (shouldLog) {
     log.log(`[A2A_RESPONSE] Message sent successfully`);
@@ -921,5 +930,6 @@ export async function sendTriggerResponse(params: SendTriggerResponseParams): Pr
   releaseStatusCardSeq(taskId);
   releaseThinkIndex(taskId);
   releaseAppVersion(taskId);
+  clearBodyTextState(taskId);
   log.log(`[TRIGGER_RESPONSE] Trigger response sent successfully`);
 }

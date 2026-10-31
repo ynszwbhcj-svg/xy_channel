@@ -16,6 +16,7 @@ import { releaseStreamingTextId, rotateStreamingTextId } from "../utils/streamin
 import { releaseStatusCardSeq, getCurrentStatusCardSeq } from "../utils/status-card-seq.js";
 import { markLastChunkBlock, getAccumulatedThinkIndex, releaseThinkIndex } from "../utils/think-index.js";
 import { releaseAppVersion } from "../utils/app-version.js";
+import { clearBodyTextState } from "../utils/body-text-state.js";
 import { sendStatusUpdate, sendA2AResponse, sendDisplayTaskCardData, sendExecuteStatusCard } from "../formatter.js";
 import type { XYChannelConfig } from "../types.js";
 import {
@@ -65,12 +66,13 @@ export function deleteSession(sessionId: string): void {
   const session = sessions.get(sessionId);
   session?.outboundQueue.destroy();
   // 会话销毁：释放其任务链上所有 turn 的 streamingTextId、状态卡序号、
-  // thinkIndex 标记与 App 版本标记
+  // thinkIndex 标记、App 版本标记与正文首帧标记
   for (const entry of session?.tasks ?? []) {
     releaseStreamingTextId(entry.taskId);
     releaseStatusCardSeq(entry.taskId);
     releaseThinkIndex(entry.taskId);
     releaseAppVersion(entry.taskId);
+    clearBodyTextState(entry.taskId);
   }
   sessions.delete(sessionId);
 }
@@ -202,6 +204,9 @@ export async function rotateStreamingTextSegment(params: {
 
   const newId = rotateStreamingTextId(taskId);
   assembler?.cutSegment();
+  // 新文本段 = 新一轮模型回复：复位"正文首帧已发出"标记，工具 command
+  // 重新获得先于正文下发的窗口（见 utils/body-text-state.ts）。
+  clearBodyTextState(taskId);
   return newId;
 }
 

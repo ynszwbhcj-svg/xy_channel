@@ -36,6 +36,10 @@
 // 命令经 formatter.sendCommand 下发，路由与 channel 其它命令一致：
 // 普通对话 WS、cron run push 通道。
 //
+// 正文首帧门控（高版本链路）：本轮正文文本首帧发出后，若再产生工具调用，
+// 其 stepinfo command（技能卡/步骤卡等）直接抑制不下发 —— 命令不允许落在
+// 正文之后（见 utils/body-text-state.ts）；文本分段边界不受影响（只发正文帧）。
+//
 // 状态更新帧（tool-status-hook 的「正在使用工具：xxx」status-update）不在本模块，
 // 保持不变。
 //
@@ -56,6 +60,7 @@ import {
 } from "./session-manager.js";
 import { logger } from "../utils/logger.js";
 import { isLegacyAppVersion } from "../utils/app-version.js";
+import { isBodyTextSent } from "../utils/body-text-state.js";
 import type { XYChannelConfig } from "../types.js";
 
 const LOG_TAG = "[STEP-INFO]";
@@ -350,21 +355,33 @@ export function registerStepInfoHook(api: OpenClawPluginApi): void {
       // 步骤卡，也不做文本分段边界（旧客户端无此能力，按合并前逻辑下发）
       if (isLegacyAppVersion(sendCtx.taskId)) return;
 
+      // 本轮正文首帧已发出：工具 command 不允许落在正文之后（协议规则，
+      // 见 utils/body-text-state.ts）——此后产生的工具调用，其技能卡/步骤卡
+      // 等 stepinfo command 直接抑制不下发；文本分段边界不受影响（它只发
+      // 正文帧，不是 command）。
+      const bodyTextSent = isBodyTextSent(sendCtx.taskId);
+
       // 1. 技能任务卡片（cd 进技能目录 / 读 SKILL.md）
       const skillAction = detectSkillAction(event);
       if (skillAction) {
-        const cardText =
-          skillAction.action === "view"
-            ? `查看技能 ${skillAction.skillName}`
-            : `使用技能 ${skillAction.skillName}`;
-        await sendExecuteStatusCard({
-          ...sendCtx,
-          toolCallId: event.toolCallId,
-          text: cardText,
-        });
-        logger.log(
-          `${LOG_TAG} sent skill status card action=${skillAction.action} skill=${skillAction.skillName}`,
-        );
+        if (bodyTextSent) {
+          logger.log(
+            `${LOG_TAG} body text already sent in current segment, suppressing skill card action=${skillAction.action} skill=${skillAction.skillName}`,
+          );
+        } else {
+          const cardText =
+            skillAction.action === "view"
+              ? `查看技能 ${skillAction.skillName}`
+              : `使用技能 ${skillAction.skillName}`;
+          await sendExecuteStatusCard({
+            ...sendCtx,
+            toolCallId: event.toolCallId,
+            text: cardText,
+          });
+          logger.log(
+            `${LOG_TAG} sent skill status card action=${skillAction.action} skill=${skillAction.skillName}`,
+          );
+        }
       }
 
       // 2. read 技能 SKILL.md 时只走技能卡片，跳过后续所有动作
@@ -385,9 +402,9 @@ export function registerStepInfoHook(api: OpenClawPluginApi): void {
 
       // 3. 使用工具白名单：不发卡、无分段边界；update_plan 例外保留
       //    in_progress 步骤卡（text=步骤文本，同轮多张卡片由 taskUniqIndexId
-      //    序号区分，taskUniqId 同为 taskId）
+      //    序号区分，taskUniqId 同为 taskId）；正文首帧已发出时步骤卡同样抑制
       if (TASK_CARD_TOOLS.has(event.toolName)) {
-        if (event.toolName === "update_plan") {
+        if (event.toolName === "update_plan" && !bodyTextSent) {
           const planSteps = extractInProgressPlanSteps(event.params);
           for (const stepText of planSteps) {
             await sendExecuteStatusCard({
