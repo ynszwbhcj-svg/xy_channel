@@ -13,6 +13,7 @@ import type {
   OutboundWebSocketMessage,
   A2AJsonRpcRequest,
   A2ADataEvent,
+  AskUserResponse,
   CrossDeviceTaskResultEvent,
   SentFileCard,
 } from "../types.js";
@@ -54,6 +55,7 @@ export interface ManagerDiagnostics {
  * Events:
  * - 'message': (message: A2AJsonRpcRequest, sessionId: string) => void
  * - 'data-event': (event: A2ADataEvent) => void
+ * - 'ask-user-response': (event: AskUserResponse) => void
  * - 'gui-agent-response': (event: any) => void
  * - 'trigger-event': (event: any) => void
  * - 'connected': () => void
@@ -202,6 +204,7 @@ export class XYWebSocketManager extends EventEmitter {
                                  this.listenerCount('error') +
                                  this.listenerCount('ready') +
                                  this.listenerCount('data-event') +
+                                 this.listenerCount('ask-user-response') +
                                  this.listenerCount('gui-agent-response') +
                                  this.listenerCount('agent-as-skill-response');
 
@@ -464,6 +467,17 @@ export class XYWebSocketManager extends EventEmitter {
     this.heartbeat = heartbeat;
   }
 
+  private toAskUserResponse(item: any): AskUserResponse | null {
+    if (item?.header?.namespace !== "AgentEvent" || item?.header?.name !== "InvokeRsp") {
+      return null;
+    }
+    const payload = item?.payload;
+    if (!payload || typeof payload.ask_user_id !== "string" || !payload.ask_user_id) {
+      return null;
+    }
+    return payload as AskUserResponse;
+  }
+
   private toUploadExeDataEvent(item: any): A2ADataEvent | null {
     const outputs = item?.payload?.outputs ?? {};
     const payloadIntentName = typeof item?.payload?.intentName === "string" ? item.payload.intentName : "";
@@ -647,8 +661,11 @@ export class XYWebSocketManager extends EventEmitter {
       if (Array.isArray(parsed.events)) {
         const eventSessionId = parsed.session?.sessionId || parsed.sessionId;
         for (const item of parsed.events) {
+          const askUserResponse = this.toAskUserResponse(item);
           const crossDeviceTaskResult = this.toCrossDeviceTaskResultEvent(item, eventSessionId ?? "");
-          if (crossDeviceTaskResult) {
+          if (askUserResponse) {
+            this.emit("ask-user-response", askUserResponse);
+          } else if (crossDeviceTaskResult) {
             this.emit("cross-device-task-result", crossDeviceTaskResult);
           }
         }
@@ -710,10 +727,14 @@ export class XYWebSocketManager extends EventEmitter {
             for (const item of events) {
               log.log(`[XY] Raw event: header=${JSON.stringify(item?.header)}, payloadKeys=${Object.keys(item?.payload ?? {}).join(",")}`);
               const dataEvent = this.toUploadExeDataEvent(item);
+              const askUserResponse = this.toAskUserResponse(item);
               const crossDeviceTaskResult = this.toCrossDeviceTaskResultEvent(item, sessionId);
               if (dataEvent) {
                 log.log(`[XY] Emitting data-event, intentName: ${dataEvent.intentName}, status: ${dataEvent.status}, size: ${JSON.stringify(dataEvent).length} bytes`);
                 this.emit("data-event", dataEvent);
+              } else if (askUserResponse) {
+                log.log(`[XY] AgentEvent.InvokeRsp detected, emitting ask-user-response, askUserId=${askUserResponse.ask_user_id}`);
+                this.emit("ask-user-response", askUserResponse);
               } else if (crossDeviceTaskResult) {
                 this.emit("cross-device-task-result", crossDeviceTaskResult);
               } else if (item.header?.namespace === "ClawAgent" && item.header?.name === "InvokeJarvisGUIAgentResponse") {
@@ -819,8 +840,11 @@ export class XYWebSocketManager extends EventEmitter {
           if (Array.isArray(parsedDetail.events)) {
             const eventSessionId = parsedDetail.session?.sessionId || inboundMsg.sessionId || parsedDetail.sessionId;
             for (const item of parsedDetail.events) {
+              const askUserResponse = this.toAskUserResponse(item);
               const crossDeviceTaskResult = this.toCrossDeviceTaskResultEvent(item, eventSessionId ?? "");
-              if (crossDeviceTaskResult) {
+              if (askUserResponse) {
+                this.emit("ask-user-response", askUserResponse);
+              } else if (crossDeviceTaskResult) {
                 this.emit("cross-device-task-result", crossDeviceTaskResult);
               }
             }
@@ -842,6 +866,7 @@ export class XYWebSocketManager extends EventEmitter {
               for (const item of events) {
                 log.log(`[XY] Raw event (wrapped): header=${JSON.stringify(item?.header)}, payloadKeys=${Object.keys(item?.payload ?? {}).join(",")}`);
                 const dataEvent = this.toUploadExeDataEvent(item);
+                const askUserResponse = this.toAskUserResponse(item);
                 const crossDeviceTaskResult = this.toCrossDeviceTaskResultEvent(
                   item,
                   inboundMsg.sessionId || a2aRequest.params?.sessionId,
@@ -849,6 +874,9 @@ export class XYWebSocketManager extends EventEmitter {
                 if (dataEvent) {
                   log.log(`[XY] Emitting data-event, intentName: ${dataEvent.intentName}, status: ${dataEvent.status}, size: ${JSON.stringify(dataEvent).length} bytes`);
                   this.emit("data-event", dataEvent);
+                } else if (askUserResponse) {
+                  log.log(`[XY] AgentEvent.InvokeRsp detected (wrapped), emitting ask-user-response, askUserId=${askUserResponse.ask_user_id}`);
+                  this.emit("ask-user-response", askUserResponse);
                 } else if (crossDeviceTaskResult) {
                   this.emit("cross-device-task-result", crossDeviceTaskResult);
                 } else if (item.header?.namespace === "ClawAgent" && item.header?.name === "InvokeJarvisGUIAgentResponse") {
