@@ -807,18 +807,37 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
       },
 
       onReasoningEnd: async () => {
-        // SDK thinking_end：标记本 turn reasoning 结束。当前 id 下确有未闭合
-        // 思考流块时补发思考块结束标记帧（携带本思考段的完整文本、append=false
-        // 快照语义、isReasoningFinished=true + lastChunk=true；两个标记都显式
-        // pin 而非 lazy 读状态表，防止帧在队期间新一轮 reasoning 复位状态导致
-        // 标记帧丢失语义），让端侧及时收起思维链面板并落定该段的完整内容。
-        // 分段边界已收尾（或本无思考内容）时不再补标记帧 —— 边界收尾帧已以
-        // 旧 id 闭合该段，此处再以新 id 补空标记帧会让端侧渲染空思考段。
+        // SDK thinking_end：标记本 turn reasoning 结束。帧序列：先补一帧
+        // status-update（"已完成深度思考"），再发思考块结束标记帧 —— 端侧
+        // 先落定状态文案，再由 lastChunk=true 收起思维链面板。
+        // 标记帧（携带本思考段的完整文本、append=false 快照语义、
+        // isReasoningFinished=true + lastChunk=true；两个标记都显式 pin 而非
+        // lazy 读状态表，防止帧在队期间新一轮 reasoning 复位状态导致标记帧
+        // 丢失语义）仅当前 id 下确有未闭合思考流块时补发；分段边界已收尾
+        // （或本无思考内容）时不再补 —— 边界收尾帧已以旧 id 闭合该段，此处
+        // 再以新 id 补空标记帧会让端侧渲染空思考段。
         const endTaskId = getActiveTaskId();
         markReasoningFinished(endTaskId);
         scopedLog().log(`[REASONING-END] Reasoning finished, taskId=${endTaskId}`);
 
         try {
+          // 思考内容发完、lastChunk=true 标记帧之前补一帧 status-update
+          // （"已完成深度思考"），每个思考块结束时都发；正文完成后不再发
+          // （终态帧文案另见 terminal-status）。state=working：turn 仍在进行。
+          outboundQueue.enqueue({
+            taskId: endTaskId,
+            label: "reasoning-end-status",
+            send: () =>
+              sendStatusUpdate({
+                config,
+                sessionId,
+                taskId: endTaskId,
+                messageId: getActiveMessageId(),
+                text: "已完成深度思考",
+                state: "working",
+              }),
+          });
+
           if (isReasoningSegmentOpen(endTaskId)) {
             // 攒入思考文本块的 taskUniqIndexId：统一在终态汇总卡（text=任务
             // 处理已完成）携带，中间状态卡不携带。同步标记（而非等标记帧
@@ -849,23 +868,6 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
                 }),
             });
           }
-
-          // 思考块结束后紧跟一帧 status-update（"已完成深度思考"），
-          // 每个思考块结束时都发；正文完成后不再发（终态帧文案另见
-          // terminal-status）。state=working：turn 仍在进行。
-          outboundQueue.enqueue({
-            taskId: endTaskId,
-            label: "reasoning-end-status",
-            send: () =>
-              sendStatusUpdate({
-                config,
-                sessionId,
-                taskId: endTaskId,
-                messageId: getActiveMessageId(),
-                text: "已完成深度思考",
-                state: "working",
-              }),
-          });
         } catch (err) {
           scopedLog().error(`[REASONING-END] Failed to send reasoning-end marker:`, err);
         }

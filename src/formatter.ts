@@ -2,7 +2,7 @@
 // 纯 A2A 帧构建器：只负责组帧，最后一跳统一走 conversation/outbound-gateway。
 import { v4 as uuidv4 } from "uuid";
 import { sendWsFrame } from "./conversation/outbound-gateway.js";
-import { getOrCreateStreamingTextId, peekStreamingTextId, releaseStreamingTextId } from "./utils/streaming-text-id.js";
+import { getOrCreateStreamingTextId, peekStreamingTextId, peekLastSentStreamingTextId, releaseStreamingTextId } from "./utils/streaming-text-id.js";
 import { isReasoningFinished as readReasoningFinished, releaseReasoningState } from "./utils/reasoning-state.js";
 import { releaseReasoningSegment } from "./utils/reasoning-segment.js";
 import { releaseStatusCardSeq, getCurrentStatusCardSeq, nextStatusCardSeq } from "./utils/status-card-seq.js";
@@ -442,6 +442,12 @@ export async function sendCommand(params: SendCommandParams): Promise<void> {
   // Wrap command in commands array as per protocol requirement
   // lastChunk 恒 false（命令帧不携带文本，不是文本块终点）
   // 命令内容逐条做传输层脱敏（MemoryFileRead 成功响应按合同还原原文）
+  // streamingTextId：command 不允许引入端侧从未见过的新 id —— 跟随本 turn
+  // 最后实际发出帧的 id（sendWsFrame 逐帧登记）。分段边界轮换后、新段首帧
+  // 未发的窗口期，在役注册表已是新 id 但端侧最后收到的仍是旧 id 收尾帧；
+  // 终帧释放后 get-or-create 会造出孤儿 id —— 两种情形都必须取 last-sent。
+  // 仅 turn 起始尚无已发帧（bot.ts 起始卡）时退化 get-or-create：该 id 即
+  // 本 turn id 起点，随后首个文本帧复用之。
   const transportCommands = commands.map(redactCommandForTransport);
   const artifact: A2ATaskArtifactUpdateEvent = {
     taskId,
@@ -452,7 +458,7 @@ export async function sendCommand(params: SendCommandParams): Promise<void> {
     append: false,
     lastChunk: params.lastChunk ?? false,
     final: params.final ?? false,
-    streamingTextId: getOrCreateStreamingTextId(taskId),
+    streamingTextId: peekLastSentStreamingTextId(taskId) ?? getOrCreateStreamingTextId(taskId),
     isReasoningFinished: readReasoningFinished(taskId),
     artifact: {
       artifactId: uuidv4(),

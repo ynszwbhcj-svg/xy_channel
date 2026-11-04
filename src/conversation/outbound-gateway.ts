@@ -10,6 +10,7 @@ import { getXYWebSocketManager } from "../transport/client.js";
 import { XYPushService } from "../transport/push.js";
 import { getAllPushIds } from "../utils/pushid-manager.js";
 import { getOrCreateConvId } from "../utils/cron-conv-map.js";
+import { recordSentStreamingTextId } from "../utils/streaming-text-id.js";
 import { logger } from "../utils/logger.js";
 import type {
   XYChannelConfig,
@@ -101,6 +102,13 @@ export async function sendWsFrame(params: SendWsFrameParams): Promise<void> {
       log.log(`[A2A-OUT] commands=${JSON.stringify(commands)}`);
     }
     await wsManager.sendMessage(sessionId, outboundMessage);
+    // 帧已实际上送：登记"最后一帧 artifact-update 的 streamingTextId"。
+    // command 帧据此对齐端侧最后收到的 id（不允许引入新 id，见
+    // utils/streaming-text-id）。status-update 旁路帧不参与登记。
+    const result = frame?.result;
+    if (result?.kind === "artifact-update" && typeof result.streamingTextId === "string") {
+      recordSentStreamingTextId(taskId, result.streamingTextId);
+    }
   }
 }
 

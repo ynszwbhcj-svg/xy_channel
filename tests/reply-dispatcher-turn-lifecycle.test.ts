@@ -210,6 +210,19 @@ describe("reply dispatcher turn ownership", () => {
       streamingTextId: newId,
       isReasoningFinished: true,
     });
+
+    // 帧序：status-update（已完成深度思考）必须先于 lastChunk=true 标记帧
+    const statusCallIdx = mocks.sendStatusUpdate.mock.calls.findIndex(
+      ([params]) => params.text === "已完成深度思考",
+    );
+    const markerCallIdx = mocks.sendReasoningTextUpdate.mock.calls.findIndex(
+      ([params]) => params.isReasoningFinished === true,
+    );
+    expect(statusCallIdx).toBeGreaterThanOrEqual(0);
+    expect(markerCallIdx).toBeGreaterThanOrEqual(0);
+    expect(mocks.sendStatusUpdate.mock.invocationCallOrder[statusCallIdx]).toBeLessThan(
+      mocks.sendReasoningTextUpdate.mock.invocationCallOrder[markerCallIdx],
+    );
   });
 
   it("does not emit an empty reasoning-end marker when the boundary already closed the segment", async () => {

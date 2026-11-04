@@ -12,7 +12,7 @@
 
 import { randomUUID } from "crypto";
 import { logger } from "../utils/logger.js";
-import { releaseStreamingTextId, rotateStreamingTextId, peekStreamingTextId } from "../utils/streaming-text-id.js";
+import { releaseStreamingTextId, releaseLastSentStreamingTextId, rotateStreamingTextId, peekStreamingTextId } from "../utils/streaming-text-id.js";
 import { releaseStatusCardSeq, getCurrentStatusCardSeq } from "../utils/status-card-seq.js";
 import { markLastChunkBlock, markReasoningBlockEnd, getAccumulatedThinkIndex, peekLastReasoningBlockSeq, releaseThinkIndex } from "../utils/think-index.js";
 import { releaseAppVersion } from "../utils/app-version.js";
@@ -76,6 +76,7 @@ export function deleteSession(sessionId: string): void {
   // thinkIndex 标记、App 版本标记、正文首帧标记与思考分段状态
   for (const entry of session?.tasks ?? []) {
     releaseStreamingTextId(entry.taskId);
+    releaseLastSentStreamingTextId(entry.taskId);
     releaseStatusCardSeq(entry.taskId);
     releaseThinkIndex(entry.taskId);
     releaseAppVersion(entry.taskId);
@@ -134,6 +135,7 @@ export function completeTask(sessionId: string, expectedTaskId?: string): void {
     logger.log(`[TASK_MANAGER] Removing taskId`);
     for (const entry of session.tasks) {
       releaseStreamingTextId(entry.taskId);
+      releaseLastSentStreamingTextId(entry.taskId);
       releaseReasoningSegment(entry.taskId);
     }
     session.tasks = [];
@@ -148,6 +150,7 @@ export function completeTask(sessionId: string, expectedTaskId?: string): void {
   }
   session.tasks = nextTasks;
   releaseStreamingTextId(expectedTaskId);
+  releaseLastSentStreamingTextId(expectedTaskId);
   releaseReasoningSegment(expectedTaskId);
   if (nextTasks.length > 0) {
     logger.log(`[TASK_MANAGER] Removed taskId ${expectedTaskId}, restored current taskId ${nextTasks[nextTasks.length - 1].taskId}`);
