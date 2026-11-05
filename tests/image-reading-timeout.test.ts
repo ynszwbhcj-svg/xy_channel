@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PassThrough } from "stream";
 
 // ── Mocks ─────────────────────────────────────────────────────────
@@ -15,7 +15,7 @@ vi.mock("../src/tools/session-manager.js", () => ({
   getCurrentSessionContext: mocks.getCurrentSessionContext,
 }));
 
-// file-upload 在本地文件路径分支才会用到；本测试只传远程 URL，走不到它
+// 本测试只传远程 URL，走不到本地文件上传
 vi.mock("../src/file-upload.js", () => ({
   XYFileUploadService: class {},
 }));
@@ -30,6 +30,18 @@ function makeStream() {
   return new PassThrough();
 }
 
+function captionFrame(text: string) {
+  return `data: ${JSON.stringify({
+    abilityInfos: [
+      { actionExecutorResult: { reply: { streamInfo: { streamContent: text } } } },
+    ],
+  })}\n\n`;
+}
+
+function parseResult(result: any) {
+  return JSON.parse((result.content[0] as any).text);
+}
+
 describe("image_reading SSE stream termination", () => {
   const baseCtx = {
     config: {
@@ -42,6 +54,12 @@ describe("image_reading SSE stream termination", () => {
     messageId: "msg-1",
   };
 
+  const run = (id: string) =>
+    imageReadingTool.execute(id, {
+      images: ["https://cdn.example.com/a.jpg"],
+      prompt: "描述",
+    });
+
   beforeEach(() => {
     vi.restoreAllMocks();
     mocks.fetch.mockReset();
@@ -49,56 +67,78 @@ describe("image_reading SSE stream termination", () => {
     mocks.getCurrentSessionContext.mockReturnValue(baseCtx);
   });
 
-  it("应把 AbortSignal 传给 fetch（替代失效的 timeout 选项）", async () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("应把 AbortSignal 传给 fetch，且返回最后一帧的完整描述", async () => {
     const stream = makeStream();
     mocks.fetch.mockResolvedValue(makeResponse(stream));
 
-    const donePromise = imageReadingTool.execute("c1", {
-      images: ["https://cdn.example.com/a.jpg"],
-      prompt: "描述",
-    });
+    const donePromise = run("c1");
 
-    // 等 fetch 被调用时捕获 signal
     await vi.waitFor(() => expect(mocks.fetch).toHaveBeenCalledTimes(1), { timeout: 2000 });
     const [, init] = mocks.fetch.mock.calls[0];
-    // fetch 必须带 signal（AbortController），不再依赖已失效的 timeout
     expect(init.signal).toBeDefined();
     expect(init.signal).toHaveProperty("aborted", false);
 
-    // 让流式响应返回正常结果
-    stream.write('data: {"abilityInfos":[{"actionExecutorResult":{"reply":{"streamInfo":{"streamContent":"一张猫的图片"}}}}]}\n\n');
+    // 上游按帧推送累积结果，最终结果在 [DONE] 前的最后一帧
+    stream.write(captionFrame("一只"));
+    stream.write(captionFrame("一只橘猫趴在窗台上"));
+    stream.write(captionFrame("一只橘猫趴在窗台上晒太阳，背景是绿色植物。"));
     stream.write("data: [DONE]\n\n");
 
-    const result = await donePromise;
-    const parsed = JSON.parse((result.content[0] as any).text);
+    const parsed = parseResult(await donePromise);
     expect(parsed.success).toBe(true);
-    expect(parsed.caption).toContain("猫");
+    expect(parsed.caption).toBe("一只橘猫趴在窗台上晒太阳，背景是绿色植物。");
   });
 
-  it("收到 [DONE] 后应提前 break，不傻等 EOF（防止 for await 无限挂起）", async () => {
+  it("收到 [DONE] 后不等 EOF 即可返回，且不丢描述", async () => {
     const stream = makeStream();
     mocks.fetch.mockResolvedValue(makeResponse(stream));
 
-    const donePromise = imageReadingTool.execute("c2", {
-      images: ["https://cdn.example.com/a.jpg"],
-      prompt: "描述",
-    });
-
+    const donePromise = run("c2");
     await vi.waitFor(() => expect(mocks.fetch).toHaveBeenCalledTimes(1), { timeout: 2000 });
 
-    // 只发 [DONE]，然后把流“永远不结束”（不调 stream.end()）——
-    // 旧代码会因 [DONE] 不 break 而无限挂起；新代码应在此限时内正常返回。
+    stream.write(captionFrame("一只橘猫趴在窗台上晒太阳。"));
     stream.write("data: [DONE]\n\n");
+    // 故意不调用 stream.end()
 
+    let guard: NodeJS.Timeout | undefined;
     const result = await Promise.race([
       donePromise,
-      new Promise<any>((_, reject) =>
-        setTimeout(() => reject(new Error("test timeout: stream did not terminate on [DONE]")), 5000),
-      ),
+      new Promise<any>((_, reject) => {
+        guard = setTimeout(
+          () => reject(new Error("test timeout: stream did not terminate on [DONE]")),
+          5000
+        );
+      }),
     ]);
-    // 结果可能 success=false（没有 caption），但绝不能永远卡住 ——
-    // 只要 execute 能返回就说明 [DONE] 触发了提前 break
-    expect(result).toBeDefined();
-    expect(Array.isArray(result.content)).toBe(true);
+    if (guard) clearTimeout(guard);
+
+    expect(parseResult(result).caption).toBe("一只橘猫趴在窗台上晒太阳。");
+  });
+
+  it("内层失败时也必须清掉外层兜底定时器", async () => {
+    vi.useFakeTimers();
+    mocks.fetch.mockRejectedValue(new Error("API boom"));
+
+    const result = await run("c3");
+
+    expect(parseResult(result).success).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("总超时兜底会让工具限时返回并清理定时器", async () => {
+    vi.useFakeTimers();
+    // fetch 永不返回：只有外层总超时能让 execute 结束
+    mocks.fetch.mockImplementation(() => new Promise(() => {}));
+
+    const donePromise = run("c4");
+    await vi.advanceTimersByTimeAsync(100_001);
+    const result = await donePromise;
+
+    expect(parseResult(result).error).toBe("图片理解工具执行超时");
+    expect(vi.getTimerCount()).toBe(0);
   });
 });

@@ -7,6 +7,11 @@ import fs from "fs/promises";
 import { v4 as uuidv4 } from "uuid";
 import { getCurrentSessionContext } from './session-manager.js';
 
+// 图片理解 API 的 SSE 读流上限。node-fetch v3 已移除 timeout 选项，只能用 AbortSignal 兜住。
+const IMAGE_UNDERSTAND_SSE_TIMEOUT_MS = 90_000;
+// 整个工具（含逐张 OBS 上传 + SSE 识别）的总时限。
+const IMAGE_READING_TOOL_TIMEOUT_MS = 100_000;
+
 /**
  * Check if value is a remote URL
  */
@@ -36,8 +41,13 @@ async function isLocalFile(value: string): Promise<boolean> {
  */
 async function processImageInput(
   imageInput: string,
-  uploadService: XYFileUploadService
+  uploadService: XYFileUploadService,
+  signal?: AbortSignal
 ): Promise<string> {
+
+  if (signal?.aborted) {
+    throw new Error("图片理解工具执行超时");
+  }
 
   // Remote URL: pass directly
   if (isRemoteUrl(imageInput)) {
@@ -48,6 +58,11 @@ async function processImageInput(
   const isLocal = await isLocalFile(imageInput);
   if (isLocal) {
     const imageUrl = await uploadService.uploadFileAndGetUrl(imageInput, "TEMPORARY_MATERIAL_DOC");
+
+    // 总时限已到时不再继续上传后续图片、也不再发起识别请求
+    if (signal?.aborted) {
+      throw new Error("图片理解工具执行超时");
+    }
 
     if (!imageUrl) {
       throw new Error("图片上传失败：无法获取图片访问地址");
@@ -69,7 +84,8 @@ async function callImageUnderstandingAPI(
   apiKey: string,
   uid: string,
   fileUploadUrl: string,
-  sessionId: string
+  sessionId: string,
+  externalSignal?: AbortSignal
 ): Promise<string> {
 
   const apiUrl = `${fileUploadUrl}/celia-claw/v1/sse-api/skill/execute`;
@@ -121,11 +137,14 @@ async function callImageUnderstandingAPI(
     ],
   };
 
-  // 图片理解 SSE 读流必须有的时钟上限。node-fetch v3 已移除 timeout 选项
-  // （写了也白写，被静默忽略），这里改用 AbortController 兜住：
-  // 达到时限主动中止，让 for await 因 AbortError 立即结束，工具必然在限时内返回。
-  const IMAGE_UNDERSTAND_SSE_TIMEOUT_MS = 90_000;
+  // 内部 90s 上限与 execute 总时限都 abort 同一个 signal，任一超时都会终止在途请求。
   const controller = new AbortController();
+  const onExternalAbort = () => controller.abort();
+  if (externalSignal?.aborted) {
+    controller.abort();
+  } else if (externalSignal) {
+    externalSignal.addEventListener("abort", onExternalAbort, { once: true });
+  }
   const overallTimer = setTimeout(() => controller.abort(), IMAGE_UNDERSTAND_SSE_TIMEOUT_MS);
   const sseStartedAt = Date.now();
   const isSseTimedOut = () => Date.now() - sseStartedAt >= IMAGE_UNDERSTAND_SSE_TIMEOUT_MS;
@@ -154,8 +173,7 @@ async function callImageUnderstandingAPI(
       throw new Error("Response body is null");
     }
 
-    // for await 在 controller.abort() 后会因 AbortError 退出；
-    // 同时用 [DONE] / 首个有效结果 / 硬时限做提前 break，避免傻等 EOF。
+    // streamContent 按帧推送，最终结果在最后一帧；只在 [DONE] / EOF / abort 时退出。
     for await (const chunk of response.body) {
       if (streamDone || isSseTimedOut()) break;
       if (!chunk) continue;
@@ -172,11 +190,10 @@ async function callImageUnderstandingAPI(
         if (trimmedLine.startsWith("data:")) {
           const dataContent = trimmedLine.substring(5).trim();
 
-          // 结束标记：不再继续等流，直接离场
+          // 结束标记：先处理完同一 chunk 剩余行，再在循环外离场
           if (dataContent === "[DONE]") {
-            buffer = "";
             streamDone = true;
-            break;
+            continue;
           }
 
           if (dataContent) {
@@ -200,8 +217,8 @@ async function callImageUnderstandingAPI(
         }
       }
 
-      // 拿到首个有效识别结果即收工，或已收到 [DONE]，不再继续等待后续流数据
-      if (lastCaption || streamDone || isSseTimedOut()) break;
+      // 不能用「已有 caption」提前收工，否则只拿到第一帧
+      if (streamDone || isSseTimedOut()) break;
     }
 
     if (!lastCaption) {
@@ -216,6 +233,7 @@ async function callImageUnderstandingAPI(
     throw error;
   } finally {
     clearTimeout(overallTimer);
+    externalSignal?.removeEventListener("abort", onExternalAbort);
   }
 }
 
@@ -277,15 +295,17 @@ export const imageReadingTool = {
       // Process images: local files upload to OBS, remote URLs pass directly
       const allImageUrls: string[] = [];
 
+      // 上传与识别共用一个 signal：任一超时都终止在途请求，不在后台继续跑。
+      const controller = new AbortController();
+      let toolTimeoutTimer: NodeJS.Timeout | undefined;
+
       try {
-        // 工具整体硬超时兜底：即使上传/识别任一段失联，整个 execute 也必须在
-        // 限时内结束（内部 callImageUnderstandingAPI 已有 90s SSE 超时，这里再
-        // 兜住包含 OBS 上传在内的整段工具执行）。
-        let toolTimeoutTimer: NodeJS.Timeout | undefined;
         const caption = await Promise.race([
           (async () => {
             for (const imageInput of images) {
-              allImageUrls.push(await processImageInput(imageInput, uploadService));
+              allImageUrls.push(
+                await processImageInput(imageInput, uploadService, controller.signal)
+              );
             }
 
             // Call image understanding API with all image URLs
@@ -295,20 +315,17 @@ export const imageReadingTool = {
               config.apiKey,
               config.uid,
               config.fileUploadUrl,
-              sessionId
+              sessionId,
+              controller.signal
             );
           })(),
           new Promise<never>((_, reject) => {
-            toolTimeoutTimer = setTimeout(
-              () => reject(new Error("图片理解工具执行超时")),
-              100_000
-            );
+            toolTimeoutTimer = setTimeout(() => {
+              reject(new Error("图片理解工具执行超时"));
+              controller.abort();
+            }, IMAGE_READING_TOOL_TIMEOUT_MS);
           }),
         ]);
-        // 工具在超时前完成：清掉兜底定时器，避免残留 timer 拖住进程
-        if (toolTimeoutTimer) {
-          clearTimeout(toolTimeoutTimer);
-        }
 
         return {
           content: [
@@ -339,6 +356,11 @@ export const imageReadingTool = {
             },
           ],
         };
+      } finally {
+        // 成功、失败、超时三条路径都要清掉兜底 timer
+        if (toolTimeoutTimer) {
+          clearTimeout(toolTimeoutTimer);
+        }
       }
     },
 };
