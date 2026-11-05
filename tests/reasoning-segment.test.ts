@@ -39,13 +39,17 @@ import {
 import {
   getOrCreateSession,
   rotateStreamingTextSegment,
+  rotateStreamingTextForBodyStart,
   deleteSession,
   listSessions,
 } from "../src/conversation/conversation-manager.js";
+import { StreamAssembler } from "../src/conversation/stream-assembler.js";
 import {
   getOrCreateStreamingTextId,
+  peekStreamingTextId,
   releaseStreamingTextId,
 } from "../src/utils/streaming-text-id.js";
+import { markAppVersion, releaseAppVersion } from "../src/utils/app-version.js";
 import { releaseThinkIndex } from "../src/utils/think-index.js";
 import {
   markLastChunkBlock,
@@ -162,10 +166,17 @@ describe("rotateStreamingTextSegment reasoning close", () => {
     vi.clearAllMocks();
   });
 
+  /** 让当前分段出现正文段落（正文段落出现后的边界才会真正拆分）。 */
+  function giveBodyParagraph(text = "正文段") {
+    const session = getOrCreateSession(sessionId);
+    session.assembler = new StreamAssembler();
+    session.assembler.onStreamText(text);
+  }
+
   it("closes an open reasoning segment with the old id before rotating", async () => {
-    getOrCreateSession(sessionId);
     const oldId = getOrCreateStreamingTextId(taskId);
     noteReasoningSnapshot(taskId, "思考前半段");
+    giveBodyParagraph();
 
     const newId = await rotateStreamingTextSegment({ config, sessionId, taskId, messageId });
     expect(newId).not.toBe(oldId);
@@ -188,20 +199,155 @@ describe("rotateStreamingTextSegment reasoning close", () => {
   });
 
   it("rotates without a close frame when no reasoning segment is open", async () => {
-    getOrCreateSession(sessionId);
-    await rotateStreamingTextSegment({ config, sessionId, taskId, messageId });
+    giveBodyParagraph();
+    const oldId = getOrCreateStreamingTextId(taskId);
+    const newId = await rotateStreamingTextSegment({ config, sessionId, taskId, messageId });
+    expect(newId).not.toBe(oldId);
     expect(mocks.sendReasoningTextUpdate).not.toHaveBeenCalled();
   });
 
   it("does not send a second close frame when the segment is already closed", async () => {
-    getOrCreateSession(sessionId);
     noteReasoningSnapshot(taskId, "思考内容");
     // 模拟 onReasoningEnd 已收尾（结束标记帧已入队）
     closeReasoningSegment(taskId);
+    giveBodyParagraph();
 
     await rotateStreamingTextSegment({ config, sessionId, taskId, messageId });
     expect(mocks.sendReasoningTextUpdate).not.toHaveBeenCalled();
     // 但基线仍切分：新 id 的思考帧不得携带边界前文本
     expect(noteReasoningSnapshot(taskId, "思考内容追加")).toBe("追加");
+  });
+
+  it("keeps the same id and skips the split when no body paragraph has appeared", async () => {
+    getOrCreateSession(sessionId);
+    const oldId = getOrCreateStreamingTextId(taskId);
+    noteReasoningSnapshot(taskId, "思考前半段");
+
+    const id = await rotateStreamingTextSegment({ config, sessionId, taskId, messageId });
+    expect(id).toBe(oldId);
+
+    // 不拆分：无正文/思考收尾帧，思考流块保持未闭合，基线不切分 ——
+    // 连续思考段共享同一 streamingTextId
+    expect(mocks.sendA2AResponse).not.toHaveBeenCalled();
+    expect(mocks.sendReasoningTextUpdate).not.toHaveBeenCalled();
+    expect(isReasoningSegmentOpen(taskId)).toBe(true);
+    // SDK 跨工具边界续流的全量快照（含边界前文本）在同一 id 下整体下发
+    expect(noteReasoningSnapshot(taskId, "思考前半段思考后半段")).toBe("思考前半段思考后半段");
+  });
+
+  it("resumes splitting at the first boundary after a body paragraph appears", async () => {
+    const session = getOrCreateSession(sessionId);
+    const oldId = getOrCreateStreamingTextId(taskId);
+    noteReasoningSnapshot(taskId, "思考段");
+
+    // 无正文段落的边界：跳过，id 不变
+    expect(await rotateStreamingTextSegment({ config, sessionId, taskId, messageId })).toBe(oldId);
+    expect(mocks.sendA2AResponse).not.toHaveBeenCalled();
+    expect(mocks.sendReasoningTextUpdate).not.toHaveBeenCalled();
+
+    // 正文段落出现后的边界：恢复拆分 —— 正文/思考各自以旧 id 收尾，轮换新 id
+    session.assembler = new StreamAssembler();
+    session.assembler.onStreamText("正文段");
+    const newId = await rotateStreamingTextSegment({ config, sessionId, taskId, messageId });
+    expect(newId).not.toBe(oldId);
+    expect(mocks.sendA2AResponse).toHaveBeenCalledTimes(1);
+    expect(mocks.sendA2AResponse).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "正文段", lastChunk: true }),
+    );
+    expect(mocks.sendReasoningTextUpdate).toHaveBeenCalledTimes(1);
+    expect(mocks.sendReasoningTextUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "思考段", lastChunk: true, streamingTextId: oldId }),
+    );
+    // 基线切分：其后的思考段只携带增量，归属新 id
+    expect(noteReasoningSnapshot(taskId, "思考段新思考")).toBe("新思考");
+  });
+});
+
+describe("rotateStreamingTextForBodyStart reasoning→body switch", () => {
+  const sessionId = "sess-body-switch";
+  const taskId = "task-body-switch";
+  const messageId = "msg-body-switch";
+  const config = {} as never;
+
+  beforeEach(() => {
+    mocks.sendReasoningTextUpdate.mockResolvedValue(undefined);
+    mocks.sendA2AResponse.mockResolvedValue(undefined);
+  });
+
+  afterEach(() => {
+    for (const session of listSessions()) {
+      deleteSession(session.sessionId);
+    }
+    releaseReasoningSegment(taskId);
+    releaseStreamingTextId(taskId);
+    releaseThinkIndex(taskId);
+    releaseAppVersion(taskId);
+    vi.clearAllMocks();
+  });
+
+  it("rotates to a new id when body text starts after reasoning", async () => {
+    getOrCreateSession(sessionId);
+    const thinkingId = getOrCreateStreamingTextId(taskId);
+    noteReasoningSnapshot(taskId, "思考内容");
+    // 模拟 onReasoningEnd 已收尾（结束标记帧已以旧 id 入队）
+    closeReasoningSegment(taskId);
+
+    const bodyId = await rotateStreamingTextForBodyStart({ config, sessionId, taskId, messageId });
+    expect(bodyId).not.toBe(thinkingId);
+    expect(peekStreamingTextId(taskId)).toBe(bodyId);
+    // 思考已由 thinking_end 收尾：不再补收尾帧
+    expect(mocks.sendReasoningTextUpdate).not.toHaveBeenCalled();
+  });
+
+  it("closes an unclosed reasoning block with the old id before switching", async () => {
+    getOrCreateSession(sessionId);
+    const thinkingId = getOrCreateStreamingTextId(taskId);
+    noteReasoningSnapshot(taskId, "思考内容"); // 未闭合（SDK 未发 thinking_end）
+
+    const bodyId = await rotateStreamingTextForBodyStart({ config, sessionId, taskId, messageId });
+    expect(bodyId).not.toBe(thinkingId);
+
+    // 以旧 id 补思考收尾帧：完整段文本 + lastChunk=true + isReasoningFinished=false
+    expect(mocks.sendReasoningTextUpdate).toHaveBeenCalledTimes(1);
+    expect(mocks.sendReasoningTextUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        taskId,
+        text: "思考内容",
+        append: false,
+        lastChunk: true,
+        isReasoningFinished: false,
+        streamingTextId: thinkingId,
+      }),
+    );
+    expect(isReasoningSegmentOpen(taskId)).toBe(false);
+  });
+
+  it("keeps the id when the segment has no reasoning content", async () => {
+    getOrCreateSession(sessionId);
+    const id = getOrCreateStreamingTextId(taskId);
+    // 纯正文段（无思考内容）：正文首帧沿用当前 id，不切换
+    expect(await rotateStreamingTextForBodyStart({ config, sessionId, taskId, messageId })).toBe(id);
+    expect(mocks.sendReasoningTextUpdate).not.toHaveBeenCalled();
+  });
+
+  it("keeps the id when body content already exists in the segment", async () => {
+    const session = getOrCreateSession(sessionId);
+    const id = getOrCreateStreamingTextId(taskId);
+    noteReasoningSnapshot(taskId, "思考");
+    session.assembler = new StreamAssembler();
+    session.assembler.onStreamText("正文");
+    // 正文段已开始：重复调用为 no-op（不重复切换）
+    expect(await rotateStreamingTextForBodyStart({ config, sessionId, taskId, messageId })).toBe(id);
+    expect(mocks.sendReasoningTextUpdate).not.toHaveBeenCalled();
+  });
+
+  it("keeps the id on the legacy app version link", async () => {
+    getOrCreateSession(sessionId);
+    markAppVersion(taskId, "11.7.8.100"); // 低版本链路（< 11.7.9.301）
+    const id = getOrCreateStreamingTextId(taskId);
+    noteReasoningSnapshot(taskId, "思考内容");
+
+    expect(await rotateStreamingTextForBodyStart({ config, sessionId, taskId, messageId })).toBe(id);
+    expect(mocks.sendReasoningTextUpdate).not.toHaveBeenCalled();
   });
 });

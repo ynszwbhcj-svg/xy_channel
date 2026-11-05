@@ -21,6 +21,7 @@ import {
   isTurnCanceled,
   isTurnSuperseded,
   deliverSubagentFinalResult,
+  rotateStreamingTextForBodyStart,
 } from "../conversation/conversation-manager.js";
 import { StreamAssembler } from "../conversation/stream-assembler.js";
 import { markReasoningFinished, markReasoningStreaming } from "../utils/reasoning-state.js";
@@ -360,6 +361,14 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
           // 同样经出站队列保序；与流式帧同 coalesceKey，可被后续全量帧合并。
           const deliverTaskId = getActiveTaskId();
           const deliverMessageId = getActiveMessageId();
+          // 思考→正文切换：当前 id 段携带过思考内容时轮换 streamingTextId
+          // （思考与正文不共用 id）；纯正文段/低版本链路为 no-op
+          await rotateStreamingTextForBodyStart({
+            config,
+            sessionId,
+            taskId: deliverTaskId,
+            messageId: deliverMessageId,
+          });
           outboundQueue.enqueue({
             taskId: deliverTaskId,
             label: "deliver-fallback",
@@ -893,10 +902,22 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
           await prevChain;
           if (isOutputStale()) return;
 
-          // assembler 内部完成 startsWith 边界检测与跨调用锁存（含轮间换行）
-          assembler.onStreamText(text);
           const partialTaskId = getActiveTaskId();
           const partialMessageId = getActiveMessageId();
+
+          // 🔑 思考→正文切换（高版本链路）：本段首帧正文产生前（装配器尚空），
+          // 若当前 id 段携带过思考内容，轮换 streamingTextId —— 思考与正文
+          // 不共用 id（思考段1=思考段2 ≠ 正文1）。必须在 onStreamText 之前：
+          // 装配器一旦有内容即视为正文段已开始，后续 partial 不再触发切换。
+          await rotateStreamingTextForBodyStart({
+            config,
+            sessionId,
+            taskId: partialTaskId,
+            messageId: partialMessageId,
+          });
+
+          // assembler 内部完成 startsWith 边界检测与跨调用锁存（含轮间换行）
+          assembler.onStreamText(text);
 
           // 🔑 帧文本在 drain 时惰性读取装配器，而非入队时捕获快照：
           // 帧在队期间若发生分段边界（工具调用边界 → 轮换

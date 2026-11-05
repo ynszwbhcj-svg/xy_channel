@@ -114,8 +114,9 @@ export async function sendA2AResponse(params: SendA2AResponseParams): Promise<vo
   // lastChunk 标识当前流文本块是否结束（结束=true，可开始下一块）：仅正文
   // 终帧（final=true）与分段收尾帧（显式传 true）允许为 true，流式进行中的
   // 中间帧一律 false。streamingTextId 为本轮 turn 文本流的独立标识，
-  // 同一分段内所有文本帧共享；turn 内工具调用/返回边界会轮换新 id
-  // （见 step-info-tool），turn 结束后（final 帧发出）释放，下轮更换新 id。
+  // 同一分段内所有文本帧共享；turn 内工具调用/返回边界（见 step-info-tool）
+  // 与思考→正文切换（见 conversation-manager.rotateStreamingTextForBodyStart）
+  // 会轮换新 id，turn 结束后（final 帧发出）释放，下轮更换新 id。
   const artifact: A2ATaskArtifactUpdateEvent = {
     taskId,
     taskUniqId: taskId,

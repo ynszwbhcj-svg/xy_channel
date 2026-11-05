@@ -7,6 +7,12 @@
 //    （conversation-manager.rotateStreamingTextSegment）：边界前的旧段以
 //    lastChunk=true 收尾帧结束、并攒入 thinkIndex（终态汇总卡统一携带），
 //    边界后的文本帧使用新 id，且新 id 帧不叠加旧段文本。
+//    无正文段落不拆分：当前分段尚无正文内容时边界整体跳过（不轮换 id、
+//    不切基线、不发收尾帧）—— 正文段落出现前不允许出现多个思考 id
+//    （思考段1……工具……思考段2……正文1 路径中思考段1与思考段2同 id），
+//    直至出现新的正文段落才轮换。思考→正文的类型切换不在本模块：由
+//    reply-dispatcher 在正文段首帧前轮换（思考与正文不共用 id，见
+//    conversation-manager.rotateStreamingTextForBodyStart）。
 //    （原 Common/StepInfo 命令已移除，只保留分段边界本身。）
 //    - displayName 按分类映射（网页搜索/运行命令/文件创建/编辑文件/读取文件/
 //      查找文件/分析图片/生成图片/生成音乐/生成视频/下载文件）
@@ -324,10 +330,11 @@ function resolveSendContext(
 
 // ── 命令下发 ───────────────────────────────────────────────────────
 
-/** 文本分段边界：以旧 id 补发旧段完整文本（lastChunk=true 收尾帧，正文与
- *  未闭合思考段各自收尾）并等队列排空，再轮换 streamingTextId、切分流式
- *  装配器与思考段基线 —— 其后的文本帧使用新 id，且只携带边界后新段的
- *  文本（端侧按 id 聚合流式文本段）。
+/** 文本分段边界：正文段落已出现时，以旧 id 补发旧段完整文本（lastChunk=true
+ *  收尾帧，正文与未闭合思考段各自收尾）并等队列排空，再轮换 streamingTextId、
+ *  切分流式装配器与思考段基线 —— 其后的文本帧使用新 id，且只携带边界后新段
+ *  的文本（端侧按 id 聚合流式文本段）。当前分段尚无正文段落时整体跳过
+ *  （连续思考段共享同一 id，见 conversation-manager.rotateStreamingTextSegment）。
  *  内部还会标记 thinkIndex 待下发值（见 utils/think-index）。 */
 async function rotateTextSegmentAtToolBoundary(params: {
   config: XYChannelConfig;
@@ -335,9 +342,9 @@ async function rotateTextSegmentAtToolBoundary(params: {
   taskId: string;
   messageId: string;
 }): Promise<void> {
-  const newStreamingTextId = await rotateStreamingTextSegment(params);
+  const streamingTextId = await rotateStreamingTextSegment(params);
   logger.log(
-    `${LOG_TAG} rotated streamingTextId taskId=${params.taskId} newId=${newStreamingTextId}`,
+    `${LOG_TAG} segment boundary taskId=${params.taskId} streamingTextId=${streamingTextId}`,
   );
 }
 

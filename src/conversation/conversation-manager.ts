@@ -12,11 +12,11 @@
 
 import { randomUUID } from "crypto";
 import { logger } from "../utils/logger.js";
-import { releaseStreamingTextId, releaseLastSentStreamingTextId, rotateStreamingTextId, peekStreamingTextId } from "../utils/streaming-text-id.js";
+import { releaseStreamingTextId, releaseLastSentStreamingTextId, rotateStreamingTextId, peekStreamingTextId, getOrCreateStreamingTextId } from "../utils/streaming-text-id.js";
 import { releaseStatusCardSeq, getCurrentStatusCardSeq } from "../utils/status-card-seq.js";
 import { markLastChunkBlock, markReasoningBlockEnd, getAccumulatedThinkIndex, peekLastReasoningBlockSeq, releaseThinkIndex } from "../utils/think-index.js";
-import { releaseAppVersion } from "../utils/app-version.js";
-import { clearBodyTextState } from "../utils/body-text-state.js";
+import { releaseAppVersion, isLegacyAppVersion } from "../utils/app-version.js";
+import { clearBodyTextState, isBodyTextSent } from "../utils/body-text-state.js";
 import {
   isReasoningSegmentOpen,
   closeReasoningSegment,
@@ -180,8 +180,16 @@ export function getCurrentTask(sessionId: string): TaskEntry | null {
  *      渲染，SDK 跨边界续流的全量快照含边界前文本，必须剥离）；
  *   4. 切分 session 的流式装配器 —— 后续 append:false 全量帧只携带边界
  *      之后新段的文本，不再叠加旧 id 段内容。
- * 返回新 streamingTextId。无装配器/无内容且无未闭合思考块（cron 等无
- * dispatcher 场景、或边界前尚无文本）时跳过收尾帧，仅轮换 id 与切分基线。
+ * 返回新 streamingTextId。
+ *
+ * 高版本规则（无正文段落不拆分）：当前分段尚未出现正文段落（装配器无
+ * 内容且正文首帧未发出）时，边界整体跳过 —— 不轮换 streamingTextId、
+ * 不切分思考段基线、不发任何收尾帧，返回在役 id。端侧按 streamingTextId
+ * 聚合渲染，正文段落出现前不允许出现多个思考 id：思考段1……工具1、2、3
+ * ……思考段2……正文1 的路径中，思考段1与思考段2共享同一 streamingTextId，
+ * 思考流在同一 id 下无缝续流（SDK 跨工具边界的全量快照仍累计边界前文本，
+ * append:false 语义下同 id 整体替换即正确展示）。正文段落出现后的首个
+ * 边界起恢复按 1-4 正常拆分（其后的思考段使用轮换后的新 id）。
  */
 export async function rotateStreamingTextSegment(params: {
   config: XYChannelConfig;
@@ -192,6 +200,17 @@ export async function rotateStreamingTextSegment(params: {
   const { config, sessionId, taskId, messageId } = params;
   const session = sessions.get(sessionId);
   const assembler = session?.assembler;
+
+  // 无正文段落的边界不拆分（见上文高版本规则）：连续思考段共享同一
+  // streamingTextId。装配器无内容且正文首帧未发出 = 当前分段只有思考
+  // （或完全为空，如 cron 无 dispatcher 场景），没有需要收尾/切分的正文段。
+  if (!assembler?.hasContent() && !isBodyTextSent(taskId)) {
+    const currentId = getOrCreateStreamingTextId(taskId);
+    logger.withContext(sessionId, taskId).log(
+      `[SEGMENT] no body paragraph yet, skip boundary split, keep streamingTextId=${currentId}`,
+    );
+    return currentId;
+  }
 
   if (session && assembler?.hasContent()) {
     const oldSegmentText = assembler.getFullText();
@@ -264,6 +283,83 @@ export async function rotateStreamingTextSegment(params: {
   // 新文本段 = 新一轮模型回复：复位"正文首帧已发出"标记，工具 command
   // 重新获得先于正文下发的窗口（见 utils/body-text-state.ts）。
   clearBodyTextState(taskId);
+  return newId;
+}
+
+/**
+ * 思考→正文类型切换（高版本链路）：正文段首帧产生前调用（reply-dispatcher
+ * 的 onPartialReply 流式路径 / deliver 非流式回退路径）。思考与正文不共用
+ * streamingTextId —— 当前 id 段携带过思考内容时，正文首帧起轮换为新 id：
+ *   1. 先等出站队列排空 —— 在途思考帧（id 入队时已 pin）与 lazy 读 id 的
+ *      status-update 旁路帧均以旧 id 落定；
+ *   2. 思考流块仍未闭合（SDK 未发 thinking_end 的防御路径）时，以旧 id 补发
+ *      该段完整文本（lastChunk=true）并再次等排空；
+ *   3. 轮换 streamingTextId —— 正文帧自首帧起使用新 id。
+ * 不轮换的情形（返回在役 id）：当前段无思考内容（纯正文段，id 已是新起点）、
+ * 正文内容已出现（调用点应在新段首帧之前；重复调用幂等）、低版本链路
+ * （无分段能力，整轮 turn 单 id）。
+ * 与 rotateStreamingTextSegment 的分工：工具边界只拆分"正文段已出现"的流
+ * （无正文段落不拆分，连续思考段共享同一 id）；思考→正文的类型切换点在
+ * 正文首帧产生处，由本函数收口。
+ */
+export async function rotateStreamingTextForBodyStart(params: {
+  config: XYChannelConfig;
+  sessionId: string;
+  taskId: string;
+  messageId: string;
+}): Promise<string> {
+  const { config, sessionId, taskId, messageId } = params;
+  const session = sessions.get(sessionId);
+  const assembler = session?.assembler;
+
+  if (
+    isLegacyAppVersion(taskId) ||
+    assembler?.hasContent() ||
+    isBodyTextSent(taskId) ||
+    (!isReasoningSegmentOpen(taskId) && peekReasoningSegmentText(taskId).length === 0)
+  ) {
+    return getOrCreateStreamingTextId(taskId);
+  }
+
+  // 在途帧以旧 id 落定（drain 期间 lazy 读 id 的旁路帧也仍以旧 id 发出）
+  if (session) await session.outboundQueue.whenIdle();
+
+  // 思考流块未闭合（防御 SDK 未发 thinking_end）：以旧 id 补收尾帧。
+  // 与分段边界的思考收尾同理不设 coalesceKey（协议关键帧）；isReasoningFinished
+  // 显式 pin false —— 此处是思考→正文的类型切换，非 thinking_end 语义。
+  if (session && isReasoningSegmentOpen(taskId)) {
+    // 攒入思考块的 taskUniqIndexId（终态汇总卡统一携带），同步标记不受出站
+    // 队列时序影响；同时登记为本 turn 最近闭合思考块
+    markReasoningBlockEnd(taskId, getCurrentStatusCardSeq(taskId));
+    // 同步闭合分段（不等收尾帧 drain），onReasoningEnd 据此不再补标记帧
+    closeReasoningSegment(taskId);
+    // 段文本与 streamingTextId 均在入队时捕获/pin —— drain 期间新快照或
+    // 轮换不影响本帧归属
+    const segmentText = peekReasoningSegmentText(taskId);
+    const streamingTextId = peekStreamingTextId(taskId);
+    session.outboundQueue.enqueue({
+      taskId,
+      label: "reasoning-body-switch-flush",
+      send: () =>
+        sendReasoningTextUpdate({
+          config,
+          sessionId,
+          taskId,
+          messageId,
+          text: segmentText,
+          append: false,
+          isReasoningFinished: false,
+          lastChunk: true,
+          streamingTextId,
+        }),
+    });
+    await session.outboundQueue.whenIdle();
+  }
+
+  const newId = rotateStreamingTextId(taskId);
+  logger.withContext(sessionId, taskId).log(
+    `[SEGMENT] reasoning→body switch, rotated streamingTextId=${newId}`,
+  );
   return newId;
 }
 

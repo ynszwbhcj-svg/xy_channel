@@ -2,9 +2,14 @@
 //
 // 每一轮 turn（一个 taskId）的模型文本流携带一个独立的 uuidv4 streamingTextId：
 //   - turn 内所有流式帧（含终帧）共享同一 streamingTextId（get-or-create 保证稳定）；
-//   - turn 内出现分段边界（工具调用/返回，见 step-info-tool）时
-//     rotateStreamingTextId 轮换 id，边界之后的文本帧与之前的文本帧使用不同的
-//     streamingTextId；
+//   - turn 内出现分段边界（工具调用/返回，见 step-info-tool）且当前分段已
+//     出现正文段落时，rotateStreamingTextSegment 轮换 id，边界之后的文本帧
+//     与之前的文本帧使用不同的 streamingTextId；尚无正文段落的边界不轮换
+//     —— 正文段落出现前不允许出现多个思考 id（连续思考段共享同一 id，见
+//     conversation-manager.rotateStreamingTextSegment）；
+//   - 思考→正文类型切换（正文段首帧产生前，见
+//     conversation-manager.rotateStreamingTextForBodyStart）：当前 id 段
+//     携带过思考内容时轮换 id —— 思考与正文不共用 streamingTextId；
 //   - turn 文本输出完成（lastChunk=true 的终帧发出）后释放，下一轮 turn
 //     （新 taskId）开始时生成新的 streamingTextId。
 //
