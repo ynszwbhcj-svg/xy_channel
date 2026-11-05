@@ -52,6 +52,50 @@ import { clearPendingApproval } from "../approval-bridge.js";
 import type { A2AJsonRpcRequest } from "../types.js";
 import { logger } from "../utils/logger.js";
 
+// ── steer 回退重分发前的 channel 侧就绪判定 ───────────────────────
+// 只使用 openclaw 已暴露的 resolveActiveEmbeddedRunSessionId 与 channel 自身
+// 的任务链收尾信号，不依赖、不修改上游内部实现。超时只放行、不重试。
+const CHANNEL_READY_POLL_MS = 100;
+const CHANNEL_READY_TIMEOUT_MS = 3_000;
+
+/**
+ * steer 直接注入失败后、重分发前的短保守等待：上游活跃 run 退出或 channel 侧
+ * 旧 turn 收尾即放行，从源头消掉「重分发撞上活跃 run → 被排成 followup →
+ * 空 idle 误判失败」。长等待已由 waitForPreviousTurn 承担，这里只补边界窗口。
+ * 超时放行、不重试；残余竞态由 reply-dispatcher 的空 idle 延后收尾兜底。
+ * 仅作用于 steer 回退分支，其余通路一律不受影响。
+ */
+async function waitForChannelTurnReady(
+  sessionId: string,
+  sessionKey: string | undefined,
+  log: ReturnType<typeof logger.withContext>,
+): Promise<void> {
+  if (!sessionKey) return;
+  const deadline = Date.now() + CHANNEL_READY_TIMEOUT_MS;
+  for (;;) {
+    const session = getSession(sessionId);
+    // 任务链已清空：clearContext 或旧 turn 的 onIdleComplete 已收尾 → 直接放行。
+    if (!session || session.tasks.length === 0) return;
+    // tasks/cancel 并发 abort、subagent 等待态：各有自己的收口时序，不等待。
+    const canceledTurn = session.tasks.some((t) => session.canceledTurnIds.has(t.taskId));
+    if (canceledTurn || hasWaitState(sessionId)) return;
+
+    let upstreamActive = false;
+    try {
+      upstreamActive = !!resolveActiveEmbeddedRunSessionId(sessionKey);
+    } catch {
+      upstreamActive = false;
+    }
+    if (!upstreamActive) return;
+
+    if (Date.now() >= deadline) {
+      log.warn(`[BOT-STEER] Channel readiness wait timed out — proceeding without retry`);
+      return;
+    }
+    await new Promise<void>((resolve) => setTimeout(resolve, CHANNEL_READY_POLL_MS));
+  }
+}
+
 /**
  * Parameters for handling an XY message.
  */
@@ -472,6 +516,9 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
       // 队列关闭或 run 已消失时，旧 dispatch 仍可能持有 session 写锁。
       // 等它完成收尾再开新 turn，避免并发写锁竞争和 60s 超时。
       await params.waitForPreviousTurn?.();
+      // 等 channel 侧旧 turn 收尾 + 上游活跃 run 退出，避免新 turn 被排成 followup。
+      // 超时放行、不重试；残余竞态由 reply-dispatcher 的空 idle 延后收尾兜底。
+      await waitForChannelTurnReady(parsed.sessionId, route.sessionKey, log);
       registerTask(parsed.sessionId, parsed.taskId, parsed.messageId);
       log.log(`[BOT-STEER] Previous turn settled, re-dispatching as a new turn`);
 
@@ -567,10 +614,7 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
     };
 
     // 低版本链路：使用合并前 0730 的 dispatcher（src/legacy/，完全独立实现）
-    const createDispatcher = isLegacyAppVersion(parsed.taskId)
-      ? createLegacyReplyDispatcher
-      : createXYReplyDispatcher;
-    const { dispatcher, replyOptions, markDispatchIdle, startStatusInterval } = createDispatcher({
+    const dispatcherParams = {
       cfg,
       runtime,
       sessionId: parsed.sessionId,
@@ -578,7 +622,22 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
       messageId: parsed.messageId,
       accountId: route.accountId,
       onIdleComplete: cleanup,
-    });
+    };
+    // 活跃 run 判定只给主链路：空 idle 时用于识别「消息被排成 followup」。
+    // 低版本链路参数形状独立，不额外透传，保持其原行为零变化。
+    const { dispatcher, replyOptions, markDispatchIdle, startStatusInterval } =
+      isLegacyAppVersion(parsed.taskId)
+        ? createLegacyReplyDispatcher(dispatcherParams)
+        : createXYReplyDispatcher({
+            ...dispatcherParams,
+            isUpstreamRunActive: () => {
+              try {
+                return !!resolveActiveEmbeddedRunSessionId(route.sessionKey);
+              } catch {
+                return false;
+              }
+            },
+          });
 
     // 每个新 dispatcher 都接管心跳；直接 steer 不创建 dispatcher，沿用原心跳。
     startStatusInterval();

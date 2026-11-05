@@ -14,6 +14,7 @@ import {
   getCurrentTaskId,
   getCurrentMessageId,
   getOrCreateSession,
+  getSession,
   startStatusHeartbeat,
   stopStatusHeartbeat,
   setSessionState,
@@ -26,6 +27,13 @@ import { StreamAssembler } from "../conversation/stream-assembler.js";
 import { markReasoningFinished, markReasoningStreaming } from "../utils/reasoning-state.js";
 import { getCurrentStatusCardSeq } from "../utils/status-card-seq.js";
 import { markLastChunkBlock, getAccumulatedThinkIndex } from "../utils/think-index.js";
+
+/** 延后收尾期间的上游 run 轮询间隔。 */
+const EMPTY_IDLE_POLL_MS = 1_000;
+/** 上游 run 退出后再给 followup drain 的落地窗口；期间收到 reply 会立即唤醒。 */
+const FOLLOWUP_SETTLE_MS = 5_000;
+/** 延后收尾的硬上限：上游 run 长期不退时也要释放 dispatcher。 */
+const EMPTY_IDLE_MAX_MS = 60_000;
 
 // ⚙️ 前缀是 openclaw 系统消息稳定标记（infra/system-message.ts SYSTEM_MARK）。
 // ACP 绑定会话 turn 结束会以 kind=final 尾随投递系统诊断通知（如
@@ -95,6 +103,12 @@ export interface CreateXYReplyDispatcherParams {
   /** Called at end of onIdle, after final frame is sent. openclaw's waitForIdle() does
    *  not await the async onIdle, so cleanup must happen inside onIdle itself. */
   onIdleComplete?: () => void | Promise<void>;
+  /**
+   * channel 侧注入：空 idle 时上游是否仍有活跃 run（可能有 followup 排队）。
+   * 由 bot.ts 用已暴露的 resolveActiveEmbeddedRunSessionId 实现；本文件不引入
+   * 新的 openclaw 运行时依赖，保证既有 dispatcher 单测的模块桩不变。
+   */
+  isUpstreamRunActive?: () => boolean;
 }
 
 const TEMP_FILE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
@@ -205,7 +219,7 @@ export async function cleanupStaleTempFiles(tempDir: string = "/tmp/xy_channel")
  * Runtime is expected to be validated before calling this function.
  */
 export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): any {
-  const { cfg, runtime, sessionId, taskId, messageId, accountId, onIdleComplete } = params;
+  const { cfg, runtime, sessionId, taskId, messageId, accountId, onIdleComplete, isUpstreamRunActive } = params;
 
   // fallback taskId/messageId（当对话管理层任务链为空时使用）
   const currentFallbackTaskId = taskId;
@@ -237,6 +251,21 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
 
   let hasSentResponse = false;
   let finalSent = false;
+
+  // ── 空 idle 延后收尾状态 ────────────────────────────────────────────
+  // openclaw 把消息排进 followup 时，本次 dispatch 不会立刻产出 reply。此时
+  // hasSentResponse=false 不代表失败：直接发 99921111 + final:true + cleanup 会
+  // 清掉 task 归属，让 followup 排队的真回复无处投递。仅当「无明确报错且上游
+  // 仍有活跃 run」时才延后收尾；其余真失败保持原有立即失败逻辑不变。
+  let hadReplyError = false;
+  let deferFinalization = false;
+  let quietFinalization = false;
+  let graceExpired = false;
+  let graceStartedAt = 0;
+  let upstreamClearedAt = 0;
+  let emptyIdleTimer: ReturnType<typeof setTimeout> | null = null;
+  let handleIdleRef: () => Promise<void> = async () => {};
+
   // 当前思考块的最新全量快照（onReasoningStream 的 append:false 语义即全量），
   // 供 onReasoningEnd 的思考块结束标记帧携带全量文本
   let lastReasoningText = "";
@@ -289,6 +318,68 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
       session.assembler = undefined;
     }
     await onIdleComplete?.();
+  };
+
+  /** 空 idle 时上游是否仍有活跃 run（由 bot.ts 注入的可观测信号）。 */
+  const hasActiveUpstreamRun = (): boolean => {
+    if (!isUpstreamRunActive) return false;
+    try {
+      return !!isUpstreamRunActive();
+    } catch {
+      return false;
+    }
+  };
+
+  const clearEmptyIdleTimer = () => {
+    if (emptyIdleTimer) {
+      clearTimeout(emptyIdleTimer);
+      emptyIdleTimer = null;
+    }
+  };
+
+  const reenterIdle = () => {
+    void handleIdleRef().catch((err) => scopedLog().error(`[ON-IDLE] Re-entered idle failed:`, err));
+  };
+
+  /** 延后期间收到 reply 或明确报错：结束宽限期，立即重新走一次 idle 收尾。 */
+  const resumeIdleAfterDefer = () => {
+    if (!emptyIdleTimer) return;
+    clearEmptyIdleTimer();
+    graceExpired = true;
+    // 让本轮 deliver/onError 先把自己的帧入队，再重进 idle。
+    void Promise.resolve().then(reenterIdle);
+  };
+
+  /**
+   * 延后期间轮询上游 run：run 退出后再留 FOLLOWUP_SETTLE_MS 给 followup drain
+   * 落地，期间本 dispatcher 收到 reply 会由 resumeIdleAfterDefer 提前唤醒。
+   * 结束时按共享会话状态决定收口方式：
+   *  - 仍是本 turn 的 working（或会话已消失）→ 真静默失败，落回原有失败逻辑，
+   *    保证端侧一定能收到终帧，不会挂住卡片；
+   *  - 其余状态说明别的 dispatcher 已收口或仍在途 → 静默，绝不补发失败帧。
+   */
+  const onGraceTick = () => {
+    emptyIdleTimer = null;
+    if (hasActiveUpstreamRun()) {
+      // followup 排队的 run 已启动，重新计时等待它跑完。
+      upstreamClearedAt = 0;
+    } else if (upstreamClearedAt === 0) {
+      upstreamClearedAt = Date.now();
+    }
+    const settled = upstreamClearedAt > 0 && Date.now() - upstreamClearedAt >= FOLLOWUP_SETTLE_MS;
+    if (!settled && Date.now() - graceStartedAt < EMPTY_IDLE_MAX_MS) {
+      emptyIdleTimer = setTimeout(onGraceTick, EMPTY_IDLE_POLL_MS);
+      return;
+    }
+
+    graceExpired = true;
+    const state = getSession(sessionId)?.state;
+    const genuineSilentFailure = !state || state === "working";
+    quietFinalization = !genuineSilentFailure;
+    scopedLog().log(
+      `[ON-IDLE] Deferred idle grace ended, sessionState=${state} — ${genuineSilentFailure ? "original failure finalization" : "quiet finalization"}`,
+    );
+    reenterIdle();
   };
 
   const { dispatcher, replyOptions, markDispatchIdle } =
@@ -348,6 +439,7 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
           }
 
           hasSentResponse = true;
+          resumeIdleAfterDefer();
 
           // 非流式回退路径（onPartialReply 未触发时，如 ACP 绑定会话），
           // 同样经出站队列保序；与流式帧同 coalesceKey，可被后续全量帧合并。
@@ -380,6 +472,10 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
         }
         runtime.error?.(`xy: ${info.kind} reply failed: ${String(err)}`);
         stopStatusInterval();
+        // 上游明确报错 → 空 idle 必须按真失败立即收尾，不进入延后宽限期。
+        hadReplyError = true;
+        // 已处于延后宽限期时立即唤醒收尾，避免等到超时才发失败帧。
+        resumeIdleAfterDefer();
 
         if (!hasSentResponse) {
           const errorTaskId = getActiveTaskId();
@@ -399,7 +495,12 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
         }
       },
 
-      onIdle: async () => {
+      // 命名函数表达式：把自身暴露给 handleIdleRef，供宽限期结束 / reply 到达时
+      // 重新进入一次 idle 收尾，无需搬动下方原有收尾代码。
+      onIdle: async function handleIdle() {
+        handleIdleRef = handleIdle;
+        // 每次进入默认照常收尾；只有下方延后分支会把它置 true。
+        deferFinalization = false;
 
         scopedLog().log(`[ON-IDLE] Reply idle, hasSentResponse=${hasSentResponse}, finalSent=${finalSent}`);
 
@@ -412,6 +513,9 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
         if (isOutputStale()) {
           const superseded = isTurnSuperseded(sessionId, taskId);
           scopedLog().log(`[ON-IDLE] Suppressing terminal output for canceled/superseded turn`);
+          // 早于 try 的分支不走 finally，延后定时器必须在这里自行收掉，
+          // 否则会残留到 60s 硬上限后再触发一次多余的 reenterIdle。
+          clearEmptyIdleTimer();
           if (!superseded) {
             setSessionState(sessionId, "canceled");
           }
@@ -435,6 +539,7 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
           // 会话不结束：转入 waiting-subagent。一次性等待保活帧已下线；
           // 等待期间的保活由 30s 保活卡心跳承担（waiting-subagent 在状态门内）。
           setSessionState(sessionId, "waiting-subagent");
+          clearEmptyIdleTimer();
           return;
         }
         // If wait state exists and all subagents are already complete,
@@ -456,6 +561,7 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
               reason: "parent-settled-completions-ready-at-idle",
             });
           }
+          clearEmptyIdleTimer();
           return;
         }
         // ── End subagent wait state check ─────────────────────────
@@ -636,6 +742,45 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
               scopedLog().error(`[ON-IDLE] Failed to send final response:`, err);
             }
           } else {
+            // 回复已由承载 followup 的 dispatcher 交付：本 dispatcher 只做静默
+            // 清理，绝不补发 99921111 / final:true（端侧终帧已由对方发出）。
+            if (quietFinalization) {
+              scopedLog().log(`[ON-IDLE] Reply delivered by another dispatcher, skipping failure frames`);
+              return;
+            }
+
+            // 已有延后在途时重复进入 onIdle：不得抢发失败帧，也不得收尾。
+            if (emptyIdleTimer) {
+              deferFinalization = true;
+              scopedLog().log(`[ON-IDLE] Deferred finalization already in progress, skipping duplicate idle`);
+              return;
+            }
+
+            // ── 延后：空 idle 但上游仍可能有排队的回复 ──────────────────
+            // 必须是真正的空 idle（无任何回复、未发过终帧），且无明确报错、
+            // 上游仍有活跃 run、宽限期未用完；其余全部落到下面的原有失败逻辑。
+            if (
+              !hasSentResponse &&
+              !finalSent &&
+              !graceExpired &&
+              !hadReplyError &&
+              hasActiveUpstreamRun()
+            ) {
+              deferFinalization = true;
+              scopedLog().log(
+                `[ON-IDLE] Empty idle with active upstream run — deferring finalization (followup queued)`,
+              );
+              // 只挂轮询定时器，不发新状态帧、不改在途标记：两者都会污染原有
+              // 时序 / supersession 判定。心跳、assembler、task 链全部保持原状。
+              if (!emptyIdleTimer) {
+                graceStartedAt = Date.now();
+                upstreamClearedAt = 0;
+                emptyIdleTimer = setTimeout(onGraceTick, EMPTY_IDLE_POLL_MS);
+              }
+              // return 会进 finally，但 deferFinalization=true 使其跳过 finishIdle。
+              return;
+            }
+
             // 正常失败场景
             scopedLog().log(`[ON-IDLE] Skipping final message: hasSentResponse=${hasSentResponse}, finalSent=${finalSent}`);
             const failureTaskId = getActiveTaskId();
@@ -721,7 +866,12 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
         } finally {
           // openclaw 的 waitForIdle() 不 await onIdle；清理必须在这里完成。
           // 旧 turn 被新 dispatcher 接替时保留新 turn 的心跳。
-          await finishIdle(isTurnSuperseded(sessionId, taskId));
+          // 延后期间不收尾：不停心跳、不卸载 assembler、不触发 onIdleComplete
+          // （清 task 链），让 followup 排队的真回复仍能落到正确 taskId。
+          if (!deferFinalization) {
+            clearEmptyIdleTimer();
+            await finishIdle(isTurnSuperseded(sessionId, taskId));
+          }
         }
       },
 
@@ -847,6 +997,7 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
         if (text.length === 0) return;
 
         hasSentResponse = true;
+        resumeIdleAfterDefer();
 
         // 串行化回调体：SDK fire-and-forget 模式下多个 onPartialReply 可能
         // 并发进入，streamChain 保证 assembler 读写互斥；发送本身由会话
