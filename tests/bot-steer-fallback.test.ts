@@ -4,6 +4,7 @@ const mocks = vi.hoisted(() => ({
   tryDirectSteer: vi.fn(),
   createXYReplyDispatcher: vi.fn(),
   dispatchReplyFromConfig: vi.fn(),
+  resolveActiveEmbeddedRunSessionId: vi.fn(),
   sendStatusUpdate: vi.fn(),
   sendA2AResponse: vi.fn(),
   log: vi.fn(),
@@ -13,7 +14,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("openclaw/plugin-sdk/agent-harness-runtime", () => ({
   callGatewayTool: vi.fn(),
-  resolveActiveEmbeddedRunSessionId: vi.fn(),
+  resolveActiveEmbeddedRunSessionId: mocks.resolveActiveEmbeddedRunSessionId,
   abortAgentHarnessRun: vi.fn(),
 }));
 
@@ -127,6 +128,7 @@ import {
   deleteSession,
   getCurrentTaskId,
   listSessions,
+  markTurnCanceled,
   registerTask,
 } from "../src/conversation/conversation-manager.js";
 
@@ -143,6 +145,8 @@ const message = {
 describe("bot steer fallback sequencing", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // 默认无上游活跃 run：P1 的就绪等待立即放行，既有顺序断言保持不变。
+    mocks.resolveActiveEmbeddedRunSessionId.mockReturnValue(undefined);
     mocks.sendStatusUpdate.mockResolvedValue(undefined);
     mocks.sendA2AResponse.mockResolvedValue(undefined);
     mocks.createXYReplyDispatcher.mockReturnValue({
@@ -206,5 +210,93 @@ describe("bot steer fallback sequencing", () => {
     expect(waitForPreviousTurn).not.toHaveBeenCalled();
     expect(mocks.dispatchReplyFromConfig).not.toHaveBeenCalled();
     expect(getCurrentTaskId("session-steer")).toBe("task-new");
+  });
+
+  // P1：steer 直注失败重分发前的就绪等待，避免新 turn 撞上活跃 run 被排成 followup。
+  it("holds the re-dispatch while the upstream run is still active, then proceeds", async () => {
+    mocks.tryDirectSteer.mockReturnValue({ ok: false, reason: "queue-rejected" });
+    let active: string | undefined = "run-active";
+    mocks.resolveActiveEmbeddedRunSessionId.mockImplementation(() => active);
+    const order: string[] = [];
+    mocks.dispatchReplyFromConfig.mockImplementation(async () => {
+      order.push("dispatch");
+      return { queuedFinal: true };
+    });
+
+    const pending = handleXYMessage({
+      cfg: {},
+      runtime: { error: mocks.error },
+      message,
+      accountId: "default",
+      waitForPreviousTurn: async () => {
+        order.push("wait-old-turn");
+      },
+    });
+
+    // 超过两个 100ms 轮询窗口，上游仍活跃 → 不能提前重分发。
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    expect(order).toEqual(["wait-old-turn"]);
+
+    active = undefined;
+    await pending;
+    expect(order).toEqual(["wait-old-turn", "dispatch"]);
+    expect(mocks.dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips the readiness wait entirely for a canceled turn", async () => {
+    mocks.tryDirectSteer.mockReturnValue({ ok: false, reason: "queue-rejected" });
+    mocks.resolveActiveEmbeddedRunSessionId.mockReturnValue("run-active");
+    markTurnCanceled("session-steer", "task-old");
+    const order: string[] = [];
+    mocks.dispatchReplyFromConfig.mockImplementation(async () => {
+      order.push("dispatch");
+      return { queuedFinal: true };
+    });
+
+    await handleXYMessage({
+      cfg: {},
+      runtime: { error: mocks.error },
+      message,
+      accountId: "default",
+      waitForPreviousTurn: async () => {
+        order.push("wait-old-turn");
+      },
+    });
+
+    expect(order).toEqual(["wait-old-turn", "dispatch"]);
+    // cancel 守卫在查询上游之前就放行，不会卡到 3s 超时。
+    expect(mocks.resolveActiveEmbeddedRunSessionId).not.toHaveBeenCalled();
+  });
+
+  it("times out after 3s and dispatches exactly once, without retry", async () => {
+    vi.useFakeTimers();
+    try {
+      mocks.tryDirectSteer.mockReturnValue({ ok: false, reason: "queue-rejected" });
+      mocks.resolveActiveEmbeddedRunSessionId.mockReturnValue("run-still-active");
+      const order: string[] = [];
+      mocks.dispatchReplyFromConfig.mockImplementation(async () => {
+        order.push("dispatch");
+        return { queuedFinal: true };
+      });
+
+      const pending = handleXYMessage({
+        cfg: {},
+        runtime: { error: mocks.error },
+        message,
+        accountId: "default",
+        waitForPreviousTurn: async () => {
+          order.push("wait-old-turn");
+        },
+      });
+
+      await vi.advanceTimersByTimeAsync(3_100);
+      await pending;
+
+      expect(order).toEqual(["wait-old-turn", "dispatch"]);
+      expect(mocks.dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
   });
 });

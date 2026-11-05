@@ -55,6 +55,7 @@ import {
   markTurnCanceled,
   markTurnInflight,
   registerTask,
+  setSessionState,
 } from "../src/conversation/conversation-manager.js";
 
 function mockDispatcherFactory() {
@@ -65,7 +66,15 @@ function mockDispatcherFactory() {
   }));
 }
 
-function createDispatcher(sessionId: string, taskId: string, messageId: string) {
+function createDispatcher(
+  sessionId: string,
+  taskId: string,
+  messageId: string,
+  extra?: {
+    isUpstreamRunActive?: () => boolean;
+    onIdleComplete?: () => void | Promise<void>;
+  },
+) {
   const created = createXYReplyDispatcher({
     cfg: {},
     runtime: { error: mocks.error },
@@ -73,6 +82,7 @@ function createDispatcher(sessionId: string, taskId: string, messageId: string) 
     taskId,
     messageId,
     accountId: "default",
+    ...extra,
   });
   markTurnInflight(sessionId, taskId);
   return created;
@@ -160,5 +170,154 @@ describe("reply dispatcher turn ownership", () => {
       messageId: "message-steered",
       text: "完整回复",
     });
+  });
+});
+
+// 固定会话里新消息被上游排成 followup 时，本 dispatcher 会先拿到一个空 idle。
+// 改动前它把空 idle 当成失败，补发 99921111 / final:true 并清掉 task 链，
+// 真正的回复随后无处落地。以下用例锁住延后收尾及其所有出口。
+describe("empty idle with a queued followup", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    mocks.sendA2AResponse.mockResolvedValue(undefined);
+    mocks.sendStatusUpdate.mockResolvedValue(undefined);
+    mocks.sendReasoningTextUpdate.mockResolvedValue(undefined);
+    mocks.sendCommand.mockResolvedValue(undefined);
+  });
+
+  afterEach(() => {
+    vi.clearAllTimers();
+    vi.useRealTimers();
+  });
+
+  const flush = async (sessionId: string) => {
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(0);
+    await getOrCreateSession(sessionId).outboundQueue.whenIdle();
+  };
+
+  const failureFrames = () =>
+    mocks.sendA2AResponse.mock.calls
+      .map(([params]) => params)
+      .filter((params) => params.errorCode === 99921111);
+
+  it("defers failure frames and cleanup while an upstream run is active", async () => {
+    const sessionId = "sess-followup-defer";
+    registerTask(sessionId, "task-old", "message-old");
+    const onIdleComplete = vi.fn();
+    const { dispatcher } = createDispatcher(sessionId, "task-old", "message-old", {
+      isUpstreamRunActive: () => true,
+      onIdleComplete,
+    });
+
+    await dispatcher.onIdle();
+    await flush(sessionId);
+
+    expect(failureFrames()).toHaveLength(0);
+    expect(mocks.sendStatusUpdate).not.toHaveBeenCalledWith(
+      expect.objectContaining({ state: "failed" }),
+    );
+    expect(onIdleComplete).not.toHaveBeenCalled();
+  });
+
+  it("wakes on a followup reply and emits the normal final instead", async () => {
+    const sessionId = "sess-followup-reply";
+    registerTask(sessionId, "task-old", "message-old");
+    const onIdleComplete = vi.fn();
+    let active = true;
+    const created = createDispatcher(sessionId, "task-old", "message-old", {
+      isUpstreamRunActive: () => active,
+      onIdleComplete,
+    });
+
+    await created.dispatcher.onIdle();
+    active = false;
+    await created.replyOptions.onPartialReply({ text: "排队回来的真正回复" });
+    await flush(sessionId);
+
+    expect(failureFrames()).toHaveLength(0);
+    expect(mocks.sendA2AResponse).toHaveBeenCalledWith(
+      expect.objectContaining({ final: true }),
+    );
+    expect(onIdleComplete).toHaveBeenCalled();
+  });
+
+  it("an explicit onError still takes the original failure path immediately", async () => {
+    const sessionId = "sess-followup-error";
+    registerTask(sessionId, "task-old", "message-old");
+    const onIdleComplete = vi.fn();
+    const { dispatcher } = createDispatcher(sessionId, "task-old", "message-old", {
+      isUpstreamRunActive: () => true,
+      onIdleComplete,
+    });
+
+    await dispatcher.onIdle();
+    await dispatcher.onError(new Error("upstream boom"), { kind: "final" } as any);
+    await flush(sessionId);
+
+    expect(failureFrames()).toHaveLength(1);
+    expect(mocks.sendStatusUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ state: "failed" }),
+    );
+    expect(onIdleComplete).toHaveBeenCalled();
+  });
+
+  it("a genuine silent failure still closes the client task card after the grace window", async () => {
+    const sessionId = "sess-followup-silent";
+    registerTask(sessionId, "task-old", "message-old");
+    const onIdleComplete = vi.fn();
+    const active = { value: true };
+    const { dispatcher } = createDispatcher(sessionId, "task-old", "message-old", {
+      isUpstreamRunActive: () => active.value,
+      onIdleComplete,
+    });
+
+    await dispatcher.onIdle();
+    active.value = false;
+    // 1s 轮询首次确认 run 退出 + 5s settle 窗口 + 余量；不得越过 60s 硬上限。
+    await vi.advanceTimersByTimeAsync(7_000);
+    await flush(sessionId);
+
+    expect(failureFrames()).toHaveLength(1);
+    expect(onIdleComplete).toHaveBeenCalled();
+  });
+
+  it("quietly finalizes when another dispatcher already closed the turn", async () => {
+    const sessionId = "sess-followup-other-dispatcher";
+    registerTask(sessionId, "task-old", "message-old");
+    const onIdleComplete = vi.fn();
+    const active = { value: true };
+    const { dispatcher } = createDispatcher(sessionId, "task-old", "message-old", {
+      isUpstreamRunActive: () => active.value,
+      onIdleComplete,
+    });
+
+    await dispatcher.onIdle();
+    active.value = false;
+    setSessionState(sessionId, "completed");
+    await vi.advanceTimersByTimeAsync(7_000);
+    await flush(sessionId);
+
+    expect(failureFrames()).toHaveLength(0);
+    expect(mocks.sendStatusUpdate).not.toHaveBeenCalledWith(
+      expect.objectContaining({ state: "failed" }),
+    );
+    expect(onIdleComplete).toHaveBeenCalled();
+  });
+
+  it("without the injected probe, empty idle keeps the original failure behavior", async () => {
+    const sessionId = "sess-no-probe";
+    registerTask(sessionId, "task-old", "message-old");
+    const onIdleComplete = vi.fn();
+    const { dispatcher } = createDispatcher(sessionId, "task-old", "message-old", {
+      onIdleComplete,
+    });
+
+    await dispatcher.onIdle();
+    await flush(sessionId);
+
+    expect(failureFrames()).toHaveLength(1);
+    expect(failureFrames()[0]).toMatchObject({ final: true });
+    expect(onIdleComplete).toHaveBeenCalled();
   });
 });
