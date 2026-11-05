@@ -363,6 +363,22 @@ export async function rotateStreamingTextForBodyStart(params: {
   return newId;
 }
 
+/**
+ * 当前分段正文内容是否已产生（正文首帧已发出，或已装配/在队等待发出）。
+ * 工具 command 门控（tool-status-hook / step-info-tool 的卡片抑制）使用：
+ * 协议要求 command 必须先于正文下发 —— 正文内容一产生，本段后续卡片即
+ * 抑制。判定覆盖"在队未发出"（装配器有内容）：正文帧走会话出站队列
+ * drain、卡片直发 WS，仅查已发出标记（isBodyTextSent，drain 时置位）
+ * 存在竞态窗口 —— 卡片可能越过在队正文帧落在其后（端工具多在最终
+ * 正文之后调用，命中最多）。边界轮换后装配器 cutSegment + 标记复位，
+ * 新段窗口照常重新打开。
+ */
+export function isBodyTextProduced(sessionId: string, taskId: string): boolean {
+  if (isBodyTextSent(taskId)) return true;
+  const session = sessions.get(sessionId);
+  return session?.assembler?.hasContent() ?? false;
+}
+
 /** 获取 session 当前活跃 taskId（reply-dispatcher 跨链读取 / 工具富化用）。 */
 export function getCurrentTaskId(sessionId: string): string | null {
   return getCurrentTask(sessionId)?.taskId ?? null;
