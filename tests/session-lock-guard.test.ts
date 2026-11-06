@@ -19,27 +19,20 @@ function lockEvent(lockPath = LOCK_A, sessionKey = VICTIM): AgentEventLike {
 
 function makeGuard(otherActive: string[] = []) {
   let current = 1_000_000;
-  const calls = { notify: 0, restart: 0, order: [] as string[], logs: [] as string[] };
+  const calls = { restart: 0, logs: [] as string[] };
   const active = { sessions: otherActive };
 
   const guard = new GatewayLockGuard(
     {
-      listActiveTaskBindings: () => [{ sessionId: "a2a-1", currentTaskId: "t1", currentMessageId: "m1" }],
       listOtherActiveSessions: () => active.sessions,
-      notifySessions: async () => {
-        calls.notify++;
-        calls.order.push("notify");
-      },
       logger: { log: (m) => calls.logs.push(m), error: (m) => calls.logs.push(m) },
       now: () => current,
       restart: () => {
         calls.restart++;
-        calls.order.push("restart");
         return { pid: 4242, command: "supervisorctl restart", failed: Promise.resolve(null) };
       },
     },
     {
-      dryRun: false,
       policy: {
         startupGraceMs: 1_000,
         cooldownMs: 10_000,
@@ -51,7 +44,6 @@ function makeGuard(otherActive: string[] = []) {
         // 默认两次确认的行为由 "leak confirmation" 一组单独覆盖。
         requiredObservations: 1,
       },
-      degradedTtlMs: 50_000,
     },
   );
 
@@ -87,7 +79,6 @@ describe("detection", () => {
       advance(2_000);
       await guard.handleAgentEvent({ stream: "lifecycle", data: { phase: "error", error } });
       expect(calls.restart).toBe(0);
-      expect(calls.notify).toBe(0);
     },
   );
 
@@ -96,14 +87,6 @@ describe("detection", () => {
     advance(2_000);
     await guard.handleAgentEvent(lockEvent());
     expect(calls.restart).toBe(1);
-    expect(calls.notify).toBe(1);
-  });
-
-  it("notifies before launching the restart", async () => {
-    const { guard, calls, advance } = makeGuard();
-    advance(2_000);
-    await guard.handleAgentEvent(lockEvent());
-    expect(calls.order).toEqual(["notify", "restart"]);
   });
 });
 
@@ -175,7 +158,6 @@ describe("other-session coordination", () => {
     advance(2_000);
     await guard.handleAgentEvent(lockEvent());
     expect(calls.restart).toBe(0);
-    expect(calls.notify).toBe(0);
     expect(calls.logs.some((l) => l.includes("deferred"))).toBe(true);
   });
 
@@ -199,83 +181,6 @@ describe("other-session coordination", () => {
   });
 });
 
-describe("fail-fast marking", () => {
-  it("does not mark the victim during the startup grace period", async () => {
-    const { guard } = makeGuard();
-    await guard.handleAgentEvent(lockEvent());
-    expect(guard.shouldFailFast(VICTIM)).toBe(false);
-  });
-
-  it("marks the victim even when the restart is suppressed by cooldown", async () => {
-    const { guard, calls, advance } = makeGuard();
-    advance(2_000);
-    await guard.handleAgentEvent(lockEvent(LOCK_A));
-    expect(calls.restart).toBe(1);
-    await guard.handleAgentEvent(lockEvent(LOCK_B));
-    expect(calls.restart).toBe(1);
-    expect(calls.logs.some((l) => l.includes("cooldown"))).toBe(true);
-    expect(guard.shouldFailFast(VICTIM)).toBe(true);
-    expect(guard.shouldFailFast("agent:main:other")).toBe(false);
-    expect(guard.shouldFailFast(undefined)).toBe(false);
-  });
-
-  it("expires the mark so a recovered session is not blocked forever", async () => {
-    const { guard, advance } = makeGuard();
-    advance(2_000);
-    await guard.handleAgentEvent(lockEvent());
-    expect(guard.shouldFailFast(VICTIM)).toBe(true);
-    advance(60_000);
-    expect(guard.shouldFailFast(VICTIM)).toBe(false);
-  });
-
-  it("clears marks after a restart", async () => {
-    const { guard, advance } = makeGuard();
-    advance(2_000);
-    await guard.handleAgentEvent(lockEvent());
-    guard.markGatewayStarted();
-    expect(guard.shouldFailFast(VICTIM)).toBe(false);
-  });
-});
-
-describe("dry-run", () => {
-  it("defaults to dry-run and changes no observable behavior", async () => {
-    let restarts = 0;
-    let notified = 0;
-    const guard = new GatewayLockGuard({
-      listActiveTaskBindings: () => [{ sessionId: "a2a-1", currentTaskId: "t", currentMessageId: "m" }],
-      listOtherActiveSessions: () => [],
-      notifySessions: async () => {
-        notified++;
-      },
-      logger: { log: () => {}, error: () => {} },
-      now: () => 1_000_000,
-      restart: () => {
-        restarts++;
-        return { pid: 1, command: "x", failed: Promise.resolve(null) };
-      },
-    });
-
-    for (let i = 0; i < 5; i++) await guard.handleAgentEvent(lockEvent());
-
-    expect(restarts).toBe(0);
-    expect(notified).toBe(0);
-    expect(guard.shouldFailFast(VICTIM)).toBe(false);
-  });
-
-  it("logs the detection so accuracy can be reviewed before enabling", async () => {
-    const logs: string[] = [];
-    const guard = new GatewayLockGuard({
-      listActiveTaskBindings: () => [],
-      listOtherActiveSessions: () => ["a2a-1", "a2a-2"],
-      notifySessions: async () => {},
-      logger: { log: (m) => logs.push(m), error: (m) => logs.push(m) },
-      now: () => 1_000_000,
-    });
-    await guard.handleAgentEvent(lockEvent());
-    expect(logs.some((l) => l.includes("dry-run") && l.includes(LOCK_A) && l.includes("otherActive=2"))).toBe(true);
-  });
-});
-
 describe("restart failure", () => {
   it("rolls back the cooldown when the restart does not take effect", async () => {
     let current = 1_000_000;
@@ -283,9 +188,7 @@ describe("restart failure", () => {
     const failures: string[] = [];
     const guard = new GatewayLockGuard(
       {
-        listActiveTaskBindings: () => [],
         listOtherActiveSessions: () => [],
-        notifySessions: async () => {},
         logger: { log: () => {}, error: () => {} },
         now: () => current,
         restart: () => {
@@ -293,7 +196,7 @@ describe("restart failure", () => {
           return { pid: undefined, command: "supervisorctl", failed: Promise.resolve("spawn error: ENOENT") };
         },
       },
-      { dryRun: false, policy: { startupGraceMs: 1_000 }, onRestartFailed: (r) => failures.push(r) },
+      { policy: { startupGraceMs: 1_000 }, onRestartFailed: (r) => failures.push(r) },
     );
 
     current += 2_000;
@@ -314,9 +217,7 @@ describe("restart failure", () => {
     let restarts = 0;
     const guard = new GatewayLockGuard(
       {
-        listActiveTaskBindings: () => [],
         listOtherActiveSessions: () => [],
-        notifySessions: async () => {},
         logger: { log: () => {}, error: () => {} },
         now: () => current,
         restart: () => {
@@ -324,7 +225,7 @@ describe("restart failure", () => {
           throw new Error("spawn failed");
         },
       },
-      { dryRun: false, policy: { startupGraceMs: 1_000, requiredObservations: 1 } },
+      { policy: { startupGraceMs: 1_000, requiredObservations: 1 } },
     );
     current += 2_000;
     await guard.handleAgentEvent(lockEvent());
@@ -341,9 +242,7 @@ describe("leak confirmation (contention must not be punished)", () => {
     let current = 1_000_000;
     const guard = new GatewayLockGuard(
       {
-        listActiveTaskBindings: () => [],
         listOtherActiveSessions: () => [],
-        notifySessions: async () => {},
         logger: { log: (m) => calls.logs.push(m), error: (m) => calls.logs.push(m) },
         now: () => current,
         restart: () => {
@@ -351,7 +250,7 @@ describe("leak confirmation (contention must not be punished)", () => {
           return { pid: 1, command: "x", failed: Promise.resolve(null) };
         },
       },
-      { dryRun: false, policy: { startupGraceMs: 1_000 }, ...(statePath ? { statePath } : {}) },
+      { policy: { startupGraceMs: 1_000 }, ...(statePath ? { statePath } : {}) },
     );
     return { guard, calls, advance: (ms: number) => (current += ms) };
   }
@@ -362,8 +261,6 @@ describe("leak confirmation (contention must not be punished)", () => {
     await guard.handleAgentEvent(lockEvent());
     expect(calls.restart).toBe(0);
     expect(calls.logs.some((l) => l.includes("unconfirmed"))).toBe(true);
-    // 关键：不能 fail-fast。争用场景下一轮本来会成功，额外惩罚 15 分钟就是引入新故障。
-    expect(guard.shouldFailFast(VICTIM)).toBe(false);
   });
 
   it("restarts only after the same lock times out again", async () => {
@@ -373,7 +270,6 @@ describe("leak confirmation (contention must not be punished)", () => {
     advance(60_000);
     await guard.handleAgentEvent(lockEvent());
     expect(calls.restart).toBe(1);
-    expect(guard.shouldFailFast(VICTIM)).toBe(true);
   });
 
   it("a different lock is confirmed independently", async () => {
@@ -393,9 +289,7 @@ describe("cross-process loop protection", () => {
     const make = () =>
       new GatewayLockGuard(
         {
-          listActiveTaskBindings: () => [],
           listOtherActiveSessions: () => [],
-          notifySessions: async () => {},
           logger: { log: () => {}, error: () => {} },
           now: () => current,
           restart: () => {
@@ -403,7 +297,7 @@ describe("cross-process loop protection", () => {
             return { pid: 1, command: "x", failed: Promise.resolve(null) };
           },
         },
-        { dryRun: false, statePath, policy: { startupGraceMs: 1_000, requiredObservations: 1 } },
+        { statePath, policy: { startupGraceMs: 1_000, requiredObservations: 1 } },
       );
 
     const first = make();
@@ -418,32 +312,6 @@ describe("cross-process loop protection", () => {
     expect(restarts).toBe(1);
     // 但另一把锁（新的 createdAt）仍可正常触发。
     await second.handleAgentEvent(lockEvent(LOCK_B));
-    expect(restarts).toBe(2);
-  });
-});
-
-describe("notification robustness", () => {
-  it("a hanging notification cannot permanently block detection", async () => {
-    let current = 1_000_000;
-    let restarts = 0;
-    const guard = new GatewayLockGuard(
-      {
-        listActiveTaskBindings: () => [],
-        listOtherActiveSessions: () => [],
-        notifySessions: () => new Promise<void>(() => {}),
-        logger: { log: () => {}, error: () => {} },
-        now: () => current,
-        restart: () => {
-          restarts++;
-          return { pid: 1, command: "x", failed: Promise.resolve(null) };
-        },
-      },
-      { dryRun: false, notifyTimeoutMs: 20, policy: { startupGraceMs: 1_000, requiredObservations: 1, cooldownMs: 0 } },
-    );
-    current += 2_000;
-    await guard.handleAgentEvent(lockEvent(LOCK_A));
-    expect(restarts).toBe(1);
-    await guard.handleAgentEvent(lockEvent(LOCK_B));
     expect(restarts).toBe(2);
   });
 });

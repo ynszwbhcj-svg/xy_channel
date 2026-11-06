@@ -20,12 +20,6 @@ const DEFAULT_STATE_PATH = "/home/sandbox/.openclaw/logs/session-lock-guard-rest
 
 let guard: GatewayLockGuard | null = null;
 
-function envFlag(name: string, fallback: boolean): boolean {
-  const raw = process.env[name];
-  if (raw === undefined || raw === "") return fallback;
-  return /^(1|true|yes|on)$/i.test(raw.trim());
-}
-
 function envNumber(name: string, fallback: number): number {
   const raw = process.env[name];
   if (!raw) return fallback;
@@ -38,14 +32,9 @@ function getGuard(): GatewayLockGuard {
 
   guard = new GatewayLockGuard(
     {
-      listActiveTaskBindings: () => listActiveTaskBindings(),
       listOtherActiveSessions: ({ sessionKey }) => {
         const victim = sessionKey ? resolveBySessionKey(sessionKey)?.sessionId : undefined;
         return computeOtherActiveSessions(listActiveTaskBindings(), victim);
-      },
-      notifySessions: async () => {
-        // 用户提示由 gateway 停止流程统一负责：monitor.ts 的 handleAbort 会向所有
-        // 活跃会话下发"Gateway即将重启"通知。这里不重复发，避免双份终帧。
       },
       logger: {
         log: (message) => logger.log(message),
@@ -53,8 +42,6 @@ function getGuard(): GatewayLockGuard {
       },
     },
     {
-      // 默认实际生效；需要只观察不动作时，设 XY_LOCK_GUARD_DRY_RUN=1。
-      dryRun: envFlag("XY_LOCK_GUARD_DRY_RUN", false),
       statePath: process.env.XY_LOCK_GUARD_STATE_PATH || DEFAULT_STATE_PATH,
       supervisor: {
         ...DEFAULT_SUPERVISOR,
@@ -75,9 +62,7 @@ function getGuard(): GatewayLockGuard {
     },
   );
 
-  logger.log(
-    `[LOCK-GUARD] session write lock guard initialized (dryRun=${envFlag("XY_LOCK_GUARD_DRY_RUN", false)})`,
-  );
+  logger.log(`[LOCK-GUARD] session write lock guard initialized`);
   return guard;
 }
 

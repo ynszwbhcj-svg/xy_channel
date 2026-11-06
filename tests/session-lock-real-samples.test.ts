@@ -89,9 +89,7 @@ describe("真实事故回放（端到端）", () => {
     const logs: string[] = [];
     const guard = new GatewayLockGuard(
       {
-        listActiveTaskBindings: () => [],
         listOtherActiveSessions: () => [],
-        notifySessions: async () => {},
         logger: { log: (m) => logs.push(m), error: (m) => logs.push(m) },
         now: () => current,
         restart: () => {
@@ -99,7 +97,7 @@ describe("真实事故回放（端到端）", () => {
           return { pid: 1, command: "supervisorctl restart", failed: Promise.resolve(null) };
         },
       },
-      { dryRun: false, policy: { startupGraceMs: 0, cooldownMs: 0 } },
+      { policy: { startupGraceMs: 0, cooldownMs: 0 } },
     );
 
     const perRound: string[] = [];
