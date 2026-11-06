@@ -6,6 +6,8 @@ const mocks = vi.hoisted(() => ({
   sendStatusUpdate: vi.fn(),
   sendReasoningTextUpdate: vi.fn(),
   sendCommand: vi.fn(),
+  sendExecuteStatusCard: vi.fn(),
+  sendDisplayTaskCardData: vi.fn(),
   log: vi.fn(),
   warn: vi.fn(),
   error: vi.fn(),
@@ -31,6 +33,8 @@ vi.mock("../src/formatter.js", () => ({
   sendStatusUpdate: mocks.sendStatusUpdate,
   sendReasoningTextUpdate: mocks.sendReasoningTextUpdate,
   sendCommand: mocks.sendCommand,
+  sendExecuteStatusCard: mocks.sendExecuteStatusCard,
+  sendDisplayTaskCardData: mocks.sendDisplayTaskCardData,
 }));
 
 vi.mock("../src/tools/session-manager.js", () => ({
@@ -56,6 +60,7 @@ import {
   markTurnInflight,
   registerTask,
 } from "../src/conversation/conversation-manager.js";
+import { getOrCreateStreamingTextId, releaseStreamingTextId } from "../src/utils/streaming-text-id.js";
 
 function mockDispatcherFactory() {
   mocks.createDispatcher.mockImplementation((options) => ({
@@ -85,6 +90,8 @@ describe("reply dispatcher turn ownership", () => {
     mocks.sendStatusUpdate.mockResolvedValue(undefined);
     mocks.sendReasoningTextUpdate.mockResolvedValue(undefined);
     mocks.sendCommand.mockResolvedValue(undefined);
+    mocks.sendExecuteStatusCard.mockResolvedValue(undefined);
+    mocks.sendDisplayTaskCardData.mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -128,17 +135,35 @@ describe("reply dispatcher turn ownership", () => {
     expect(mocks.sendA2AResponse).not.toHaveBeenCalledWith(
       expect.objectContaining({ errorCode: 99921111 }),
     );
-    const finalCalls = mocks.sendA2AResponse.mock.calls
-      .map(([params]) => params)
-      .filter((params) => params.final === true);
-    expect(finalCalls).toHaveLength(1);
-    expect(finalCalls[0]).toMatchObject({
+    const responseCalls = mocks.sendA2AResponse.mock.calls.map(([params]) => params);
+    const textCompleteIndex = responseCalls.findIndex((params) => params.lastChunk === true);
+    const finalIndex = responseCalls.findIndex((params) => params.final === true);
+    expect(responseCalls[textCompleteIndex]).toMatchObject({
       taskId: "task-new",
       messageId: "message-new",
       text: fullText,
       append: false,
+      final: false,
+      lastChunk: true,
+    });
+    expect(responseCalls[finalIndex]).toMatchObject({
+      taskId: "task-new",
+      messageId: "message-new",
+      text: "",
+      append: true,
       final: true,
     });
+    expect(mocks.sendStatusUpdate).toHaveBeenCalledWith(expect.objectContaining({
+      taskId: "task-new",
+      messageId: "message-new",
+      state: "completed",
+      final: true,
+    }));
+    const textOrder = mocks.sendA2AResponse.mock.invocationCallOrder[textCompleteIndex];
+    const finalOrder = mocks.sendA2AResponse.mock.invocationCallOrder[finalIndex];
+    const statusOrder = mocks.sendStatusUpdate.mock.invocationCallOrder[0];
+    expect(textOrder).toBeLessThan(finalOrder);
+    expect(finalOrder).toBeLessThan(statusOrder);
   });
 
   it("direct steer keeps the original dispatcher but uses the latest A2A identity", async () => {
@@ -146,19 +171,37 @@ describe("reply dispatcher turn ownership", () => {
     registerTask(sessionId, "task-old", "message-old");
     const directTurn = createDispatcher(sessionId, "task-old", "message-old");
     registerTask(sessionId, "task-steered", "message-steered");
+    const streamingTextId = getOrCreateStreamingTextId("task-steered");
+    mocks.sendA2AResponse.mockImplementation(async (params) => {
+      if (params.final === true) {
+        releaseStreamingTextId(params.taskId);
+      }
+    });
 
     await directTurn.replyOptions.onPartialReply({ text: "完整回复" });
     await directTurn.dispatcher.deliver({ text: "完整回复" }, { kind: "final" });
     await directTurn.dispatcher.onIdle();
 
-    const finalCalls = mocks.sendA2AResponse.mock.calls
-      .map(([params]) => params)
-      .filter((params) => params.final === true);
-    expect(finalCalls).toHaveLength(1);
-    expect(finalCalls[0]).toMatchObject({
+    const responseCalls = mocks.sendA2AResponse.mock.calls.map(([params]) => params);
+    expect(responseCalls.find((params) => params.lastChunk === true)).toMatchObject({
       taskId: "task-steered",
       messageId: "message-steered",
       text: "完整回复",
+      append: false,
+      final: false,
     });
+    expect(responseCalls.find((params) => params.final === true)).toMatchObject({
+      taskId: "task-steered",
+      messageId: "message-steered",
+      text: "",
+      append: true,
+    });
+    expect(mocks.sendStatusUpdate).toHaveBeenCalledWith(expect.objectContaining({
+      taskId: "task-steered",
+      messageId: "message-steered",
+      state: "completed",
+      final: true,
+      streamingTextId,
+    }));
   });
 });

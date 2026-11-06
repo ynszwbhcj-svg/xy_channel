@@ -26,6 +26,7 @@ import { StreamAssembler } from "../conversation/stream-assembler.js";
 import { markReasoningFinished, markReasoningStreaming } from "../utils/reasoning-state.js";
 import { getCurrentStatusCardSeq } from "../utils/status-card-seq.js";
 import { markLastChunkBlock, getAccumulatedThinkIndex } from "../utils/think-index.js";
+import { peekStreamingTextId } from "../utils/streaming-text-id.js";
 
 // ⚙️ 前缀是 openclaw 系统消息稳定标记（infra/system-message.ts SYSTEM_MARK）。
 // ACP 绑定会话 turn 结束会以 kind=final 尾随投递系统诊断通知（如
@@ -524,23 +525,7 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
                 });
               }
 
-              // 🔑 终态帧延迟：让已发出的长正文先穿过下游服务端慢速管道，
-              // 保证终态帧最后到达（openclaw6.6 3e7b1aa/cdc4cdc 同款治理，
-              // delayMs 在队列 drain 内 sleep，阻塞后续帧）。
-              outboundQueue.enqueue({
-                taskId: terminalTaskId,
-                label: "terminal-status",
-                delayMs: terminalFrameDelayMs,
-                send: () =>
-                  sendStatusUpdate({
-                    config,
-                    sessionId,
-                    taskId: terminalTaskId,
-                    messageId: terminalMessageId,
-                    text: "已完成深度思考",
-                    state: "completed",
-                  }),
-              });
+              const terminalStreamingTextId = peekStreamingTextId(terminalTaskId);
 
               // 🔑 正文文本完成帧（lastChunk=true, final=false）：权威全文本在此
               // 补齐（原终帧携带全文本的语义前移到本帧），把 final=true 留给
@@ -620,6 +605,23 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
                     text: "",
                     append: true,
                     final: true,
+                  }),
+              });
+
+              outboundQueue.enqueue({
+                taskId: terminalTaskId,
+                label: "terminal-status",
+                delayMs: terminalFrameDelayMs,
+                send: () =>
+                  sendStatusUpdate({
+                    config,
+                    sessionId,
+                    taskId: terminalTaskId,
+                    messageId: terminalMessageId,
+                    text: "已完成深度思考",
+                    state: "completed",
+                    final: true,
+                    streamingTextId: terminalStreamingTextId,
                   }),
               });
 

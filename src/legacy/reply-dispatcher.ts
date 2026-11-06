@@ -532,24 +532,6 @@ export function createLegacyReplyDispatcher(params: CreateXYReplyDispatcherParam
                 });
               }
 
-              // 🔑 终态帧延迟：让已发出的长正文先穿过下游服务端慢速管道，
-              // 保证终态帧最后到达（openclaw6.6 3e7b1aa/cdc4cdc 同款治理，
-              // delayMs 在队列 drain 内 sleep，阻塞后续帧）。
-              outboundQueue.enqueue({
-                taskId: terminalTaskId,
-                label: "terminal-status",
-                delayMs: terminalFrameDelayMs,
-                send: () =>
-                  sendStatusUpdate({
-                    config,
-                    sessionId,
-                    taskId: terminalTaskId,
-                    messageId: terminalMessageId,
-                    text: "任务处理已完成~",
-                    state: "completed",
-                  }),
-              });
-
               // 🔑 最终帧携带权威全文本（append:false 整体替换）—— 流式期间
               // 缺失的尾部在此补齐。空文本属异常路径，回退旧的空帧语义
               // （append:true 仅标记流结束），避免把客户端已展示内容刷空。
@@ -586,6 +568,22 @@ export function createLegacyReplyDispatcher(params: CreateXYReplyDispatcherParam
                     }),
                 });
               }
+
+              outboundQueue.enqueue({
+                taskId: terminalTaskId,
+                label: "terminal-status",
+                delayMs: terminalFrameDelayMs,
+                send: () =>
+                  sendStatusUpdate({
+                    config,
+                    sessionId,
+                    taskId: terminalTaskId,
+                    messageId: terminalMessageId,
+                    text: "任务处理已完成~",
+                    state: "completed",
+                    final: true,
+                  }),
+              });
 
               await outboundQueue.whenIdle();
               finalSent = true;

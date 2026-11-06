@@ -280,6 +280,8 @@ export interface SendStatusUpdateParams {
   messageId: string;
   text: string;
   state: "submitted" | "working" | "input-required" | "completed" | "canceled" | "failed" | "unknown";
+  final?: boolean;
+  streamingTextId?: string;
   /** 打印完整 A2A 帧 JSON（默认 false，只打文案摘要）。保活帧开启以核查 streamingTextId 等字段。 */
   logFullFrame?: boolean;
 }
@@ -289,7 +291,7 @@ export interface SendStatusUpdateParams {
  * Follows A2A protocol standard format with nested status object.
  */
 export async function sendStatusUpdate(params: SendStatusUpdateParams): Promise<void> {
-  const { config, sessionId, taskId, messageId, text, state } = params;
+  const { config, sessionId, taskId, messageId, text, state, final = false } = params;
 
   const log = logger.withContext(sessionId, taskId);
 
@@ -310,13 +312,13 @@ export async function sendStatusUpdate(params: SendStatusUpdateParams): Promise<
 
   // 携带本 turn 当前在役的 streamingTextId（peek 只读，不创建——终帧释放后
   // 晚到的状态帧不得重建出孤儿 id；无在役流时省略该字段）
-  const currentStreamingTextId = peekStreamingTextId(taskId);
+  const currentStreamingTextId = params.streamingTextId ?? peekStreamingTextId(taskId);
 
   const statusUpdate: A2ATaskStatusUpdateEvent = {
     taskId,
     kind: "status-update",
     isNew: !isLegacyAppVersion(taskId),
-    final: false, // Status updates should not end the stream
+    final,
     ...(currentStreamingTextId ? { streamingTextId: currentStreamingTextId } : {}),
     status: {
       message: statusMessage,

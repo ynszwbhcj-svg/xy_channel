@@ -12,7 +12,7 @@
 
 import { randomUUID } from "crypto";
 import { logger } from "../utils/logger.js";
-import { releaseStreamingTextId, rotateStreamingTextId } from "../utils/streaming-text-id.js";
+import { peekStreamingTextId, releaseStreamingTextId, rotateStreamingTextId } from "../utils/streaming-text-id.js";
 import { releaseStatusCardSeq, getCurrentStatusCardSeq } from "../utils/status-card-seq.js";
 import { markLastChunkBlock, getAccumulatedThinkIndex, releaseThinkIndex } from "../utils/think-index.js";
 import { releaseAppVersion } from "../utils/app-version.js";
@@ -629,6 +629,7 @@ export async function deliverSubagentFinalResult(params: {
 
   const terminalFrameDelayMs = config.terminalFrameDelayMs ?? 0;
   const session = sessions.get(state.sessionId);
+  const terminalStreamingTextId = peekStreamingTextId(effectiveTaskId);
   const sendCompletedStatus = () =>
     sendStatusUpdate({
       config,
@@ -637,6 +638,8 @@ export async function deliverSubagentFinalResult(params: {
       messageId: effectiveMessageId,
       text: "已完成深度思考",
       state: "completed",
+      final: true,
+      streamingTextId: terminalStreamingTextId,
     });
   // 正文文本完成帧（lastChunk=true, final=false）：权威全文本在此下发，
   // final=true 留给最后的空载终帧 —— 与 reply-dispatcher 终态序列一致
@@ -690,12 +693,6 @@ export async function deliverSubagentFinalResult(params: {
   if (session) {
     session.outboundQueue.enqueue({
       taskId: effectiveTaskId,
-      label: "subagent-terminal-status",
-      delayMs: terminalFrameDelayMs,
-      send: sendCompletedStatus,
-    });
-    session.outboundQueue.enqueue({
-      taskId: effectiveTaskId,
       label: "subagent-text-complete",
       send: sendTextComplete,
     });
@@ -715,13 +712,19 @@ export async function deliverSubagentFinalResult(params: {
       delayMs: terminalFrameDelayMs,
       send: sendFinal,
     });
+    session.outboundQueue.enqueue({
+      taskId: effectiveTaskId,
+      label: "subagent-terminal-status",
+      delayMs: terminalFrameDelayMs,
+      send: sendCompletedStatus,
+    });
     await session.outboundQueue.whenIdle();
   } else {
-    await sendCompletedStatus();
     await sendTextComplete();
     await sendSummaryCard();
     await sendTaskCardFinal();
     await sendFinal();
+    await sendCompletedStatus();
   }
 
   clearWaitState(state.sessionId, reason ?? "all-subagent-results-delivered", state.taskId);
