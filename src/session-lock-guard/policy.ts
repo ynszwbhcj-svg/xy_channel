@@ -9,12 +9,16 @@ export interface GuardPolicyConfig {
   /** 滚动窗口内允许的最大重启次数。 */
   maxRestartsPerWindow: number;
   restartWindowMs: number;
-  /** 等待其他会话自然结束的时长，超过则放弃本次重启。 */
-  maxDeferMs: number;
+  /**
+   * 等待其他会话自然结束超过此时长后，延期日志升级为 ERROR。
+   * 等待本身不会放弃重启：受害会话已经不可用，继续等不会让它更糟，
+   * 而其他会话一结束就能自动获救；若到期放弃，它就再无恢复机会。
+   */
+  deferAlertAfterMs: number;
   /**
    * 同一把锁需要观察到几次超时才认定为泄漏。
    * 单次超时可能只是正常的锁争用（旧 turn 尚未清理完），那种情况锁随后会释放、
-   * 下一轮本可成功；若单次就重启并 fail-fast，等于把可自愈的抖动放大成故障。
+   * 下一轮本可成功；若单次就重启，等于把可自愈的抖动放大成故障。
    * 每次超时本身要等待 60s，两次观察天然拉开了确认窗口。
    */
   requiredObservations: number;
@@ -23,19 +27,30 @@ export interface GuardPolicyConfig {
 export const DEFAULT_POLICY: GuardPolicyConfig = {
   enabled: true,
   startupGraceMs: 60_000,
-  cooldownMs: 15 * 60_000,
+  // 重启间隔的下限，只负责"别误伤"。真正防止重启风暴的是下面的窗口限频：
+  // 每小时 3 次的额度用满后照样拦截，因此这里不必再叠加一个很长的间隔，
+  // 否则救完一个会话后的十几分钟内，新泄漏的会话会被一律放弃。
+  cooldownMs: 5 * 60_000,
   perLockCooldownMs: 30 * 60_000,
   // supervisord 配置 startsecs=3 / startretries=10：短时间内反复拉起失败会进 FATAL
   // 并永久停止重启，那比锁泄漏本身更严重，因此这里必须硬性限频。
   maxRestartsPerWindow: 3,
   restartWindowMs: 60 * 60_000,
-  maxDeferMs: 5 * 60_000,
+  deferAlertAfterMs: 5 * 60_000,
   requiredObservations: 2,
 };
 
 export type Decision =
   | { action: "restart" }
-  | { action: "defer"; reason: string; activeSessions: string[] }
+  | {
+      action: "defer";
+      reason: string;
+      activeSessions: string[];
+      /** 本轮延期已持续的时长。 */
+      waitingMs: number;
+      /** 已等待超过 deferAlertAfterMs，需要升级日志换取人工介入。 */
+      overdue: boolean;
+    }
   | { action: "skip"; reason: SkipReason };
 
 export type SkipReason =
@@ -45,8 +60,7 @@ export type SkipReason =
   | "already-restarted"
   | "cooldown"
   | "same-lock"
-  | "rate-limited"
-  | "defer-expired";
+  | "rate-limited";
 
 export interface DecisionInput {
   now: number;
@@ -110,13 +124,13 @@ export class RestartPolicy {
 
     if (input.otherActiveSessions.length > 0) {
       this.firstDeferAt ??= input.now;
-      if (input.now - this.firstDeferAt > cfg.maxDeferMs) {
-        return { action: "skip", reason: "defer-expired" };
-      }
+      const waitingMs = input.now - this.firstDeferAt;
       return {
         action: "defer",
         reason: "other-sessions-active",
         activeSessions: input.otherActiveSessions,
+        waitingMs,
+        overdue: waitingMs > cfg.deferAlertAfterMs,
       };
     }
 

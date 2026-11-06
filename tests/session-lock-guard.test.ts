@@ -19,13 +19,13 @@ function lockEvent(lockPath = LOCK_A, sessionKey = VICTIM): AgentEventLike {
 
 function makeGuard(otherActive: string[] = []) {
   let current = 1_000_000;
-  const calls = { restart: 0, logs: [] as string[] };
+  const calls = { restart: 0, logs: [] as string[], errors: [] as string[] };
   const active = { sessions: otherActive };
 
   const guard = new GatewayLockGuard(
     {
       listOtherActiveSessions: () => active.sessions,
-      logger: { log: (m) => calls.logs.push(m), error: (m) => calls.logs.push(m) },
+      logger: { log: (m) => calls.logs.push(m), error: (m) => calls.errors.push(m) },
       now: () => current,
       restart: () => {
         calls.restart++;
@@ -39,7 +39,7 @@ function makeGuard(otherActive: string[] = []) {
         perLockCooldownMs: 100_000,
         maxRestartsPerWindow: 3,
         restartWindowMs: 1_000_000,
-        maxDeferMs: 5_000,
+        deferAlertAfterMs: 5_000,
         // 既有用例关注冷却/限流/延期语义，显式单次确认；
         // 默认两次确认的行为由 "leak confirmation" 一组单独覆盖。
         requiredObservations: 1,
@@ -105,7 +105,8 @@ describe("fatal-loop protection", () => {
     advance(3_000);
     await guard.handleAgentEvent(lockEvent(LOCK_B));
     expect(calls.restart).toBe(1);
-    expect(calls.logs.some((l) => l.includes("cooldown"))).toBe(true);
+    // 冷却压制的是已确认的泄漏，锁不会自愈，必须走 ERROR 而不是普通日志。
+    expect(calls.errors.some((l) => l.includes("cooldown") && l.includes("will not heal"))).toBe(true);
   });
 
   it("permanently suppresses a lock that was already restarted for", async () => {
@@ -116,8 +117,8 @@ describe("fatal-loop protection", () => {
     await guard.handleAgentEvent(lockEvent(LOCK_A));
     expect(calls.restart).toBe(1);
     // 同一把锁再次出现只可能是上次重启没清掉它，继续重启就是无限循环，必须熔断。
-    expect(calls.logs.some((l) => l.includes("already-restarted"))).toBe(true);
-    expect(calls.logs.some((l) => l.includes("manual investigation required"))).toBe(true);
+    expect(calls.errors.some((l) => l.includes("already-restarted"))).toBe(true);
+    expect(calls.errors.some((l) => l.includes("manual investigation required"))).toBe(true);
   });
 
   it("allows a different lock after the global cooldown", async () => {
@@ -137,7 +138,7 @@ describe("fatal-loop protection", () => {
       advance(20_000);
     }
     expect(calls.restart).toBe(3);
-    expect(calls.logs.some((l) => l.includes("rate-limited"))).toBe(true);
+    expect(calls.errors.some((l) => l.includes("rate-limited") && l.includes("will not heal"))).toBe(true);
   });
 
   it("re-enters the grace window after the gateway reports started", async () => {
@@ -170,14 +171,22 @@ describe("other-session coordination", () => {
     expect(calls.restart).toBe(1);
   });
 
-  it("gives up after deferring too long", async () => {
-    const { guard, calls, advance } = makeGuard(["a2a-other"]);
+  it("keeps waiting instead of giving up, and escalates the log once overdue", async () => {
+    const { guard, calls, active, advance } = makeGuard(["a2a-other"]);
     advance(2_000);
     await guard.handleAgentEvent(lockEvent());
-    advance(6_000);
+    expect(calls.logs.some((l) => l.includes("deferred"))).toBe(true);
+
+    advance(60_000);
     await guard.handleAgentEvent(lockEvent());
+    // 超时不再放弃：放弃等于让受害会话再无恢复机会，只升级日志换取人工介入。
     expect(calls.restart).toBe(0);
-    expect(calls.logs.some((l) => l.includes("defer-expired"))).toBe(true);
+    expect(calls.errors.some((l) => l.includes("deferred") && l.includes("restart remains pending"))).toBe(true);
+
+    // 其他会话一结束，同一把锁仍能获救。
+    active.sessions = [];
+    await guard.handleAgentEvent(lockEvent());
+    expect(calls.restart).toBe(1);
   });
 });
 

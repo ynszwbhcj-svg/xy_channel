@@ -97,15 +97,31 @@ export class GatewayLockGuard {
       const message =
         `[LOCK-GUARD] lock timeout detected (observation ${observations}), restart suppressed (${decision.reason}); ` +
         `lock=${info.lockPath} owner=${info.owner}`;
-      // 已重启过的锁再次超时，说明重启没有根治，必须留给人工排查，不能静默跳过。
-      if (decision.reason === "already-restarted") this.deps.logger.error(`${message}; restart did not fix it, manual investigation required`);
-      else this.deps.logger.log(message);
+      if (decision.reason === "already-restarted") {
+        // 已重启过的锁再次超时，说明重启没有根治，必须留给人工排查，不能静默跳过。
+        this.deps.logger.error(`${message}; restart did not fix it, manual investigation required`);
+      } else if (
+        decision.reason === "unconfirmed" ||
+        decision.reason === "startup-grace" ||
+        decision.reason === "disabled"
+      ) {
+        // 尚未确认泄漏，属于正常流程，不需要人工关注。
+        this.deps.logger.log(message);
+      } else {
+        // cooldown / same-lock / rate-limited 都是"已确认泄漏却不重启"。openclaw 对
+        // 存活 pid 的锁只上报不回收（too-old/hold-exceeded 为 report-only），被压制的
+        // 会话不会自行恢复，若仍打普通日志，故障就会无声无息地持续下去。
+        this.deps.logger.error(`${message}; lock will not heal by itself while suppressed`);
+      }
       return;
     }
     if (decision.action === "defer") {
-      this.deps.logger.log(
-        `[LOCK-GUARD] restart deferred: ${decision.activeSessions.length} other session(s) active: ${decision.activeSessions.join(",")}`,
-      );
+      const message =
+        `[LOCK-GUARD] restart deferred: ${decision.activeSessions.length} other session(s) active: ` +
+        `${decision.activeSessions.join(",")}; waited=${decision.waitingMs}ms (restart remains pending)`;
+      // 等待不会放弃救治，但等待过久意味着受害会话持续不可用，需要人工关注。
+      if (decision.overdue) this.deps.logger.error(message);
+      else this.deps.logger.log(message);
       return;
     }
     if (this.inFlight) return;

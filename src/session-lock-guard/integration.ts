@@ -95,8 +95,8 @@ export function markSessionLockGuardStarted(): void {
  * 算出"除受害会话外仍在运行的会话"。
  *
  * sessionKey → A2A sessionId 的映射可能缺失（绑定已清理、pinned 会话等）。
- * 此时若不过滤，受害会话自己会被算作"其他会话"，导致重启被无限 defer、
- * 最终 defer-expired，功能完全失效。因此映射缺失时退化为把最近活跃的 binding
+ * 此时若不过滤，受害会话自己会被算作"其他会话"，重启被无限延期、
+ * 功能完全失效。因此映射缺失时退化为把最近活跃的 binding
  * 当作受害会话——锁超时错误刚发生，对应当前正在处理的那个任务。
  */
 export function computeOtherActiveSessions(
