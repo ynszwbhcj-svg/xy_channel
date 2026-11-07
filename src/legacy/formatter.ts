@@ -219,6 +219,7 @@ export interface SendStatusUpdateParams {
   messageId: string;
   text: string;
   state: "submitted" | "working" | "input-required" | "completed" | "canceled" | "failed" | "unknown";
+  final?: boolean;
 }
 
 /**
@@ -226,7 +227,7 @@ export interface SendStatusUpdateParams {
  * Follows A2A protocol standard format with nested status object.
  */
 export async function sendStatusUpdate(params: SendStatusUpdateParams): Promise<void> {
-  const { config, sessionId, taskId, messageId, text, state } = params;
+  const { config, sessionId, taskId, messageId, text, state, final = false } = params;
 
   const log = logger.withContext(sessionId, taskId);
 
@@ -248,7 +249,7 @@ export async function sendStatusUpdate(params: SendStatusUpdateParams): Promise<
   const statusUpdate: A2ATaskStatusUpdateEvent = {
     taskId,
     kind: "status-update",
-    final: false, // Status updates should not end the stream
+    final,
     status: {
       message: statusMessage,
       state,
