@@ -1,7 +1,7 @@
 // Reply dispatcher - completely following feishu/reply-dispatcher.ts pattern
 import type { ClawdbotConfig, RuntimeEnv, ReplyPayload } from "openclaw/plugin-sdk";
 import { getXYRuntime } from "../runtime.js";
-import { sendA2AResponse, sendStatusUpdate, sendReasoningTextUpdate, sendCommand, sendDisplayTaskCardData, sendExecuteStatusCard } from "../formatter.js";
+import { sendA2AResponse, sendStatusUpdate, sendReasoningTextUpdate, sendCommand, sendDisplayTaskCardData, sendExecuteStatusCard, sendReference } from "../formatter.js";
 import { resolveXYConfig } from "../config.js";
 import type { A2ACommand, RunCrossTaskContext, XYChannelConfig } from "../types.js";
 import { clearRunCrossTaskSentFiles, getCurrentSessionContext } from "../tools/session-manager.js";
@@ -32,6 +32,7 @@ import {
   closeReasoningSegment,
 } from "../utils/reasoning-segment.js";
 import { getOrCreateStreamingTextId } from "../utils/streaming-text-id.js";
+import { drainPendingReferences } from "../utils/pending-references.js";
 import { getCurrentStatusCardSeq } from "../utils/status-card-seq.js";
 import { markReasoningBlockEnd, getAccumulatedThinkIndex, peekLastReasoningBlockSeq } from "../utils/think-index.js";
 
@@ -580,6 +581,30 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
                 });
               }
 
+              // 引用来源帧：xiaoyi_append_reference 工具攒批的引用在【最后一个
+              // 正文帧之后】统一下发（协议要求），排在汇总卡之前；streamingTextId
+              // 由 sendReference 取 last-sent（此时即 terminal-text-complete 帧
+              // 的正文段 id）。无正文完成帧（异常空文本）时 last-sent 退化为最后
+              // 一帧流式正文的 id，仍在其后下发。
+              {
+                const pendingReferences = drainPendingReferences(terminalTaskId);
+                if (pendingReferences.length > 0) {
+                  outboundQueue.enqueue({
+                    taskId: terminalTaskId,
+                    label: "terminal-references",
+                    delayMs: terminalFrameDelayMs,
+                    send: () =>
+                      sendReference({
+                        config,
+                        sessionId,
+                        taskId: terminalTaskId,
+                        messageId: terminalMessageId,
+                        references: pendingReferences,
+                      }),
+                  });
+                }
+              }
+
               // 🔑 汇总状态卡：thinkIndex 攒批（本 turn 内工具卡不逐张携带，
               // 攒到这里统一下发）。携带规则：除最后一个思考块和最后一个
               // 正文段外，其余块都进 thinkIndex —— 最后一轮正文的 id = 当前
@@ -817,8 +842,9 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
 
       onReasoningEnd: async () => {
         // SDK thinking_end：标记本 turn reasoning 结束。帧序列：先补一帧
-        // status-update（"已完成深度思考"），再发思考块结束标记帧 —— 端侧
-        // 先落定状态文案，再由 lastChunk=true 收起思维链面板。
+        // status-update（"已完成深度思考"，pin 思考段 streamingTextId），再发
+        // 思考块结束标记帧 —— 端侧先落定状态文案，再由 lastChunk=true 收起
+        // 思维链面板。
         // 标记帧（携带本思考段的完整文本、append=false 快照语义、
         // isReasoningFinished=true + lastChunk=true；两个标记都显式 pin 而非
         // lazy 读状态表，防止帧在队期间新一轮 reasoning 复位状态导致标记帧
@@ -833,6 +859,9 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
           // 思考内容发完、lastChunk=true 标记帧之前补一帧 status-update
           // （"已完成深度思考"），每个思考块结束时都发；正文完成后不再发
           // （终态帧文案另见 terminal-status）。state=working：turn 仍在进行。
+          // streamingTextId 在入队时捕获并 pin —— 与思考段帧同属一个文本段，
+          // 不受 drain 期间分段轮换影响（分段边界/思考→正文切换的收尾帧同理）。
+          const reasoningStreamingTextId = getOrCreateStreamingTextId(endTaskId);
           outboundQueue.enqueue({
             taskId: endTaskId,
             label: "reasoning-end-status",
@@ -844,6 +873,7 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
                 messageId: getActiveMessageId(),
                 text: "已完成深度思考",
                 state: "working",
+                streamingTextId: reasoningStreamingTextId,
               }),
           });
 
@@ -859,7 +889,6 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
             // 段文本与 streamingTextId 均在入队时捕获/pin —— 防止 drain 前
             // 新一轮 reasoning 更新快照、或分段轮换把本帧劈到相邻 id 上
             const reasoningSegmentText = peekReasoningSegmentText(endTaskId);
-            const streamingTextId = getOrCreateStreamingTextId(endTaskId);
             outboundQueue.enqueue({
               taskId: endTaskId,
               label: "reasoning-end",
@@ -873,7 +902,7 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
                   append: false,
                   isReasoningFinished: true,
                   lastChunk: true,
-                  streamingTextId,
+                  streamingTextId: reasoningStreamingTextId,
                 }),
             });
           }

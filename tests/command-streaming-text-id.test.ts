@@ -21,7 +21,7 @@ vi.mock("../src/utils/logger.js", () => ({
   },
 }));
 
-import { sendA2AResponse, sendCommand, sendStatusUpdate } from "../src/formatter.js";
+import { sendA2AResponse, sendCommand, sendReference, sendStatusUpdate } from "../src/formatter.js";
 import {
   getOrCreateStreamingTextId,
   rotateStreamingTextId,
@@ -117,6 +117,26 @@ describe("command streamingTextId 跟随最后发出帧", () => {
     await sendCommand({ config, sessionId, taskId, messageId, command: makeCommand() });
     const ids = sentArtifactStreamingTextIds();
     expect(ids[ids.length - 1]).toBe(oldId);
+  });
+
+  it("reference 帧携带最后发出正文帧的 id（last-sent），不跟随在役轮换", async () => {
+    // 正文帧（id A）实际上送
+    await sendA2AResponse({ config, sessionId, taskId, messageId, text: "正文", append: false, final: false });
+    const bodyId = getOrCreateStreamingTextId(taskId);
+
+    // 分段边界轮换：在役注册表切到新 id B，但端侧最后收到的仍是正文帧 A
+    rotateStreamingTextId(taskId);
+
+    // 引用帧：携带最后一个正文帧的 id A
+    await sendReference({
+      config,
+      sessionId,
+      taskId,
+      messageId,
+      references: [{ title: "标题", url: "https://example.com", source: "web_search", name: "百度百科" }],
+    });
+    const ids = sentArtifactStreamingTextIds();
+    expect(ids[ids.length - 1]).toBe(bodyId);
   });
 
   it("completeTask 清理 last-sent 记录", async () => {

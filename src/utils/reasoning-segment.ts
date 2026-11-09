@@ -6,9 +6,9 @@
 // 边界前已以旧 id 下发的文本 —— 直接转发会让前段文本在新 id 下重复展示。
 // 因此按 taskId 维护思考分段状态：
 //   - cutBase：分段基线，即旧 id 段已闭合的文本前缀。分段边界处锁存
-//     （cutReasoningSegment；尚无正文段落的边界不拆分、不锁存，见
-//     conversation-manager.rotateStreamingTextSegment），后续快照先剥离
-//     该前缀，只下发边界后增量段；
+//     （cutReasoningSegment；工具边界无条件拆分并锁存，每个独立思考段
+//     都是独立 id，见 conversation-manager.rotateStreamingTextSegment），
+//     后续快照先剥离该前缀，只下发边界后增量段；
 //   - 快照不再以 cutBase 开头 → 判定为 SDK 侧新思考块，基线复位、全量下发；
 //   - open：当前在役 id 下是否有未闭合的思考流块（已下发思考帧且尚未发出
 //     该段的 lastChunk=true 帧）。onReasoningStream 置位；思考块结束标记帧

@@ -24,7 +24,8 @@ import {
   peekReasoningSegmentText,
   releaseReasoningSegment,
 } from "../utils/reasoning-segment.js";
-import { sendStatusUpdate, sendA2AResponse, sendDisplayTaskCardData, sendExecuteStatusCard, sendReasoningTextUpdate } from "../formatter.js";
+import { sendStatusUpdate, sendA2AResponse, sendDisplayTaskCardData, sendExecuteStatusCard, sendReasoningTextUpdate, sendReference } from "../formatter.js";
+import { drainPendingReferences, releasePendingReferences } from "../utils/pending-references.js";
 import type { XYChannelConfig } from "../types.js";
 import {
   ConversationSession,
@@ -73,7 +74,7 @@ export function deleteSession(sessionId: string): void {
   const session = sessions.get(sessionId);
   session?.outboundQueue.destroy();
   // 会话销毁：释放其任务链上所有 turn 的 streamingTextId、状态卡序号、
-  // thinkIndex 标记、App 版本标记、正文首帧标记与思考分段状态
+  // thinkIndex 标记、App 版本标记、正文首帧标记、思考分段状态与待下发引用
   for (const entry of session?.tasks ?? []) {
     releaseStreamingTextId(entry.taskId);
     releaseLastSentStreamingTextId(entry.taskId);
@@ -82,6 +83,7 @@ export function deleteSession(sessionId: string): void {
     releaseAppVersion(entry.taskId);
     clearBodyTextState(entry.taskId);
     releaseReasoningSegment(entry.taskId);
+    releasePendingReferences(entry.taskId);
   }
   sessions.delete(sessionId);
 }
@@ -137,6 +139,7 @@ export function completeTask(sessionId: string, expectedTaskId?: string): void {
       releaseStreamingTextId(entry.taskId);
       releaseLastSentStreamingTextId(entry.taskId);
       releaseReasoningSegment(entry.taskId);
+      releasePendingReferences(entry.taskId);
     }
     session.tasks = [];
     return;
@@ -152,6 +155,7 @@ export function completeTask(sessionId: string, expectedTaskId?: string): void {
   releaseStreamingTextId(expectedTaskId);
   releaseLastSentStreamingTextId(expectedTaskId);
   releaseReasoningSegment(expectedTaskId);
+  releasePendingReferences(expectedTaskId);
   if (nextTasks.length > 0) {
     logger.log(`[TASK_MANAGER] Removed taskId ${expectedTaskId}, restored current taskId ${nextTasks[nextTasks.length - 1].taskId}`);
   } else {
@@ -172,9 +176,11 @@ export function getCurrentTask(sessionId: string): TaskEntry | null {
  *      补发一帧旧段完整全文本（lastChunk=true，标识旧流文本块已结束），
  *      并等队列排空 —— 保证旧 id 段的尾部完整送达（在途 lazy partial 帧
  *      也在此期间以旧 id 发出）；
- *   2. 思考旧段收尾：当前 id 下有未闭合思考流块时，以旧 id 补发该段完整
- *      文本（lastChunk=true）并等队列排空 —— 保证每个携带过思考帧的 id
- *      都有收尾帧，端侧不会拿到没有 lastChunk=true 的中间 id 段；
+ *   2. 思考旧段收尾：当前 id 下有未闭合思考流块时，先补一帧 status-update
+ *      （"已完成深度思考"，pin 思考段 id），再以旧 id 补发该段完整文本
+ *      （lastChunk=true）并等队列排空 —— 保证每个携带过思考帧的 id 都有
+ *      「状态帧 → 收尾帧」的闭合序列，端侧不会拿到没有 lastChunk=true 的
+ *      中间 id 段；
  *   3. 轮换该 turn 的 streamingTextId，并切分思考段基线 —— 边界之后的
  *      思考帧使用新 id，且只携带剥离基线后的增量段文本（端侧按 id 聚合
  *      渲染，SDK 跨边界续流的全量快照含边界前文本，必须剥离）；
@@ -182,14 +188,11 @@ export function getCurrentTask(sessionId: string): TaskEntry | null {
  *      之后新段的文本，不再叠加旧 id 段内容。
  * 返回新 streamingTextId。
  *
- * 高版本规则（无正文段落不拆分）：当前分段尚未出现正文段落（装配器无
- * 内容且正文首帧未发出）时，边界整体跳过 —— 不轮换 streamingTextId、
- * 不切分思考段基线、不发任何收尾帧，返回在役 id。端侧按 streamingTextId
- * 聚合渲染，正文段落出现前不允许出现多个思考 id：思考段1……工具1、2、3
- * ……思考段2……正文1 的路径中，思考段1与思考段2共享同一 streamingTextId，
- * 思考流在同一 id 下无缝续流（SDK 跨工具边界的全量快照仍累计边界前文本，
- * append:false 语义下同 id 整体替换即正确展示）。正文段落出现后的首个
- * 边界起恢复按 1-4 正常拆分（其后的思考段使用轮换后的新 id）。
+ * 每个独立的思考文本段都是独立的 streamingTextId：边界无条件拆分（无
+ * 「正文出现前不拆分」门控）—— 思考段1……工具1、2、3……思考段2……正文1
+ * 的路径中，思考段1 在首个工具边界以 id A 收尾并轮换到 id B，思考段2 在
+ * 下一个边界以 id B 收尾；思考→正文的类型切换另由
+ * rotateStreamingTextForBodyStart 收口（思考与正文不共用 id）。
  */
 export async function rotateStreamingTextSegment(params: {
   config: XYChannelConfig;
@@ -200,17 +203,6 @@ export async function rotateStreamingTextSegment(params: {
   const { config, sessionId, taskId, messageId } = params;
   const session = sessions.get(sessionId);
   const assembler = session?.assembler;
-
-  // 无正文段落的边界不拆分（见上文高版本规则）：连续思考段共享同一
-  // streamingTextId。装配器无内容且正文首帧未发出 = 当前分段只有思考
-  // （或完全为空，如 cron 无 dispatcher 场景），没有需要收尾/切分的正文段。
-  if (!assembler?.hasContent() && !isBodyTextSent(taskId)) {
-    const currentId = getOrCreateStreamingTextId(taskId);
-    logger.withContext(sessionId, taskId).log(
-      `[SEGMENT] no body paragraph yet, skip boundary split, keep streamingTextId=${currentId}`,
-    );
-    return currentId;
-  }
 
   if (session && assembler?.hasContent()) {
     const oldSegmentText = assembler.getFullText();
@@ -255,6 +247,22 @@ export async function rotateStreamingTextSegment(params: {
     // 轮换不影响本帧归属
     const segmentText = peekReasoningSegmentText(taskId);
     const streamingTextId = peekStreamingTextId(taskId);
+    // 思考段结束状态帧：lastChunk 收尾帧之前补发，streamingTextId pin 思考段
+    // id —— 端侧先落定「已完成深度思考」状态文案，再由 lastChunk=true 闭合段
+    session.outboundQueue.enqueue({
+      taskId,
+      label: "reasoning-segment-end-status",
+      send: () =>
+        sendStatusUpdate({
+          config,
+          sessionId,
+          taskId,
+          messageId,
+          text: "已完成深度思考",
+          state: "working",
+          streamingTextId,
+        }),
+    });
     session.outboundQueue.enqueue({
       taskId,
       label: "reasoning-segment-flush",
@@ -292,14 +300,15 @@ export async function rotateStreamingTextSegment(params: {
  * streamingTextId —— 当前 id 段携带过思考内容时，正文首帧起轮换为新 id：
  *   1. 先等出站队列排空 —— 在途思考帧（id 入队时已 pin）与 lazy 读 id 的
  *      status-update 旁路帧均以旧 id 落定；
- *   2. 思考流块仍未闭合（SDK 未发 thinking_end 的防御路径）时，以旧 id 补发
+ *   2. 思考流块仍未闭合（SDK 未发 thinking_end 的防御路径）时，先补一帧
+ *      status-update（"已完成深度思考"，pin 思考段 id），再以旧 id 补发
  *      该段完整文本（lastChunk=true）并再次等排空；
  *   3. 轮换 streamingTextId —— 正文帧自首帧起使用新 id。
  * 不轮换的情形（返回在役 id）：当前段无思考内容（纯正文段，id 已是新起点）、
  * 正文内容已出现（调用点应在新段首帧之前；重复调用幂等）、低版本链路
  * （无分段能力，整轮 turn 单 id）。
- * 与 rotateStreamingTextSegment 的分工：工具边界只拆分"正文段已出现"的流
- * （无正文段落不拆分，连续思考段共享同一 id）；思考→正文的类型切换点在
+ * 与 rotateStreamingTextSegment 的分工：工具边界无条件拆分文本段（每个
+ * 独立思考文本段都是独立的 streamingTextId）；思考→正文的类型切换点在
  * 正文首帧产生处，由本函数收口。
  */
 export async function rotateStreamingTextForBodyStart(params: {
@@ -324,7 +333,8 @@ export async function rotateStreamingTextForBodyStart(params: {
   // 在途帧以旧 id 落定（drain 期间 lazy 读 id 的旁路帧也仍以旧 id 发出）
   if (session) await session.outboundQueue.whenIdle();
 
-  // 思考流块未闭合（防御 SDK 未发 thinking_end）：以旧 id 补收尾帧。
+  // 思考流块未闭合（防御 SDK 未发 thinking_end）：收尾帧之前先补一帧
+  // status-update（"已完成深度思考"，pin 思考段 id），再以旧 id 补收尾帧。
   // 与分段边界的思考收尾同理不设 coalesceKey（协议关键帧）；isReasoningFinished
   // 显式 pin false —— 此处是思考→正文的类型切换，非 thinking_end 语义。
   if (session && isReasoningSegmentOpen(taskId)) {
@@ -337,6 +347,20 @@ export async function rotateStreamingTextForBodyStart(params: {
     // 轮换不影响本帧归属
     const segmentText = peekReasoningSegmentText(taskId);
     const streamingTextId = peekStreamingTextId(taskId);
+    session.outboundQueue.enqueue({
+      taskId,
+      label: "reasoning-body-switch-status",
+      send: () =>
+        sendStatusUpdate({
+          config,
+          sessionId,
+          taskId,
+          messageId,
+          text: "已完成深度思考",
+          state: "working",
+          streamingTextId,
+        }),
+    });
     session.outboundQueue.enqueue({
       taskId,
       label: "reasoning-body-switch-flush",
@@ -821,6 +845,18 @@ export async function deliverSubagentFinalResult(params: {
       final: false,
       lastChunk: true,
     });
+  // 引用来源帧：工具攒批的引用在最后一个正文帧（正文完成帧）之后下发，
+  // 排在汇总卡之前；streamingTextId 由 sendReference 取 last-sent（即正文
+  // 完成帧的 id）。与 reply-dispatcher 正常终态序列的落点一致。
+  const pendingReferences = drainPendingReferences(effectiveTaskId);
+  const sendPendingReferences = () =>
+    sendReference({
+      config,
+      sessionId: state.sessionId,
+      taskId: effectiveTaskId,
+      messageId: effectiveMessageId,
+      references: pendingReferences,
+    });
   // 汇总状态卡：thinkIndex 攒批，text=任务处理已完成；排在 final 帧之前。
   // 携带规则（与 reply-dispatcher 终态路径一致）：除最后一个思考块和最后
   // 一个正文段外其余块都进 thinkIndex —— 最后一轮正文 id = 当前卡序号
@@ -871,6 +907,13 @@ export async function deliverSubagentFinalResult(params: {
       label: "subagent-text-complete",
       send: sendTextComplete,
     });
+    if (pendingReferences.length > 0) {
+      session.outboundQueue.enqueue({
+        taskId: effectiveTaskId,
+        label: "subagent-references",
+        send: sendPendingReferences,
+      });
+    }
     session.outboundQueue.enqueue({
       taskId: effectiveTaskId,
       label: "subagent-summary-card",
@@ -891,6 +934,9 @@ export async function deliverSubagentFinalResult(params: {
   } else {
     await sendCompletedStatus();
     await sendTextComplete();
+    if (pendingReferences.length > 0) {
+      await sendPendingReferences();
+    }
     await sendSummaryCard();
     await sendTaskCardFinal();
     await sendFinal();

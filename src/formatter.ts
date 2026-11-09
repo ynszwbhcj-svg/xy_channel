@@ -289,6 +289,10 @@ export interface SendStatusUpdateParams {
   state: "submitted" | "working" | "input-required" | "completed" | "canceled" | "failed" | "unknown";
   /** 打印完整 A2A 帧 JSON（默认 false，只打文案摘要）。保活帧开启以核查 streamingTextId 等字段。 */
   logFullFrame?: boolean;
+  /** 显式 pin 的 streamingTextId（入队时捕获）：帧归属产生它的文本段（如思考段
+   *  结束状态帧 pin 思考段 id），不受出站队列 drain 期间分段轮换影响；缺省
+   *  drain 时 peek 在役 id。 */
+  streamingTextId?: string;
 }
 
 /**
@@ -316,8 +320,9 @@ export async function sendStatusUpdate(params: SendStatusUpdateParams): Promise<
   });
 
   // 携带本 turn 当前在役的 streamingTextId（peek 只读，不创建——终帧释放后
-  // 晚到的状态帧不得重建出孤儿 id；无在役流时省略该字段）
-  const currentStreamingTextId = peekStreamingTextId(taskId);
+  // 晚到的状态帧不得重建出孤儿 id；无在役流时省略该字段）。调用方显式 pin
+  // 时优先使用 pin 值（思考段结束状态帧归属思考段 id，不受 drain 期间轮换影响）。
+  const currentStreamingTextId = params.streamingTextId ?? peekStreamingTextId(taskId);
 
   const statusUpdate: A2ATaskStatusUpdateEvent = {
     taskId,
@@ -730,6 +735,12 @@ export interface ReferenceDataItem {
  * Follows the same pattern as sendCard: builds a data part with the
  * "reference" key containing ReferenceDataObject items, wraps in JSON-RPC,
  * and sends via WebSocket.
+ *
+ * streamingTextId 跟随本 turn 最后一个正文帧（与 command 帧同一 last-sent
+ * 规则）：引用帧在最后一个正文之后下发（高版本链路经 utils/pending-references
+ * 攒批、收尾序列统一 flush），其 id 必须与端侧最后收到的正文帧一致 ——
+ * 取最后实际发出帧的 id；仅当本 turn 尚无已发帧（异常早发）时退化
+ * get-or-create。
  */
 export async function sendReference(params: SendReferenceParams): Promise<void> {
   const { config, sessionId, taskId, messageId, toolCallId } = params;
@@ -768,6 +779,7 @@ export async function sendReference(params: SendReferenceParams): Promise<void> 
   };
 
   // Build artifact update with reference as data
+  // streamingTextId：跟随最后一个正文帧的 id（last-sent 规则，见上文 docstring）
   const artifact: A2ATaskArtifactUpdateEvent = {
     taskId,
     taskUniqId: taskId,
@@ -777,7 +789,7 @@ export async function sendReference(params: SendReferenceParams): Promise<void> 
     append: false,
     lastChunk: params.lastChunk ?? false,
     final: params.final ?? false,
-    streamingTextId: getOrCreateStreamingTextId(taskId),
+    streamingTextId: peekLastSentStreamingTextId(taskId) ?? getOrCreateStreamingTextId(taskId),
     isReasoningFinished: readReasoningFinished(taskId),
     artifact: {
       artifactId: uuidv4(),

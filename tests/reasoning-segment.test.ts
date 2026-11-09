@@ -154,6 +154,7 @@ describe("rotateStreamingTextSegment reasoning close", () => {
   beforeEach(() => {
     mocks.sendReasoningTextUpdate.mockResolvedValue(undefined);
     mocks.sendA2AResponse.mockResolvedValue(undefined);
+    mocks.sendStatusUpdate.mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -166,7 +167,7 @@ describe("rotateStreamingTextSegment reasoning close", () => {
     vi.clearAllMocks();
   });
 
-  /** 让当前分段出现正文段落（正文段落出现后的边界才会真正拆分）。 */
+  /** 让当前分段出现正文段落。 */
   function giveBodyParagraph(text = "正文段") {
     const session = getOrCreateSession(sessionId);
     session.assembler = new StreamAssembler();
@@ -180,6 +181,20 @@ describe("rotateStreamingTextSegment reasoning close", () => {
 
     const newId = await rotateStreamingTextSegment({ config, sessionId, taskId, messageId });
     expect(newId).not.toBe(oldId);
+
+    // 思考段结束状态帧先于收尾帧：text=已完成深度思考，pin 思考段（旧）id
+    expect(mocks.sendStatusUpdate).toHaveBeenCalledTimes(1);
+    expect(mocks.sendStatusUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        taskId,
+        text: "已完成深度思考",
+        state: "working",
+        streamingTextId: oldId,
+      }),
+    );
+    expect(mocks.sendStatusUpdate.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.sendReasoningTextUpdate.mock.invocationCallOrder[0],
+    );
 
     // 旧 id 补发思考收尾帧：完整段文本 + lastChunk=true + isReasoningFinished=false
     expect(mocks.sendReasoningTextUpdate).toHaveBeenCalledTimes(1);
@@ -218,45 +233,63 @@ describe("rotateStreamingTextSegment reasoning close", () => {
     expect(noteReasoningSnapshot(taskId, "思考内容追加")).toBe("追加");
   });
 
-  it("keeps the same id and skips the split when no body paragraph has appeared", async () => {
+  it("splits and rotates at a boundary even before any body paragraph (each thinking segment gets its own id)", async () => {
     getOrCreateSession(sessionId);
     const oldId = getOrCreateStreamingTextId(taskId);
     noteReasoningSnapshot(taskId, "思考前半段");
 
-    const id = await rotateStreamingTextSegment({ config, sessionId, taskId, messageId });
-    expect(id).toBe(oldId);
+    const newId = await rotateStreamingTextSegment({ config, sessionId, taskId, messageId });
+    expect(newId).not.toBe(oldId);
 
-    // 不拆分：无正文/思考收尾帧，思考流块保持未闭合，基线不切分 ——
-    // 连续思考段共享同一 streamingTextId
+    // 无正文段落：无正文收尾帧；思考段照常收尾 —— 状态帧先于 lastChunk 帧，
+    // 两者都 pin 思考段（旧）id
     expect(mocks.sendA2AResponse).not.toHaveBeenCalled();
-    expect(mocks.sendReasoningTextUpdate).not.toHaveBeenCalled();
-    expect(isReasoningSegmentOpen(taskId)).toBe(true);
-    // SDK 跨工具边界续流的全量快照（含边界前文本）在同一 id 下整体下发
-    expect(noteReasoningSnapshot(taskId, "思考前半段思考后半段")).toBe("思考前半段思考后半段");
+    expect(mocks.sendStatusUpdate).toHaveBeenCalledTimes(1);
+    expect(mocks.sendStatusUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "已完成深度思考",
+        state: "working",
+        streamingTextId: oldId,
+      }),
+    );
+    expect(mocks.sendStatusUpdate.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.sendReasoningTextUpdate.mock.invocationCallOrder[0],
+    );
+    expect(mocks.sendReasoningTextUpdate).toHaveBeenCalledTimes(1);
+    expect(mocks.sendReasoningTextUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "思考前半段",
+        lastChunk: true,
+        streamingTextId: oldId,
+      }),
+    );
+    // 思考流块已闭合、基线已切分：新 id 的思考帧只携带边界后增量段
+    expect(isReasoningSegmentOpen(taskId)).toBe(false);
+    expect(noteReasoningSnapshot(taskId, "思考前半段思考后半段")).toBe("思考后半段");
   });
 
-  it("resumes splitting at the first boundary after a body paragraph appears", async () => {
+  it("keeps splitting at subsequent boundaries after a body paragraph appears", async () => {
     const session = getOrCreateSession(sessionId);
     const oldId = getOrCreateStreamingTextId(taskId);
     noteReasoningSnapshot(taskId, "思考段");
 
-    // 无正文段落的边界：跳过，id 不变
-    expect(await rotateStreamingTextSegment({ config, sessionId, taskId, messageId })).toBe(oldId);
+    // 无正文段落的边界同样拆分：思考段以旧 id 收尾，轮换到新 id
+    const secondId = await rotateStreamingTextSegment({ config, sessionId, taskId, messageId });
+    expect(secondId).not.toBe(oldId);
     expect(mocks.sendA2AResponse).not.toHaveBeenCalled();
-    expect(mocks.sendReasoningTextUpdate).not.toHaveBeenCalled();
-
-    // 正文段落出现后的边界：恢复拆分 —— 正文/思考各自以旧 id 收尾，轮换新 id
-    session.assembler = new StreamAssembler();
-    session.assembler.onStreamText("正文段");
-    const newId = await rotateStreamingTextSegment({ config, sessionId, taskId, messageId });
-    expect(newId).not.toBe(oldId);
-    expect(mocks.sendA2AResponse).toHaveBeenCalledTimes(1);
-    expect(mocks.sendA2AResponse).toHaveBeenCalledWith(
-      expect.objectContaining({ text: "正文段", lastChunk: true }),
-    );
     expect(mocks.sendReasoningTextUpdate).toHaveBeenCalledTimes(1);
     expect(mocks.sendReasoningTextUpdate).toHaveBeenCalledWith(
       expect.objectContaining({ text: "思考段", lastChunk: true, streamingTextId: oldId }),
+    );
+
+    // 正文段落出现后的边界：正文/思考各自以在役 id 收尾，继续轮换
+    session.assembler = new StreamAssembler();
+    session.assembler.onStreamText("正文段");
+    const thirdId = await rotateStreamingTextSegment({ config, sessionId, taskId, messageId });
+    expect(thirdId).not.toBe(secondId);
+    expect(mocks.sendA2AResponse).toHaveBeenCalledTimes(1);
+    expect(mocks.sendA2AResponse).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "正文段", lastChunk: true }),
     );
     // 基线切分：其后的思考段只携带增量，归属新 id
     expect(noteReasoningSnapshot(taskId, "思考段新思考")).toBe("新思考");
@@ -272,6 +305,7 @@ describe("rotateStreamingTextForBodyStart reasoning→body switch", () => {
   beforeEach(() => {
     mocks.sendReasoningTextUpdate.mockResolvedValue(undefined);
     mocks.sendA2AResponse.mockResolvedValue(undefined);
+    mocks.sendStatusUpdate.mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -306,6 +340,19 @@ describe("rotateStreamingTextForBodyStart reasoning→body switch", () => {
 
     const bodyId = await rotateStreamingTextForBodyStart({ config, sessionId, taskId, messageId });
     expect(bodyId).not.toBe(thinkingId);
+
+    // 思考段结束状态帧先于收尾帧：text=已完成深度思考，pin 思考段 id
+    expect(mocks.sendStatusUpdate).toHaveBeenCalledTimes(1);
+    expect(mocks.sendStatusUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "已完成深度思考",
+        state: "working",
+        streamingTextId: thinkingId,
+      }),
+    );
+    expect(mocks.sendStatusUpdate.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.sendReasoningTextUpdate.mock.invocationCallOrder[0],
+    );
 
     // 以旧 id 补思考收尾帧：完整段文本 + lastChunk=true + isReasoningFinished=false
     expect(mocks.sendReasoningTextUpdate).toHaveBeenCalledTimes(1);
