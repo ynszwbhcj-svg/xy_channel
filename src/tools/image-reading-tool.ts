@@ -130,7 +130,7 @@ async function callImageUnderstandingAPI(
         actionExecutorTask: {
           pluginId: "aeac4e92c32949c1b7fc02de262615e6",
           agentState: "OnShelf",
-          actionName: "imageUnderStandStream",
+          actionName: "imageComprehensionStream",
           content: { imageUrls, text },
         },
       },
