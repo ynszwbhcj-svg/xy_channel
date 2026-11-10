@@ -5,8 +5,14 @@
 // 1) 文本分段边界：分类内工具调用（before_tool_call）与返回（after_tool_call）
 //    时轮换本 turn 的 streamingTextId 并切分流式装配器
 //    （conversation-manager.rotateStreamingTextSegment）：边界前的旧段以
-//    lastChunk=true 收尾帧结束、并攒入 thinkIndex（终态汇总卡统一携带），
-//    边界后的文本帧使用新 id，且新 id 帧不叠加旧段文本。
+//    lastChunk=true 收尾帧结束（思考段收尾前先补一帧 status-update
+//    「已完成深度思考」，pin 思考段 id）、并攒入 thinkIndex（终态汇总卡统一
+//    携带），边界后的文本帧使用新 id，且新 id 帧不叠加旧段文本。
+//    边界无条件拆分 —— 每个独立的思考文本段都是独立的 streamingTextId
+//    （思考段1……工具……思考段2……正文1 路径中，思考段1 与思考段2 分属
+//    不同 id，正文再另换新 id）。思考→正文的类型切换不在本模块：由
+//    reply-dispatcher 在正文段首帧前轮换（思考与正文不共用 id，见
+//    conversation-manager.rotateStreamingTextForBodyStart）。
 //    （原 Common/StepInfo 命令已移除，只保留分段边界本身。）
 //    - displayName 按分类映射（网页搜索/运行命令/文件创建/编辑文件/读取文件/
 //      查找文件/分析图片/生成图片/生成音乐/生成视频/下载文件）
@@ -36,9 +42,11 @@
 // 命令经 formatter.sendCommand 下发，路由与 channel 其它命令一致：
 // 普通对话 WS、cron run push 通道。
 //
-// 正文首帧门控（高版本链路）：本轮正文文本首帧发出后，若再产生工具调用，
-// 其 stepinfo command（技能卡/步骤卡等）直接抑制不下发 —— 命令不允许落在
-// 正文之后（见 utils/body-text-state.ts）；文本分段边界不受影响（只发正文帧）。
+// 正文门控（高版本链路）：本轮正文内容已产生（首帧已发出，或已装配/在队
+// 等待发出）后，若再产生工具调用，其 stepinfo command（技能卡/步骤卡等）
+// 直接抑制不下发 —— 命令不允许落在正文之后（见 utils/body-text-state.ts
+// 与 conversation-manager.isBodyTextProduced）；文本分段边界不受影响
+// （只发正文帧）。
 //
 // 状态更新帧（tool-status-hook 的「正在使用工具：xxx」status-update）不在本模块，
 // 保持不变。
@@ -51,7 +59,10 @@ import { sendExecuteStatusCard } from "../formatter.js";
 import {
   resolveBySessionKey,
   getCachedXYConfig,
+  getCurrentTaskId,
+  getCurrentMessageId,
   rotateStreamingTextSegment,
+  isBodyTextProduced,
 } from "../conversation/conversation-manager.js";
 import {
   getCurrentSessionContext,
@@ -60,7 +71,6 @@ import {
 } from "./session-manager.js";
 import { logger } from "../utils/logger.js";
 import { isLegacyAppVersion } from "../utils/app-version.js";
-import { isBodyTextSent } from "../utils/body-text-state.js";
 import type { XYChannelConfig } from "../types.js";
 
 const LOG_TAG = "[STEP-INFO]";
@@ -267,7 +277,11 @@ function extractInProgressPlanSteps(params: Record<string, unknown> | undefined)
 
 // ── 下发目标解析 ───────────────────────────────────────────────────
 
-/** 解析下发目标会话上下文：主会话 binding → ALS → cron 合成 ctx → 放弃。 */
+/** 解析下发目标会话上下文：主会话 binding → ALS → cron 合成 ctx → 放弃。
+ *  注意：binding 保留的是首条消息的 A2A 身份（subagent 等待态跟踪用），
+ *  卡片下发与分段边界必须落在当前 turn 身份上 —— steer 追问后任务链末尾
+ *  才是当前 taskId/messageId（与 tool-status-hook / reply-dispatcher 一致），
+ *  否则边界轮换、收尾帧与技能卡会挂到已结束的旧任务上。 */
 function resolveSendContext(
   event: { toolCallId?: string },
   ctx: { sessionKey?: string },
@@ -281,8 +295,8 @@ function resolveSendContext(
       return {
         config,
         sessionId: binding.sessionId,
-        taskId: binding.taskId,
-        messageId: binding.messageId,
+        taskId: getCurrentTaskId(binding.sessionId) ?? binding.taskId,
+        messageId: getCurrentMessageId(binding.sessionId) ?? binding.messageId,
       };
     }
   }
@@ -324,9 +338,12 @@ function resolveSendContext(
 
 // ── 命令下发 ───────────────────────────────────────────────────────
 
-/** 文本分段边界：以旧 id 补发旧段完整文本（lastChunk=true 收尾帧）并等队列
- *  排空，再轮换 streamingTextId、切分流式装配器 —— 其后的文本帧使用新 id，
- *  且只携带边界后新段的文本（端侧按 id 聚合流式文本段）。
+/** 文本分段边界：以旧 id 收尾旧段（正文段补 lastChunk=true 收尾帧；未闭合
+ *  思考段先补 status-update「已完成深度思考」、再补 lastChunk=true 收尾帧）
+ *  并等队列排空，再轮换 streamingTextId、切分流式装配器与思考段基线 ——
+ *  其后的文本帧使用新 id，且只携带边界后新段的文本（端侧按 id 聚合流式
+ *  文本段）。边界无条件拆分：每个独立的思考文本段都是独立的
+ *  streamingTextId（见 conversation-manager.rotateStreamingTextSegment）。
  *  内部还会标记 thinkIndex 待下发值（见 utils/think-index）。 */
 async function rotateTextSegmentAtToolBoundary(params: {
   config: XYChannelConfig;
@@ -334,9 +351,9 @@ async function rotateTextSegmentAtToolBoundary(params: {
   taskId: string;
   messageId: string;
 }): Promise<void> {
-  const newStreamingTextId = await rotateStreamingTextSegment(params);
+  const streamingTextId = await rotateStreamingTextSegment(params);
   logger.log(
-    `${LOG_TAG} rotated streamingTextId taskId=${params.taskId} newId=${newStreamingTextId}`,
+    `${LOG_TAG} segment boundary taskId=${params.taskId} streamingTextId=${streamingTextId}`,
   );
 }
 
@@ -355,11 +372,12 @@ export function registerStepInfoHook(api: OpenClawPluginApi): void {
       // 步骤卡，也不做文本分段边界（旧客户端无此能力，按合并前逻辑下发）
       if (isLegacyAppVersion(sendCtx.taskId)) return;
 
-      // 本轮正文首帧已发出：工具 command 不允许落在正文之后（协议规则，
-      // 见 utils/body-text-state.ts）——此后产生的工具调用，其技能卡/步骤卡
-      // 等 stepinfo command 直接抑制不下发；文本分段边界不受影响（它只发
-      // 正文帧，不是 command）。
-      const bodyTextSent = isBodyTextSent(sendCtx.taskId);
+      // 本轮正文内容已产生（首帧已发出，或已装配/在队等待发出）：工具
+      // command 不允许落在正文之后（协议规则，见
+      // conversation-manager.isBodyTextProduced）——此后产生的工具调用，其
+      // 技能卡/步骤卡等 stepinfo command 直接抑制不下发；文本分段边界不受
+      // 影响（它只发正文帧，不是 command）。
+      const bodyTextSent = isBodyTextProduced(sendCtx.sessionId, sendCtx.taskId);
 
       // 1. 技能任务卡片（cd 进技能目录 / 读 SKILL.md）
       const skillAction = detectSkillAction(event);

@@ -116,7 +116,6 @@ export async function deliverLegacySubagentFinalResult(params: {
       messageId: effectiveMessageId,
       text: "任务处理已完成~",
       state: "completed",
-      final: true,
     });
   const sendFinal = () =>
     sendA2AResponse({
@@ -131,20 +130,20 @@ export async function deliverLegacySubagentFinalResult(params: {
   if (session) {
     session.outboundQueue.enqueue({
       taskId: effectiveTaskId,
-      label: "subagent-final",
-      delayMs: terminalFrameDelayMs,
-      send: sendFinal,
-    });
-    session.outboundQueue.enqueue({
-      taskId: effectiveTaskId,
       label: "subagent-terminal-status",
       delayMs: terminalFrameDelayMs,
       send: sendCompletedStatus,
     });
+    session.outboundQueue.enqueue({
+      taskId: effectiveTaskId,
+      label: "subagent-final",
+      delayMs: terminalFrameDelayMs,
+      send: sendFinal,
+    });
     await session.outboundQueue.whenIdle();
   } else {
-    await sendFinal();
     await sendCompletedStatus();
+    await sendFinal();
   }
 
   clearWaitState(state.sessionId, reason ?? "all-subagent-results-delivered", state.taskId);

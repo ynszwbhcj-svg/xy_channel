@@ -7,8 +7,11 @@
 // 经 call_device_tool 调度的端工具取其内层 toolName（与设备侧实际执行的
 // 工具名一致）。
 //
-// 正文首帧门控：本轮正文文本首帧发出后，若再产生工具调用，其状态卡 command
-// 直接抑制不下发 —— 命令不允许落在正文之后（见 utils/body-text-state.ts）。
+// 正文门控：本轮正文内容已产生（首帧已发出，或已装配/在队等待发出）后，
+// 若再产生工具调用，其状态卡 command 直接抑制不下发 —— 命令不允许落在
+// 正文之后（见 utils/body-text-state.ts 与
+// conversation-manager.isBodyTextProduced；判定覆盖在队未发出的正文帧，
+// 规避卡片直发 WS 与正文帧 drain 的竞态）。
 //
 // 仅主会话对话路径生效：sessionKey 未绑定 A2A 身份的（cron/subagent）一律跳过。
 // 钩子体全 try/catch：before_tool_call 抛错会 block 工具执行，
@@ -18,7 +21,7 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { sendExecuteStatusCard } from "./formatter.js";
 import { TOOL_STATUS_CARD_META } from "./tools/step-info-tool.js";
 import { isLegacyAppVersion } from "./utils/app-version.js";
-import { isBodyTextSent } from "./utils/body-text-state.js";
+import { isBodyTextProduced } from "./conversation/conversation-manager.js";
 import { resolveXYConfig } from "./config.js";
 import {
   resolveBySessionKey,
@@ -101,10 +104,11 @@ export function registerToolStatusHook(api: OpenClawPluginApi): void {
       const meta = TOOL_STATUS_CARD_META[toolName];
       if (!meta) return;
 
-      // 本轮正文首帧已发出：工具 command 不允许落在正文之后（协议规则），
-      // 此时产生的工具调用其状态卡直接抑制，不下发
-      if (isBodyTextSent(taskId)) {
-        logger.log(`[TOOL-STATUS] Body text already sent in current segment, suppressing status card for ${toolName}`);
+      // 本轮正文内容已产生（首帧已发出，或已装配/在队等待发出）：工具
+      // command 不允许落在正文之后（协议规则）——此时产生的工具调用其状态卡
+      // 直接抑制，不下发
+      if (isBodyTextProduced(binding.sessionId, taskId)) {
+        logger.log(`[TOOL-STATUS] Body text already produced in current segment, suppressing status card for ${toolName}`);
         return;
       }
 

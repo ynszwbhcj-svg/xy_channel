@@ -23,7 +23,13 @@ import { registerSessionLockGuard } from "./src/session-lock-guard/integration.j
 import type { CronRecoveryResult } from "./src/cron-recovery.js";
 import { syncScheduledTaskOnCronChanged } from "./src/cron-scheduled-tasks-sync.js";
 import { writeCronRunLog } from "./src/utils/cron-run-logger.js";
-import { writeSkillUsage } from "./src/utils/skills-logger.js";
+import {
+  writeSkillUsage,
+  classifySkillMdReadPath,
+  markSkillMdRead,
+  suppressPendingSkillMdRead,
+  flushPendingSkillMdReads,
+} from "./src/utils/skills-logger.js";
 import {
   markSubagentSpawned,
   markSubagentEnded,
@@ -43,14 +49,22 @@ function extractSkillNameFromPathText(text: string): string | null {
 /**
  * Register the skills usage logging hook via before_tool_call.
  *
- * Two detection paths, each hit writes one line to the skills log
- * (no dedup — N uses within one turn produce N lines):
- *  1. Device tool mapping: known device tools (incl. the call_device_tool
+ * Detection paths (no dedup — N uses within one turn produce N lines):
+ *  1. read 工具读技能 md 文件：
+ *     - 顶层 SKILL.md：先记为待打点（markSkillMdRead）。同会话随后「exec/bash
+ *       命中该技能路径（进入技能目录执行脚本等）」或「读取该技能内其它 md
+ *       文件」时丢弃（避免与实际使用打点重复）；否则在 turn 结束
+ *       （agent_end / run lifecycle end / session_end）或 10min TTL 到期时
+ *       落盘一次（「查看技能」）。
+ *     - 技能内除顶层 SKILL.md 外的其它 .md：每次 read 立即打点一次，并丢弃
+ *       同会话同技能待打点的 SKILL.md 记录。
+ *  2. Device tool mapping: known device tools (incl. the call_device_tool
  *     wrapper, resolved via params.toolName) map to their owning skill.
- *  2. exec/bash command inspection: the command references a skill path
+ *  3. exec/bash command inspection: the command references a skill path
  *     (.../skills/<name>/... or .../core_skills/<name>/...). `cd` into a
  *     skill directory is covered by the same path match (the char before
- *     "skills" is always a boundary: space, slash or quote).
+ *     "skills" is always a boundary: space, slash or quote). 命中的同时丢弃
+ *     同会话同技能的 SKILL.md 待打点。
  */
 function registerSkillsDiagnosticHook(api: OpenClawPluginApi) {
   // Skill name → tool names mapping for direct tool-based skill usage logging
@@ -83,27 +97,86 @@ function registerSkillsDiagnosticHook(api: OpenClawPluginApi) {
     return event.toolName;
   }
 
-  // Log skill usage on before_tool_call: device tools via TOOL_SKILL_MAP,
-  // exec/bash via skill path detection in the command.
-  api.on("before_tool_call", async (event, _ctx) => {
+  // Log skill usage on before_tool_call: read 工具技能 md（延迟/立即）、
+  // device tools via TOOL_SKILL_MAP、exec/bash via skill path detection。
+  api.on("before_tool_call", async (event, ctx) => {
     const actualToolName = resolveActualToolName(event);
 
-    // 1. Device tool → owning skill
+    // 1. read 工具读技能 md 文件
+    if (actualToolName === "read") {
+      const classified = classifySkillMdReadPath(event.params?.path);
+      if (classified?.kind === "skillMd") {
+        // 顶层 SKILL.md：延迟打点，等待后续实际使用抑制或 turn 结束落盘
+        markSkillMdRead(ctx.sessionKey ?? "", classified.skillName);
+      } else if (classified?.kind === "otherSkillMd") {
+        // 技能内其它 md：每次 read 立即打点，并抑制同技能 SKILL.md 待打点
+        writeSkillUsage(classified.skillName);
+        suppressPendingSkillMdRead(ctx.sessionKey ?? "", classified.skillName);
+      }
+      return;
+    }
+
+    // 2. Device tool → owning skill
     const mappedSkill = TOOL_SKILL_MAP[actualToolName];
     if (mappedSkill) {
       writeSkillUsage(mappedSkill);
       return;
     }
 
-    // 2. exec/bash command references a skill path (incl. cd into skill dir)
+    // 3. exec/bash command references a skill path (incl. cd into skill dir)
     if (actualToolName === "exec" || actualToolName === "bash") {
       const command = event.params?.command;
       if (typeof command !== "string" || command.length === 0) return;
       const skillName = extractSkillNameFromPathText(command);
       if (skillName) {
         writeSkillUsage(skillName);
+        // 读 SKILL.md 后的实际使用：抑制同会话同技能的 SKILL.md 待打点
+        suppressPendingSkillMdRead(ctx.sessionKey ?? "", skillName);
       }
     }
+  });
+
+  // SKILL.md 待打点的落盘时机：agent_end（仅 dispatch-from-config 路径触发；
+  // cron isolated run 不触发它，故同时订阅 embedded run 的 lifecycle 事件，
+  // phase=end 按 sessionKey flush——两条信号幂等）+ session_end / gateway_stop
+  // 兜底；再久无信号的由 skills-logger 内 10min TTL 兜底。
+  api.on("agent_end", async (_event, ctx) => {
+    try {
+      if (ctx.sessionKey) flushPendingSkillMdReads(ctx.sessionKey);
+    } catch (err) {
+      logger.error("[XY-SKILLS-LOG] agent_end flush failed:", err);
+    }
+  });
+
+  api.on("session_end", async (_event, ctx) => {
+    try {
+      if (ctx.sessionKey) flushPendingSkillMdReads(ctx.sessionKey);
+    } catch (err) {
+      logger.error("[XY-SKILLS-LOG] session_end flush failed:", err);
+    }
+  });
+
+  api.on("gateway_stop", async () => {
+    try {
+      flushPendingSkillMdReads();
+    } catch (err) {
+      logger.error("[XY-SKILLS-LOG] gateway_stop flush failed:", err);
+    }
+  });
+
+  api.agent.events.registerAgentEventSubscription({
+    id: "xy-skills-usage-flush",
+    description: "Flush deferred SKILL.md read usage records on run lifecycle end",
+    streams: ["lifecycle"],
+    handle: (event) => {
+      try {
+        if (event.stream !== "lifecycle" || event?.data?.phase !== "end") return;
+        const sessionKey = event?.sessionKey ?? "";
+        if (sessionKey) flushPendingSkillMdReads(sessionKey);
+      } catch (err) {
+        logger.error("[XY-SKILLS-LOG] lifecycle-end flush failed:", err);
+      }
+    },
   });
 }
 

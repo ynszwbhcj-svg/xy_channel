@@ -2,8 +2,9 @@
 // 纯 A2A 帧构建器：只负责组帧，最后一跳统一走 conversation/outbound-gateway。
 import { v4 as uuidv4 } from "uuid";
 import { sendWsFrame } from "./conversation/outbound-gateway.js";
-import { getOrCreateStreamingTextId, peekStreamingTextId, releaseStreamingTextId } from "./utils/streaming-text-id.js";
+import { getOrCreateStreamingTextId, peekStreamingTextId, peekLastSentStreamingTextId, releaseStreamingTextId } from "./utils/streaming-text-id.js";
 import { isReasoningFinished as readReasoningFinished, releaseReasoningState } from "./utils/reasoning-state.js";
+import { releaseReasoningSegment } from "./utils/reasoning-segment.js";
 import { releaseStatusCardSeq, getCurrentStatusCardSeq, nextStatusCardSeq } from "./utils/status-card-seq.js";
 import { releaseThinkIndex } from "./utils/think-index.js";
 import { isLegacyAppVersion, releaseAppVersion } from "./utils/app-version.js";
@@ -113,8 +114,9 @@ export async function sendA2AResponse(params: SendA2AResponseParams): Promise<vo
   // lastChunk 标识当前流文本块是否结束（结束=true，可开始下一块）：仅正文
   // 终帧（final=true）与分段收尾帧（显式传 true）允许为 true，流式进行中的
   // 中间帧一律 false。streamingTextId 为本轮 turn 文本流的独立标识，
-  // 同一分段内所有文本帧共享；turn 内工具调用/返回边界会轮换新 id
-  // （见 step-info-tool），turn 结束后（final 帧发出）释放，下轮更换新 id。
+  // 同一分段内所有文本帧共享；turn 内工具调用/返回边界（见 step-info-tool）
+  // 与思考→正文切换（见 conversation-manager.rotateStreamingTextForBodyStart）
+  // 会轮换新 id，turn 结束后（final 帧发出）释放，下轮更换新 id。
   const artifact: A2ATaskArtifactUpdateEvent = {
     taskId,
     taskUniqId: taskId,
@@ -187,6 +189,7 @@ export async function sendA2AResponse(params: SendA2AResponseParams): Promise<vo
   if (final) {
     releaseStreamingTextId(taskId);
     releaseReasoningState(taskId);
+    releaseReasoningSegment(taskId);
     releaseStatusCardSeq(taskId);
     releaseThinkIndex(taskId);
     releaseAppVersion(taskId);
@@ -210,8 +213,12 @@ export interface SendReasoningTextUpdateParams {
   /** 显式覆盖 isReasoningFinished（reasoning 结束标记帧传 true）；缺省读 turn 级状态表。 */
   isReasoningFinished?: boolean;
   /** 标识当前流文本块是否结束。思维链流式中间帧一律 false；仅 reasoning
-   *  结束标记帧（onReasoningEnd）传 true。 */
+   *  结束标记帧（onReasoningEnd）与分段边界思考收尾帧
+   *  （rotateStreamingTextSegment）传 true。 */
   lastChunk?: boolean;
+  /** 显式 pin 的 streamingTextId（入队时捕获）：帧归属产生它的文本段，
+   *  不受出站队列 drain 期间分段轮换影响；缺省 drain 时 get-or-create。 */
+  streamingTextId?: string;
 }
 
 /**
@@ -238,7 +245,7 @@ export async function sendReasoningTextUpdate(params: SendReasoningTextUpdatePar
     append,
     lastChunk: params.lastChunk ?? false,
     final: false,
-    streamingTextId: getOrCreateStreamingTextId(taskId),
+    streamingTextId: params.streamingTextId ?? getOrCreateStreamingTextId(taskId),
     isReasoningFinished: params.isReasoningFinished ?? readReasoningFinished(taskId),
     artifact: {
       artifactId: uuidv4(),
@@ -280,10 +287,12 @@ export interface SendStatusUpdateParams {
   messageId: string;
   text: string;
   state: "submitted" | "working" | "input-required" | "completed" | "canceled" | "failed" | "unknown";
-  final?: boolean;
-  streamingTextId?: string;
   /** 打印完整 A2A 帧 JSON（默认 false，只打文案摘要）。保活帧开启以核查 streamingTextId 等字段。 */
   logFullFrame?: boolean;
+  /** 显式 pin 的 streamingTextId（入队时捕获）：帧归属产生它的文本段（如思考段
+   *  结束状态帧 pin 思考段 id），不受出站队列 drain 期间分段轮换影响；缺省
+   *  drain 时 peek 在役 id。 */
+  streamingTextId?: string;
 }
 
 /**
@@ -291,7 +300,7 @@ export interface SendStatusUpdateParams {
  * Follows A2A protocol standard format with nested status object.
  */
 export async function sendStatusUpdate(params: SendStatusUpdateParams): Promise<void> {
-  const { config, sessionId, taskId, messageId, text, state, final = false } = params;
+  const { config, sessionId, taskId, messageId, text, state } = params;
 
   const log = logger.withContext(sessionId, taskId);
 
@@ -311,14 +320,15 @@ export async function sendStatusUpdate(params: SendStatusUpdateParams): Promise<
   });
 
   // 携带本 turn 当前在役的 streamingTextId（peek 只读，不创建——终帧释放后
-  // 晚到的状态帧不得重建出孤儿 id；无在役流时省略该字段）
+  // 晚到的状态帧不得重建出孤儿 id；无在役流时省略该字段）。调用方显式 pin
+  // 时优先使用 pin 值（思考段结束状态帧归属思考段 id，不受 drain 期间轮换影响）。
   const currentStreamingTextId = params.streamingTextId ?? peekStreamingTextId(taskId);
 
   const statusUpdate: A2ATaskStatusUpdateEvent = {
     taskId,
     kind: "status-update",
     isNew: !isLegacyAppVersion(taskId),
-    final,
+    final: false, // Status updates should not end the stream
     ...(currentStreamingTextId ? { streamingTextId: currentStreamingTextId } : {}),
     status: {
       message: statusMessage,
@@ -438,6 +448,12 @@ export async function sendCommand(params: SendCommandParams): Promise<void> {
   // Wrap command in commands array as per protocol requirement
   // lastChunk 恒 false（命令帧不携带文本，不是文本块终点）
   // 命令内容逐条做传输层脱敏（MemoryFileRead 成功响应按合同还原原文）
+  // streamingTextId：command 不允许引入端侧从未见过的新 id —— 跟随本 turn
+  // 最后实际发出帧的 id（sendWsFrame 逐帧登记）。分段边界轮换后、新段首帧
+  // 未发的窗口期，在役注册表已是新 id 但端侧最后收到的仍是旧 id 收尾帧；
+  // 终帧释放后 get-or-create 会造出孤儿 id —— 两种情形都必须取 last-sent。
+  // 仅 turn 起始尚无已发帧（bot.ts 起始卡）时退化 get-or-create：该 id 即
+  // 本 turn id 起点，随后首个文本帧复用之。
   const transportCommands = commands.map(redactCommandForTransport);
   const artifact: A2ATaskArtifactUpdateEvent = {
     taskId,
@@ -448,7 +464,7 @@ export async function sendCommand(params: SendCommandParams): Promise<void> {
     append: false,
     lastChunk: params.lastChunk ?? false,
     final: params.final ?? false,
-    streamingTextId: getOrCreateStreamingTextId(taskId),
+    streamingTextId: peekLastSentStreamingTextId(taskId) ?? getOrCreateStreamingTextId(taskId),
     isReasoningFinished: readReasoningFinished(taskId),
     artifact: {
       artifactId: uuidv4(),
@@ -719,6 +735,12 @@ export interface ReferenceDataItem {
  * Follows the same pattern as sendCard: builds a data part with the
  * "reference" key containing ReferenceDataObject items, wraps in JSON-RPC,
  * and sends via WebSocket.
+ *
+ * streamingTextId 跟随本 turn 最后一个正文帧（与 command 帧同一 last-sent
+ * 规则）：引用帧在最后一个正文之后下发（高版本链路经 utils/pending-references
+ * 攒批、收尾序列统一 flush），其 id 必须与端侧最后收到的正文帧一致 ——
+ * 取最后实际发出帧的 id；仅当本 turn 尚无已发帧（异常早发）时退化
+ * get-or-create。
  */
 export async function sendReference(params: SendReferenceParams): Promise<void> {
   const { config, sessionId, taskId, messageId, toolCallId } = params;
@@ -757,6 +779,7 @@ export async function sendReference(params: SendReferenceParams): Promise<void> 
   };
 
   // Build artifact update with reference as data
+  // streamingTextId：跟随最后一个正文帧的 id（last-sent 规则，见上文 docstring）
   const artifact: A2ATaskArtifactUpdateEvent = {
     taskId,
     taskUniqId: taskId,
@@ -766,7 +789,7 @@ export async function sendReference(params: SendReferenceParams): Promise<void> 
     append: false,
     lastChunk: params.lastChunk ?? false,
     final: params.final ?? false,
-    streamingTextId: getOrCreateStreamingTextId(taskId),
+    streamingTextId: peekLastSentStreamingTextId(taskId) ?? getOrCreateStreamingTextId(taskId),
     isReasoningFinished: readReasoningFinished(taskId),
     artifact: {
       artifactId: uuidv4(),
@@ -929,6 +952,7 @@ export async function sendTriggerResponse(params: SendTriggerResponseParams): Pr
   // Trigger 帧 final=true：与 sendA2AResponse 终帧同样释放本 turn 的状态
   releaseStreamingTextId(taskId);
   releaseReasoningState(taskId);
+  releaseReasoningSegment(taskId);
   releaseStatusCardSeq(taskId);
   releaseThinkIndex(taskId);
   releaseAppVersion(taskId);

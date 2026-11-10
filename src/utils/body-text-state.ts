@@ -6,6 +6,10 @@
 // 收到 command）。
 //   - 正文文本帧实际发送时置位（formatter.sendA2AResponse 携带非空 text
 //     part 时调用 markBodyTextSent —— 在 drain 发送前一刻置位，帧在队不置位）；
+//   - 卡片抑制门控不直接读本标记，而是读 conversation-manager
+//     .isBodyTextProduced（本标记 ∨ 装配器有内容）—— 覆盖"在队未发出"的
+//     正文帧，规避卡片直发 WS 与正文帧 drain 的竞态（卡片越过在队正文帧
+//     落在其后）；
 //   - 文本分段轮换（rotateStreamingTextSegment，工具调用边界）时复位 ——
 //     新段/新一轮模型回复重新允许命令先于正文；
 //   - turn 结束（final 帧发出）或会话销毁时释放。
