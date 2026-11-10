@@ -1,4 +1,4 @@
-// 低版本（app_ver < 11.7.9.301）链路的保活与 subagent 终态交付。
+// 低版本（app_ver < 11.7.9.310）链路的保活与 subagent 终态交付。
 //
 // 本模块是 e6a3aa1（合并前 0730 版本）conversation-manager 中对应函数的
 // 原样拷贝，仅供 legacy 链路（legacy/reply-dispatcher.ts）使用；
