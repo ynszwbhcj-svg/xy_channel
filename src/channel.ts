@@ -6,6 +6,7 @@ import { xyConfigSchema } from "./config-schema.js";
 import { xyOutbound } from "./dispatch/outbound.js";
 import { xyOnboardingAdapter } from "./onboarding.js";
 import { filterToolsByDevice } from "./tools/device-tool-map.js";
+import { filterToolsByAppVersion } from "./tools/tool-visibility.js";
 import { getCurrentSessionContext } from "./tools/session-manager.js";
 import { logger } from "./utils/logger.js";
 
@@ -34,6 +35,7 @@ import { displayA2UICardByPathTool } from "./tools/display-a2ui-card-bypath-tool
 import { checkPluginPrivilegeTool } from "./tools/check-plugin-privilege-tool.js";
 import { invokeTool } from "./tools/invoke.js";
 import { xiaoyiAppendReferenceTool } from "./tools/xiaoyi-append-reference.js";
+import { askUserTool } from "./tools/ask-user-tool.js";
 
 const ALL_TOOLS: any[] = [
   locationTool,
@@ -60,6 +62,7 @@ const ALL_TOOLS: any[] = [
   discoverCrossDevicesTool,
   sendCrossDeviceTaskTool,
   checkPluginPrivilegeTool,
+  askUserTool,
 ];
 
 /**
@@ -110,8 +113,10 @@ export const xyPlugin: ChannelPlugin = {
   /** Static tool list (3.24 pattern). Tools read SessionContext at execute time via ALS. */
   agentTools: () => {
     const ctx = getCurrentSessionContext();
-    const filtered = filterToolsByDevice(ALL_TOOLS, ctx?.deviceType);
-    logger.log(`[DEVICE-FILTER] deviceType=${ctx?.deviceType ?? "(none)"}, tools: ${ALL_TOOLS.length} → ${filtered.length} (${filtered.map(t => t.name).join(", ")})`);
+    const deviceFiltered = filterToolsByDevice(ALL_TOOLS, ctx?.deviceType);
+    const filtered = filterToolsByAppVersion(deviceFiltered, ctx?.appVer);
+    logger.log(`[DEVICE-FILTER] deviceType=${ctx?.deviceType ?? "(none)"}, tools: ${ALL_TOOLS.length} → ${deviceFiltered.length}`);
+    logger.log(`[APP-VERSION-FILTER] appVer=${ctx?.appVer ?? "(none)"}, tools: ${deviceFiltered.length} → ${filtered.length} (${filtered.map(t => t.name).join(", ")})`);
     return filtered;
   },
 

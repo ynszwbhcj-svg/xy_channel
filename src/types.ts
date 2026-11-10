@@ -106,6 +106,18 @@ export interface A2ADataEvent {
   status: "success" | "failed";
 }
 
+/** AgentEvent.InvokeRsp 中 ask_user 卡片的用户反馈。 */
+export interface AskUserResponse {
+  user_cancel?: boolean;
+  responder_device_id?: string;
+  ask_user_id: string;
+  answers?: Array<{
+    question_id: string;
+    selected_options?: string[];
+    custom_text?: string | null;
+  }>;
+}
+
 export interface CrossDeviceTaskResultEvent {
   sessionId: string;
   code: string;

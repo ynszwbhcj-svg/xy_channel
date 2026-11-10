@@ -59,6 +59,109 @@ function resolveXiaoyiRuntimePath(): string {
   return XIAOYIRUNTIME_PATH_FALLBACK;
 }
 
+/** 网关单帧上限 65536 B，给信封 / hostname 留 3.5 KB。 */
+const MAX_WS_FRAME_BYTES = 62_000;
+
+/** 信封常量：jsonrpc/artifact/taskId/streamingTextId/hostname 等不含 content 的固定开销上限。 */
+const FRAME_ENVELOPE_BYTES = 2_000;
+
+function utf8ByteLength(value: string): number {
+  return Buffer.byteLength(value, "utf8");
+}
+
+/**
+ * ans 落到 ws.send 时的真实字节数（不含信封常量）。
+ * content 会被转义两层：formatter.sendCommand 把 commands 序列化成 msgDetail 字符串，
+ * 再由 websocket.ts 把 outboundMessage 序列化一次。所以必须量 stringify 两次的结果，
+ * 只量一次会低估引号 / 反斜杠 / 换行等字符的膨胀。
+ */
+function frameAnsBytes(ans: any): number {
+  return utf8ByteLength(JSON.stringify(JSON.stringify(ans)));
+}
+
+/**
+ * MemoryFileRead 的 content 可能远超单帧上限。按 offset 裁成一页，带
+ * total/offset/limit/hasMore/nextOffset 供调用方续拉；contentBytes 同步改为本页
+ * 字节数（端侧会校验 contentBytes === byteLength(content)）。整份能一帧发完时
+ * 原样返回，既有字段与行为完全不变。
+ */
+function paginateFileReadAns(ans: any, params: any): any {
+  if (!ans || ans.ok !== true || typeof ans.content !== "string") return ans;
+
+  const body = params?.body ?? params ?? {};
+  const offset = Number.isFinite(body.offset) ? Math.max(0, Math.trunc(body.offset)) : 0;
+  const budget = MAX_WS_FRAME_BYTES - FRAME_ENVELOPE_BYTES;
+  if (offset === 0 && frameAnsBytes(ans) <= budget) return ans;
+
+  const full: string = ans.content;
+  const total = full.length;
+  const start = Math.min(offset, total);
+  // 用「最长形态」度量，避免低估：hasMore=true、nextOffset 取最大值。
+  const candidate = (n: number): any => {
+    const page = full.slice(start, start + n);
+    return {
+      ...ans,
+      content: page,
+      contentBytes: utf8ByteLength(page),
+      total,
+      offset: start,
+      limit: n,
+      hasMore: true,
+      nextOffset: total,
+    };
+  };
+
+  let lo = 0;
+  let hi = total - start;
+  while (lo < hi) {
+    const mid = Math.ceil((lo + hi) / 2);
+    if (frameAnsBytes(candidate(mid)) <= budget) lo = mid;
+    else hi = mid - 1;
+  }
+  if (lo === 0) {
+    // offset 已越界：正常返回空页并结束续拉。
+    if (start >= total) {
+      return {
+        ...ans,
+        content: "",
+        contentBytes: 0,
+        total,
+        offset: start,
+        limit: 0,
+        hasMore: false,
+        nextOffset: null,
+      };
+    }
+    // 单字符都放不下时不能发空页（端侧会写成空文件且续拉会死循环）。
+    return {
+      ok: false,
+      errorCode: "IO_ERROR",
+      message: "MemoryFileRead content exceeds WS frame limit",
+    };
+  }
+
+  let end = start + lo;
+  // 不把 high surrogate 留在页尾。
+  if (end > start && end < total && /[\uD800-\uDBFF]$/.test(full.slice(start, end))) end -= 1;
+
+  const page = full.slice(start, end);
+  const hasMore = end < total;
+  logger.warn(
+    `[MEMORY-QUERY] MemoryFileRead ans paged: totalChars=${total}, pageChars=${page.length}, ` +
+      `offset=${start}, hasMore=${hasMore}`,
+  );
+  return {
+    ...ans,
+    content: page,
+    contentBytes: utf8ByteLength(page),
+    total,
+    offset: start,
+    limit: page.length,
+    hasMore,
+    nextOffset: hasMore ? end : null,
+  };
+}
+
 export async function handleMemoryQueryEvent(context: any, cfg: any): Promise<any> {
   const { action, params, sessionId, taskId, messageId } = context;
   const log = logger.withContext(sessionId ?? "", taskId ?? "");
@@ -111,6 +214,7 @@ export async function handleMemoryQueryEvent(context: any, cfg: any): Promise<an
   if (cfg && sessionId && taskId && messageId) {
     try {
       const config = resolveXYConfig(cfg);
+      const ans = paginateFileReadAns(result, params);
       const command = {
         header: {
           namespace: "AgentEvent",
@@ -118,7 +222,7 @@ export async function handleMemoryQueryEvent(context: any, cfg: any): Promise<an
         },
         payload: {
           action,
-          ans: result,
+          ans,
         },
       };
       await sendCommand({
@@ -129,7 +233,7 @@ export async function handleMemoryQueryEvent(context: any, cfg: any): Promise<an
         command,
         final: true,
       });
-      log.log(`[MEMORY-QUERY] Sent response via sendCommand, action=${action}`);
+      log.log(`[MEMORY-QUERY] Sent response via sendCommand, action=${action}, frameBytes=${frameAnsBytes(ans) + FRAME_ENVELOPE_BYTES}`);
     } catch (sendErr) {
       log.error(`[MEMORY-QUERY] Failed to send response via sendCommand:`, sendErr);
     }
