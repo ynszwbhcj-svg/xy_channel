@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   resolveActiveEmbeddedRunSessionId: vi.fn(),
   sendStatusUpdate: vi.fn(),
   sendA2AResponse: vi.fn(),
+  sendTasksCancelResponse: vi.fn(),
   log: vi.fn(),
   warn: vi.fn(),
   error: vi.fn(),
@@ -83,7 +84,7 @@ vi.mock("../src/config.js", () => ({
 vi.mock("../src/formatter.js", () => ({
   sendStatusUpdate: mocks.sendStatusUpdate,
   sendClearContextResponse: vi.fn(),
-  sendTasksCancelResponse: vi.fn(),
+  sendTasksCancelResponse: mocks.sendTasksCancelResponse,
   sendA2AResponse: mocks.sendA2AResponse,
 }));
 
@@ -149,6 +150,7 @@ describe("bot steer fallback sequencing", () => {
     mocks.resolveActiveEmbeddedRunSessionId.mockReturnValue(undefined);
     mocks.sendStatusUpdate.mockResolvedValue(undefined);
     mocks.sendA2AResponse.mockResolvedValue(undefined);
+    mocks.sendTasksCancelResponse.mockResolvedValue(undefined);
     mocks.createXYReplyDispatcher.mockReturnValue({
       dispatcher: {},
       replyOptions: {},
@@ -195,7 +197,7 @@ describe("bot steer fallback sequencing", () => {
     }));
   });
 
-  it("direct success neither waits nor starts a replacement dispatch", async () => {
+  it("direct success closes the previous device task without a replacement dispatch", async () => {
     mocks.tryDirectSteer.mockReturnValue({ ok: true, mode: "direct" });
     const waitForPreviousTurn = vi.fn();
 
@@ -207,6 +209,19 @@ describe("bot steer fallback sequencing", () => {
       waitForPreviousTurn,
     });
 
+    expect(mocks.sendA2AResponse).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: "session-steer",
+      taskId: "task-old",
+      messageId: "message-old",
+      text: "",
+      append: true,
+      final: true,
+    }));
+    expect(mocks.sendTasksCancelResponse).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: "session-steer",
+      taskId: "task-old",
+      messageId: "message-old",
+    }));
     expect(waitForPreviousTurn).not.toHaveBeenCalled();
     expect(mocks.dispatchReplyFromConfig).not.toHaveBeenCalled();
     expect(getCurrentTaskId("session-steer")).toBe("task-new");

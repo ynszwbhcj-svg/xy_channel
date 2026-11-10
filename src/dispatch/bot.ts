@@ -45,6 +45,7 @@ import {
   getCurrentDispatchTaskId,
   cacheXYConfig,
   getCurrentTaskId,
+  getCurrentMessageId,
   clearWaitState,
   getOrCreateSession,
 } from "../conversation/conversation-manager.js";
@@ -496,6 +497,8 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
     // 直接注入失败时，先等旧 dispatch 收尾，再落回普通 tasks/send 派发：
     // 活跃 run 已关闭或正在退出时，避免新旧 turn 并发争用 session 写锁。
     if (isUpdate && route.sessionKey) {
+      const previousTaskId = getCurrentTaskId(parsed.sessionId);
+      const previousMessageId = getCurrentMessageId(parsed.sessionId);
       const steerResult = tryDirectSteer({
         sessionId: parsed.sessionId,
         sessionKey: route.sessionKey,
@@ -503,6 +506,28 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
         source: "user",
       });
       if (steerResult.ok) {
+        if (previousTaskId && previousMessageId) {
+          // 只通知端侧关闭旧任务，不取消内部 run，避免影响 steer 后的回复。
+          try {
+            await sendA2AResponse({
+              config,
+              sessionId: parsed.sessionId,
+              taskId: previousTaskId,
+              messageId: previousMessageId,
+              text: "",
+              append: true,
+              final: true,
+            });
+            await sendTasksCancelResponse({
+              config,
+              sessionId: parsed.sessionId,
+              taskId: previousTaskId,
+              messageId: previousMessageId,
+            });
+          } catch (err) {
+            log.error(`[BOT-STEER] Failed to close previous device task:`, err);
+          }
+        }
         registerTask(parsed.sessionId, parsed.taskId, parsed.messageId);
         log.log(`[BOT-STEER] Direct steer succeeded — message injected into active run`);
         // Steer message taskId stays in the binding so getActiveTaskId()
