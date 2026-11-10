@@ -1,0 +1,137 @@
+小艺 Work 云沙箱 Channel modelInput 联调说明
+
+代码基线：openclaw6.6_0730 / b8177cb
+范围：整体方案第 7 点，按每条 A2A 请求的 modelInput 选择原生图片或原有识图工具。
+
+1. 端侧/云侧协议
+
+位置：params.message.parts[].data.variables.clientVariables.modelInput
+类型：原生 JSON 字符串数组，与 modelName 放在同一个 clientVariables 对象中。
+modelName 使用模型列表中的 modelValue，保持现有模型选择协议。
+
+示例（请替换模型名和可供沙箱下载的图片 URL）：
+{
+  "jsonrpc": "2.0",
+  "method": "tasks/send",
+  "id": "integration-message-001",
+  "params": {
+    "id": "integration-conversation-001&interaction-001",
+    "sessionId": "integration-conversation-001",
+    "message": {
+      "role": "user",
+      "parts": [
+        { "kind": "text", "text": "请描述图片里的内容" },
+        {
+          "kind": "file",
+          "file": {
+            "name": "picture.png",
+            "mimeType": "image/png",
+            "uri": "https://YOUR-FILE-SERVICE/picture.png?SIGNED-PARAMETERS"
+          }
+        },
+        {
+          "kind": "data",
+          "data": {
+            "variables": {
+              "clientVariables": {
+                "modelName": "YOUR-MULTIMODAL-MODEL-VALUE",
+                "modelInput": ["text", "image"]
+              },
+              "systemVariables": {
+                "device_type": "web",
+                "app_ver": "11.7.9.301"
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}
+
+规则：
+- 合法字符串数组包含精确的 "image"：本轮支持原生图片。
+- 缺失、null、字符串形式的数组、非法数组、[]、["text"]：本轮文本模式。
+- 不从模型白名单、全局配置或上一条消息继承图片能力。
+- 原有 modelName 缺省的模型选择行为保留；端侧应每轮同时发送当前 modelName/modelInput。
+- 多个 data part 的模型声明采用首个声明对象，禁止跨对象拼接名称与能力。
+- audio/video 等其他能力不在本次改造范围。
+
+2. Channel 预期行为
+
+原生模式：附件下载 -> 检测真实图片 MIME -> OpenClaw 图片校验/缩放 ->
+replyOptions.images + imageOrder -> 当前模型 HTTP 请求中的 image_url/data URL。
+本轮工具列表不暴露 image_reading，避免重复识图。
+本轮局部配置关闭 OpenClaw 通用前置图片理解，防止静态模型目录与动态能力不同导致重复识图。
+Media* 保留原图引用，使用框架标准附件注释去重。
+
+文本/旧客户端模式：保留现有 image_reading 工具链，由模型通过工具获取图片描述。
+这不是新增的确定性前置 OCR，不保证首次主模型调用之前已经完成图片理解。
+
+执行中追加原生图片或改变模型/能力：按同一 A2A conversation 串行进入完整新一轮执行。
+后续文本不越过已排队的图片/模型切换消息；相同模型和能力的普通文本可继续原 steer。
+完整图片/模型轮次在更新模型前严格检查 SDK 活跃 run 是否退出；30 秒仍未释放或检查失败时，
+明确拒绝本次请求，不继续派发。强制新轮次同时使用本轮 followup 队列配置防止 SDK 再次文本 steer。
+WebSocket 外层 session 与 A2A conversation 不同的场景，以 A2A conversation 隔离能力/队列。
+取消请求保持即时处理；monitor 停止后不再启动待处理消息。
+
+图片失败：任意本次图片下载/校验失败，当前消息下发 failed/final 错误，不无图猜答。
+原有运行中的其他 task 不因本次图片失败被清理。
+单图限制跟随安装的 OpenClaw MAX_IMAGE_BYTES（本地 2026.6.6 为 6 MiB）。
+使用 SDK 图片处理器完整解码校验，拒绝只剩文件头的截断图片；校验预览不替换原图。
+部署环境需具备该 OpenClaw 图片处理器；处理器不可用时返回明确环境错误。
+未机械沿用旧识图工具的 10 张限制；模型网关的多图数/总包大小限制需联调确认。
+
+3. 模型网关联调
+
+- 当前 SDK 的 OpenAI-compatible 原生图片输出示例：
+  {"type":"image_url","image_url":{"url":"data:image/png;base64,..."}}
+- 核对第 9 点链路是否接受 data URL、目标模型是否真实支持 image，以及多图/尺寸/总包限制。
+- 图片必须出现在最终 HTTP body 中；仅日志显示 input=image 或 MediaPaths 非空不能算通过。
+- Kimi_K3 请求上下文含当前/历史图片时，禁用未经确认图片能力的 MiniMax-M3 降级。
+  纯文本请求保留既有降级；网络/模型错误保留既有重试策略。
+- 本地验证使用真实 OpenClaw SDK 序列化和模拟 HTTP 传输，不等同于线上网关联调通过。
+
+4. 明日建议执行的联调顺序
+
+1) Web/手机/PC各抽一端，确认沙箱收到原生数组而不是字符串。
+2) 支持图片模型：单图、两图对比、纯图片消息；模型能回答细节且未调 image_reading。
+3) 文本模型 + ["text"]：识图工具链正常，主模型请求不含 image_url。
+4) 删除 modelInput 重试：旧客户端兼容成立；不能沿用上一轮图片能力。
+5) 同 conversation 多模 -> 文本 -> 多模：名称和能力始终一致。
+6) 流式处理中追加图，再发文本：顺序正确、图不丢失、final 正常、无会话写锁竞争。
+7) 两 conversation 并发使用不同能力（含同一 WebSocket 外层 session）：相互隔离。
+8) 图片 URL 失效、坏图和超限图：明确失败；下一条正常消息仍可执行。
+9) 新/旧 App 回复协议、取消和 clearContext 回归。
+
+5. 观测与外部依赖
+
+Channel 日志可搜索：
+- [MODEL-INPUT] source / input；原生图片 expected / loaded
+- [MODEL-INPUT-FILTER] nativeImages / 最终工具名称
+- [BOT-STEER] 完整新一轮等待/重派发
+
+部署侧需要检查 xiaoyi-image-understanding Skill：原生图片已提供时不再强制调用 image_reading。
+该 Skill 正文未包含在本仓库，需由部署环境核对。
+
+长对话压缩目前只总结文本；压缩后的原图细节追问需要单独验收，不宣称已实现视觉摘要。
+文本模型追问历史图片仍依赖原图引用和 image_reading；临时文件清理后需重新上传。
+
+6. 本地验证命令
+
+npm test
+npm run build
+git diff --check
+
+2026-11-09 本地结果：32 个测试文件、254 项测试全部通过；构建及差异检查通过。
+验证运行时：OpenClaw 2026.6.6；Node.js 24.18.0。
+
+新增测试覆盖：协议严格校验、声明原子性、工具过滤、真实 ALS 并发隔离、静态/动态模型能力、
+真实 SDK 图片加载与去重、真实 SDK HTTP 序列化、坏图/超限下载、steer/排队/切模型、
+失败请求不污染旧能力、相同 transport 下 conversation 隔离、monitor停止后的队列保护。
+
+回退方式：端侧暂不传 modelInput，或传 ["text"]，该次请求即恢复原工具路径。
+无需修改全局模型目录或模型白名单。
+
+本次同时修复全量回归发现的基线日志问题：MemoryFileRead 原文保持发送，日志仅记元数据。
+联调包沿用仓库当前 package.json 版本号，部署时请以包文件及校验值区分本次内容。
