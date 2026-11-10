@@ -36,6 +36,12 @@ function extractCommands(payload: Record<string, any>): A2ACommand[] {
     .flatMap((p: any) => p.data.commands);
 }
 
+function isMemoryFileReadCommand(command: A2ACommand): boolean {
+  return command?.header?.namespace === "AgentEvent"
+    && command?.header?.name === "MemoryQuery"
+    && command?.payload?.action === "MemoryFileRead";
+}
+
 /**
  * 将混合携带 reasoningText 与 text 的 artifact-update 帧拆分为两帧
  * （reasoning 帧在前、正文帧在后，保持原有相对时序）；非混合帧原样返回
@@ -90,15 +96,30 @@ export async function sendWsFrame(params: SendWsFrameParams): Promise<void> {
       taskId,
       msgDetail: JSON.stringify({ ...frame, hostname: os.hostname() }),
     };
-    // 完整出站 A2A 日志：每一帧都打印信封摘要 + msgDetail 全量 + 内嵌 command
-    // 单独打印（内容字段已在组帧时脱敏，日志不会额外泄露敏感信息）
+    // MemoryFileRead 为保证端侧文件完整性会保留原文，只能记录元数据。
+    // 其他出站帧沿用完整日志，日志策略不改变实际发送内容。
     log.log(
       `[A2A-OUT] msgType=${outboundMessage.msgType}, agentId=${outboundMessage.agentId}, sessionId=${sessionId}, taskId=${taskId}, size=${outboundMessage.msgDetail.length}`,
     );
-    log.log(`[A2A-OUT] msgDetail=${outboundMessage.msgDetail}`);
     const commands = extractCommands(frame);
-    if (commands.length > 0) {
-      log.log(`[A2A-OUT] commands=${JSON.stringify(commands)}`);
+    if (commands.some(isMemoryFileReadCommand)) {
+      log.log(`[A2A-OUT] msgDetail omitted for MemoryFileRead response`);
+      for (const command of commands) {
+        if (isMemoryFileReadCommand(command)) {
+          const answer = command.payload?.ans;
+          const contentBytes = typeof answer?.contentBytes === "number" && Number.isFinite(answer.contentBytes)
+            ? answer.contentBytes
+            : typeof answer?.content === "string" ? Buffer.byteLength(answer.content, "utf8") : 0;
+          log.log(`[A2A-OUT] action=MemoryFileRead, ok=${answer?.ok === true}, contentBytes=${contentBytes}`);
+        } else {
+          log.log(`[A2A-OUT] command=${JSON.stringify(command)}`);
+        }
+      }
+    } else {
+      log.log(`[A2A-OUT] msgDetail=${outboundMessage.msgDetail}`);
+      if (commands.length > 0) {
+        log.log(`[A2A-OUT] commands=${JSON.stringify(commands)}`);
+      }
     }
     await wsManager.sendMessage(sessionId, outboundMessage);
   }
