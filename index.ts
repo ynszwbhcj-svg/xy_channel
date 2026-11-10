@@ -19,6 +19,7 @@ import { registerCLIHook } from "./src/tools/hmos-cli.js";
 import { registerToolStatusHook } from "./src/tool-status-hook.js";
 import { registerStepInfoHook } from "./src/tools/step-info-tool.js";
 import { recoverCronState } from "./src/cron-recovery.js";
+import { registerSessionLockGuard } from "./src/session-lock-guard/integration.js";
 import type { CronRecoveryResult } from "./src/cron-recovery.js";
 import { syncScheduledTaskOnCronChanged } from "./src/cron-scheduled-tasks-sync.js";
 import { writeCronRunLog } from "./src/utils/cron-run-logger.js";
@@ -660,6 +661,10 @@ function registerFullHooks(api: OpenClawPluginApi) {
     return beforePromptBuildHandler(event, ctx);
   });
   registerSelfEvolutionToolResultNudge(api);
+
+  // SESSION LOCK GUARD: 旁路订阅 lifecycle 错误事件，识别会话写锁泄漏并借
+  // supervisord 重启 gateway。不进入 dispatch 主链路，不影响任何响应帧。
+  registerSessionLockGuard(api);
 }
 
 const plugin: OpenClawPluginDefinition = definePluginEntry({
