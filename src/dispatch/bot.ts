@@ -14,7 +14,7 @@ import { sendStatusUpdate as legacySendStatusUpdate } from "../legacy/formatter.
 import { parseA2AMessage, extractTextFromParts, extractFileParts, extractPushId, extractDeviceType, extractAppVer, extractSdkApiVersion, extractModelName, extractTriggerData, extractRunCrossTaskContext, isClearContextMessage, isTasksCancelMessage } from "../parser.js";
 import { downloadFilesFromParts } from "../file-download.js";
 import { resolveXYConfig } from "../config.js";
-import { sendClearContextResponse, sendTasksCancelResponse, sendA2AResponse, sendDisplayTaskCardData } from "../formatter.js";
+import { sendStatusUpdate, sendClearContextResponse, sendTasksCancelResponse, sendA2AResponse, sendDisplayTaskCardData } from "../formatter.js";
 import {
   appendSelfEvolutionKeywordNudge,
   shouldNudgeForSelfEvolutionKeyword,
