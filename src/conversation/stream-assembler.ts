@@ -13,7 +13,7 @@
 //   - 分段边界切分：工具调用边界、streamingTextId 轮换时 cutSegment()
 //     清空已装配内容，后续全量帧只携带边界后新段的文本（禁止新 id 叠加
 //     旧 id 段内容下发）。
-//   - 低版本链路（app_ver < 11.7.9.301，accumulateModelSegments=false）：
+//   - 低版本链路（app_ver < 11.7.9.310，accumulateModelSegments=false）：
 //     模型不同轮产生的回复文本不累加 —— 跨调用边界处直接丢弃上一轮文本
 //     （历史装配文本在下一轮发送前清空），全量帧/终帧只携带当前轮文本。
 //   - 本类是纯逻辑，不做任何发送；发送由调用方经 outbound-queue 完成。

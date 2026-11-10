@@ -390,7 +390,7 @@ describe("rotateStreamingTextForBodyStart reasoning→body switch", () => {
 
   it("keeps the id on the legacy app version link", async () => {
     getOrCreateSession(sessionId);
-    markAppVersion(taskId, "11.7.8.100"); // 低版本链路（< 11.7.9.301）
+    markAppVersion(taskId, "11.7.8.100"); // 低版本链路（< 11.7.9.310）
     const id = getOrCreateStreamingTextId(taskId);
     noteReasoningSnapshot(taskId, "思考内容");
 

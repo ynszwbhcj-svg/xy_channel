@@ -7,7 +7,7 @@ import {
 const tools = [{ name: "create_note" }, { name: "ask_user" }];
 
 describe("app-version tool visibility", () => {
-  it.each(["11.7.9.301", "11.7.9.302", "11.7.10.0", "12.0.0.0"])(
+  it.each(["11.7.9.310", "11.7.9.311", "11.7.10.0", "12.0.0.0"])(
     "exposes ask_user at or above the stepinfo threshold: %s",
     (appVer) => {
       expect(isToolVisibleForAppVersion("ask_user", appVer)).toBe(true);
@@ -18,7 +18,7 @@ describe("app-version tool visibility", () => {
     },
   );
 
-  it.each(["10.0.0.0", "11.7.8.357", "11.7.9.300"])(
+  it.each(["10.0.0.0", "11.7.8.357", "11.7.9.300", "11.7.9.301", "11.7.9.309"])(
     "hides ask_user below the stepinfo threshold: %s",
     (appVer) => {
       expect(filterToolsByAppVersion(tools, appVer).map((tool) => tool.name)).toEqual([
