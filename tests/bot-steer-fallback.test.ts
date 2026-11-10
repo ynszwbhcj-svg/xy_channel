@@ -195,7 +195,7 @@ describe("bot steer fallback sequencing", () => {
     }));
   });
 
-  it("direct success neither waits nor starts a replacement dispatch", async () => {
+  it("direct success closes the previous device task without a replacement dispatch", async () => {
     mocks.tryDirectSteer.mockReturnValue({ ok: true, mode: "direct" });
     const waitForPreviousTurn = vi.fn();
 
@@ -207,6 +207,14 @@ describe("bot steer fallback sequencing", () => {
       waitForPreviousTurn,
     });
 
+    expect(mocks.sendStatusUpdate).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: "session-steer",
+      taskId: "task-old",
+      messageId: "message-old",
+      text: "",
+      state: "canceled",
+      final: true,
+    }));
     expect(waitForPreviousTurn).not.toHaveBeenCalled();
     expect(mocks.dispatchReplyFromConfig).not.toHaveBeenCalled();
     expect(getCurrentTaskId("session-steer")).toBe("task-new");

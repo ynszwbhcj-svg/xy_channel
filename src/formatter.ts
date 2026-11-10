@@ -287,6 +287,7 @@ export interface SendStatusUpdateParams {
   messageId: string;
   text: string;
   state: "submitted" | "working" | "input-required" | "completed" | "canceled" | "failed" | "unknown";
+  final?: boolean;
   /** 打印完整 A2A 帧 JSON（默认 false，只打文案摘要）。保活帧开启以核查 streamingTextId 等字段。 */
   logFullFrame?: boolean;
   /** 显式 pin 的 streamingTextId（入队时捕获）：帧归属产生它的文本段（如思考段
@@ -300,7 +301,7 @@ export interface SendStatusUpdateParams {
  * Follows A2A protocol standard format with nested status object.
  */
 export async function sendStatusUpdate(params: SendStatusUpdateParams): Promise<void> {
-  const { config, sessionId, taskId, messageId, text, state } = params;
+  const { config, sessionId, taskId, messageId, text, state, final = false } = params;
 
   const log = logger.withContext(sessionId, taskId);
 
@@ -328,7 +329,7 @@ export async function sendStatusUpdate(params: SendStatusUpdateParams): Promise<
     taskId,
     kind: "status-update",
     isNew: !isLegacyAppVersion(taskId),
-    final: false, // Status updates should not end the stream
+    final,
     ...(currentStreamingTextId ? { streamingTextId: currentStreamingTextId } : {}),
     status: {
       message: statusMessage,
