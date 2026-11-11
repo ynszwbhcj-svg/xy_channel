@@ -5,7 +5,7 @@ type ChannelOutboundAdapter = any;
 import { resolveXYConfig } from "../config.js";
 import { XYFileUploadService } from "../file-upload.js";
 import { sendWsFrame, pushBroadcast } from "../conversation/outbound-gateway.js";
-import { gateCronSendText, closeCronTurn } from "../conversation/cron-buffer.js";
+import { gateCronSendText, closeCronTurn, isCronAnnounceTarget } from "../conversation/cron-buffer.js";
 import { getCurrentSessionContext } from "../tools/session-manager.js";
 import {
   getWaitState,
@@ -135,10 +135,11 @@ export const xyOutbound: ChannelOutboundAdapter = {
     // 各轮 assistant/message 工具文本去重合并，保存并推送唯一一条完整内容。
     // announce 时 meta 是 gate 同步快照的 cron 元数据（jobId/title），
     // 随 push 下发供客户端识别来源；其余路径 meta 为 null。
-    // announceLike（无显式 target：to 为空或 DEFAULT_PUSH_MARKER）用于并发
-    // 场景下把 announce 与中间消息粗路由到正确的 job turn —— sendText 层
-    // 拿不到 jobId/runId。
-    const announceLike = !to || to === DEFAULT_PUSH_MARKER;
+    // announceLike 判定收口到 isCronAnnounceTarget：空 target、"default"、
+    // "00000000" 等占位符在 cron run 结束后（存在 agentEnded turn）都视为
+    // announce，走合并推送；含 "::" 的真实对话 target 不命中；run 期间的
+    // 同占位 target 仍走 swallow 缓冲。
+    const announceLike = isCronAnnounceTarget(to);
     const { gate: cronGate, meta: cronMeta, text: cronMergedText } = gateCronSendText(
       text as string,
       announceLike,
