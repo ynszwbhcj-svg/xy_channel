@@ -57,6 +57,33 @@ export interface HandleXYMessageParams {
   waitForPreviousTurn?: () => Promise<void>;
 }
 
+const PREVIOUS_TURN_SETTLE_TIMEOUT_MS = 70_000;
+
+async function waitForPreviousTurnWithTimeoutWarning(
+  waitForPreviousTurn: (() => Promise<void>) | undefined,
+  onTimeout: () => void,
+): Promise<void> {
+  if (!waitForPreviousTurn) {
+    return;
+  }
+  let timeout: NodeJS.Timeout | undefined;
+  try {
+    await Promise.race([
+      waitForPreviousTurn(),
+      new Promise<void>((resolve) => {
+        timeout = setTimeout(() => {
+          onTimeout();
+          resolve();
+        }, PREVIOUS_TURN_SETTLE_TIMEOUT_MS);
+      }),
+    ]);
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
+}
+
 /**
  * Handle an incoming A2A message.
  * This is the main entry point for message processing.
@@ -427,7 +454,9 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
       log.log(`[BOT-STEER] Direct steer failed (${steerFailReason}), waiting for previous turn before re-dispatch`);
       // 队列关闭或 run 已消失时，旧 dispatch 仍可能持有 session 写锁。
       // 等它完成收尾再开新 turn，避免并发写锁竞争和 60s 超时。
-      await params.waitForPreviousTurn?.();
+      await waitForPreviousTurnWithTimeoutWarning(params.waitForPreviousTurn, () => {
+        log.error(`[BOT-STEER] Previous turn did not settle within ${PREVIOUS_TURN_SETTLE_TIMEOUT_MS}ms; proceeding with fallback dispatch`);
+      });
       registerTask(parsed.sessionId, parsed.taskId, parsed.messageId);
       log.log(`[BOT-STEER] Previous turn settled, re-dispatching as a new turn`);
 
