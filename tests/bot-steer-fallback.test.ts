@@ -195,6 +195,39 @@ describe("bot steer fallback sequencing", () => {
     }));
   });
 
+  it("logs a timeout error and dispatches after waiting 70 seconds", async () => {
+    vi.useFakeTimers();
+    try {
+      mocks.tryDirectSteer.mockReturnValue({ ok: false, reason: "queue-rejected" });
+
+      const promise = handleXYMessage({
+        cfg: {},
+        runtime: { error: mocks.error },
+        message,
+        accountId: "default",
+        waitForPreviousTurn: () => new Promise<void>(() => {}),
+      });
+      await vi.advanceTimersByTimeAsync(69_999);
+
+      expect(mocks.error).not.toHaveBeenCalledWith(
+        expect.stringContaining("Previous turn did not settle"),
+      );
+      expect(mocks.createXYReplyDispatcher).not.toHaveBeenCalled();
+      expect(getCurrentTaskId("session-steer")).toBe("task-old");
+
+      await vi.advanceTimersByTimeAsync(1);
+      await promise;
+
+      expect(mocks.error).toHaveBeenCalledWith(
+        "[BOT-STEER] Previous turn did not settle within 70000ms; proceeding with fallback dispatch",
+      );
+      expect(mocks.dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+      expect(getCurrentTaskId("session-steer")).toBe("task-new");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("direct success closes the previous device task without a replacement dispatch", async () => {
     mocks.tryDirectSteer.mockReturnValue({ ok: true, mode: "direct" });
     const waitForPreviousTurn = vi.fn();
