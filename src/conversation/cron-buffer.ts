@@ -308,6 +308,29 @@ export interface CronGateResult {
 }
 
 /**
+ * 判断 sendText 的 to 是否为 cron announce 占位目标。
+ *
+ * 背景：openclaw cron announce 的 to 由任务 delivery 配置决定，可能是空串、
+ * "default"（DEFAULT_PUSH_MARKER）或 "00000000" 等占位符，并不统一。真实对话
+ * 的 message 工具 target 经 resolveTarget 增强后必为 "sessionId::taskId" 格式，
+ * 含 "::"。
+ *
+ * 路由规则：
+ *   - to 为空：必为 announce；
+ *   - to 含 "::"：必为真实对话 target，不是 announce；
+ *   - 其余占位符（"default"/"00000000"/...）：仅当 registry 中存在 agentEnded
+ *     的 cron turn 时才视为 announce —— run 结束后 openclaw 只会发一条
+ *     announce sendText；run 期间的同 target sendText 仍是中间消息，应走
+ *     swallow 分支。普通对话 registry 无 cron turn，此判定自然返回 false，
+ *     行为与改动前一致。
+ */
+export function isCronAnnounceTarget(to: string | undefined): boolean {
+  if (!to) return true;
+  if (to.includes("::")) return false;
+  return Array.from(getTurnRegistry().values()).some((t) => t.agentEnded);
+}
+
+/**
  * sendText 闸门。sendText 层拿不到 jobId/runId，只能凭 announceLike
  * （to 是否为 DEFAULT_PUSH_MARKER，即是否有显式 target）做粗路由：
  * - announceLike（无 target）：run 结束后的 announce 最终结果，路由到处于

@@ -28,6 +28,7 @@ import {
   captureCronAssistantText,
   closeCronTurn,
   gateCronSendText,
+  isCronAnnounceTarget,
   notifyCronAgentEnd,
   notifyCronDetected,
 } from "../src/conversation/cron-buffer.js";
@@ -153,5 +154,57 @@ describe("cron assistant text aggregation", () => {
       cronJobId: jobId,
       cronTitle: `title-${jobId}`,
     }));
+  });
+});
+
+describe("isCronAnnounceTarget", () => {
+  beforeEach(() => {
+    mocks.savePushData.mockResolvedValue("push-data-id");
+    mocks.pushBroadcast.mockResolvedValue(undefined);
+  });
+
+  afterEach(() => {
+    for (const jobId of jobIds) closeCronTurn(jobId, "test-cleanup");
+    jobIds.clear();
+    vi.useRealTimers();
+    vi.clearAllMocks();
+  });
+
+  it("returns true for empty target", () => {
+    expect(isCronAnnounceTarget(undefined)).toBe(true);
+    expect(isCronAnnounceTarget("")).toBe(true);
+  });
+
+  it("returns false for real conversation target with ::", () => {
+    expect(isCronAnnounceTarget("sessionId::taskId")).toBe(false);
+  });
+
+  it("returns false for placeholder target when no cron turn exists", () => {
+    expect(isCronAnnounceTarget("default")).toBe(false);
+    expect(isCronAnnounceTarget("00000000")).toBe(false);
+  });
+
+  it("returns false for placeholder target when cron turn is still active", () => {
+    const jobId = "job-active-turn";
+    openCronTurn(jobId);
+    // agentEnded = false（run 还在跑）
+    expect(isCronAnnounceTarget("00000000")).toBe(false);
+    expect(isCronAnnounceTarget("default")).toBe(false);
+  });
+
+  it("returns true for placeholder target when cron turn has ended", () => {
+    const jobId = "job-ended-turn";
+    openCronTurn(jobId);
+    notifyCronAgentEnd(jobId);
+    // agentEnded = true（run 已结束）
+    expect(isCronAnnounceTarget("00000000")).toBe(true);
+    expect(isCronAnnounceTarget("default")).toBe(true);
+  });
+
+  it("returns false for real conversation target even with ended cron turn", () => {
+    const jobId = "job-ended-with-real-target";
+    openCronTurn(jobId);
+    notifyCronAgentEnd(jobId);
+    expect(isCronAnnounceTarget("sessionId::taskId")).toBe(false);
   });
 });
