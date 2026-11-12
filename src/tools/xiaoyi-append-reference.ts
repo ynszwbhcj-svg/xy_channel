@@ -1,8 +1,15 @@
 // Xiaoyi Append Reference tool implementation
 // Sends citation/reference data for display on the client device
 // following the Huawei Xiaoyi A2A ReferenceDataObject specification.
+//
+// 下发时机（高版本链路）：工具调用点不立即下发，攒入 utils/pending-references
+// 注册表，由 turn 收尾序列在【最后一个正文帧之后】统一 flush，streamingTextId
+// 跟随最后一帧正文的 id（sendReference 内 last-sent 规则）。低版本链路无分段
+// 能力、终帧即正文（final=true 后服务端可能关闭本 turn），保持调用点直发。
 import { sendReference } from "../formatter.js";
 import { getCurrentSessionContext } from "./session-manager.js";
+import { appendPendingReferences } from "../utils/pending-references.js";
+import { isLegacyAppVersion } from "../utils/app-version.js";
 import { logger } from "../utils/logger.js";
 
 export const xiaoyiAppendReferenceTool = {
@@ -88,16 +95,38 @@ export const xiaoyiAppendReferenceTool = {
       imageUrl: ref.imageUrl || undefined,
     }));
 
-    logger.log(`[XIAOYI-APPEND-REFERENCE] Sending ${referenceItems.length} reference items`);
+    // 低版本链路：终帧（final=true）携带正文全文，其后再发引用帧可能因服务端
+    // 关闭本 turn 而丢失 —— 保持工具调用点直发（旧行为不变）。
+    if (isLegacyAppVersion(taskId)) {
+      logger.log(`[XIAOYI-APPEND-REFERENCE] Legacy link, sending ${referenceItems.length} reference items immediately`);
+      await sendReference({
+        config,
+        sessionId,
+        taskId,
+        messageId,
+        toolCallId,
+        references: referenceItems,
+      });
 
-    await sendReference({
-      config,
-      sessionId,
-      taskId,
-      messageId,
-      toolCallId,
-      references: referenceItems,
-    });
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              success: true,
+              count: referenceItems.length,
+              message: `成功发送 ${referenceItems.length} 条引用来源`,
+            }),
+          },
+        ],
+      };
+    }
+
+    // 高版本链路：攒批延迟下发 —— 引用帧必须在最后一个正文之后、且
+    // streamingTextId 跟随最后一帧正文的 id（调用点在役 id 尚未轮换到正文段，
+    // 直发会拿到思考段 id 且抢在正文之前）。由 turn 收尾序列统一 flush。
+    appendPendingReferences(taskId, referenceItems);
+    logger.log(`[XIAOYI-APPEND-REFERENCE] Queued ${referenceItems.length} reference items for post-body flush, taskId=${taskId}`);
 
     return {
       content: [
@@ -106,7 +135,7 @@ export const xiaoyiAppendReferenceTool = {
           text: JSON.stringify({
             success: true,
             count: referenceItems.length,
-            message: `成功发送 ${referenceItems.length} 条引用来源`,
+            message: `已记录 ${referenceItems.length} 条引用来源，将在回复正文完成后统一展示`,
           }),
         },
       ],

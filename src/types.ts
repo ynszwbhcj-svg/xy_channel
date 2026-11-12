@@ -23,6 +23,12 @@ export interface XYChannelConfig {
    * 显式配置为空数组可禁用该行为。
    */
   pinnedSessionIds: string[];
+  /** Base delay in ms for reconnect backoff (default 1000) */
+  reconnectBaseMs?: number;
+  /** Max reconnect delay cap in ms (default 30000) */
+  reconnectMaxMs?: number;
+  /** First reconnect attempt is uniformly spread over [0, this] ms to dilute mass-reconnect storms (default 3000) */
+  reconnectFirstMaxMs?: number;
 }
 
 // ============================================================================
@@ -71,11 +77,13 @@ export type A2AMessagePart = A2ATextPart | A2AFilePart | A2ADataPart;
 
 export interface A2ATextPart {
   kind: "text";
+  /** A2A 链路下发内容标识，值恒为 true（与 kind 同级）。 */
   text: string;
 }
 
 export interface A2AFilePart {
   kind: "file";
+  /** A2A 链路下发内容标识，值恒为 true（与 kind 同级）。 */
   file: {
     name: string;
     mimeType: string;
@@ -85,6 +93,7 @@ export interface A2AFilePart {
 
 export interface A2ADataPart {
   kind: "data";
+  /** A2A 链路下发内容标识，值恒为 true（与 kind 同级）。 */
   data: {
     event?: A2ADataEvent;
     [key: string]: any;
@@ -128,9 +137,30 @@ export interface SentFileCard {
 
 export interface A2ATaskArtifactUpdateEvent {
   taskId: string;
+  /** 任务统一标识，取 taskId 同值（A2A 链路统一下发字段）。 */
+  taskUniqId: string;
+  /**
+   * 当前时刻最后进入出栈队列的工具状态卡（DisplayExecuteStatusCard）的序号，
+   * 端侧据此把这段流式文本显示在序号一致的卡片下方；本 turn 未发过卡片时为 1
+   * （对话轮起始卡 index=1）。
+   */
+  taskUniqIndexId: number;
   kind: "artifact-update";
+  /** A2A 链路下发内容标识（与 kind 同级）。App 版本低于 11.7.9.310 时置 false。 */
+  isNew: boolean;
   append: boolean;
+  /**
+   * 标识一段流式文本是否结束：模型本轮 turn 的文本输出完成时为 true，
+   * 流式进行中的中间帧为 false。
+   */
   lastChunk: boolean;
+  /** 本轮 turn 文本流的独立标识（uuidv4），turn 内所有文本帧共享，turn 结束后更换。 */
+  streamingTextId?: string;
+  /**
+   * 当前 turn 的 reasoning 内容是否已结束，默认 false；
+   * reasoning 结束（onReasoningEnd）后置 true，turn 内新一轮 reasoning 流开始时复位。
+   */
+  isReasoningFinished: boolean;
   final: boolean;
   artifact: A2AArtifact;
 }
@@ -142,6 +172,7 @@ export interface A2AArtifact {
 
 export interface A2AReasoningTextPart {
   kind: "reasoningText";
+  /** A2A 链路下发内容标识，值恒为 true（与 kind 同级）。 */
   reasoningText: string;
 }
 
@@ -149,6 +180,7 @@ export type A2AArtifactPart = A2ATextPart | A2ADataPart | A2ACommandPart | A2ARe
 
 export interface A2ACommandPart {
   kind: "command";
+  /** A2A 链路下发内容标识，值恒为 true（与 kind 同级）。 */
   command: A2ACommand;
 }
 
@@ -163,12 +195,17 @@ export interface A2ACommand {
 export interface A2ATaskStatusUpdateEvent {
   taskId: string;
   kind: "status-update";
+  /** A2A 链路下发内容标识（与 kind 同级）。App 版本低于 11.7.9.310 时置 false。 */
+  isNew: boolean;
   final: boolean;
+  /** 本轮 turn 当前文本流的 streamingTextId（与 reasoning/正文帧同源同值）。 */
+  streamingTextId?: string;
   status: {
     message: {
       role: "agent";
       parts: Array<{
         kind: "text";
+        /** A2A 链路下发内容标识，值恒为 true（与 kind 同级）。 */
         text: string;
       }>;
     };

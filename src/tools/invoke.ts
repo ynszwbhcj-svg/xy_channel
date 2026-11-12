@@ -676,7 +676,7 @@ const UNIFIED_API_SUFFIX = "/plugin-executor-service-ws/v1/skill-action-executor
 const DEFAULT_TIMEOUT_MS = 300_000;
 const REQUIRED_ENV_VARS = ["SERVICE_URL", "PERSONAL-API-KEY", "PERSONAL-UID"];
 
-interface CloudConfig { serviceUrl: string; apiKey: string; uid: string }
+export interface CloudConfig { serviceUrl: string; apiKey: string; uid: string }
 
 function readEnvFile(): Record<string, string> {
   if (!fs.existsSync(ENV_FILE_PATH)) {
@@ -699,7 +699,7 @@ function readEnvFile(): Record<string, string> {
   return env;
 }
 
-function loadCloudConfig(): CloudConfig {
+export function loadCloudConfig(): CloudConfig {
   const env = readEnvFile();
   if (!env["SERVICE_URL"]) throw new InvokeError("CONFIG_MISSING", "SERVICE_URL is not set in .xiaoyienv");
   if (!env["PERSONAL-API-KEY"]) throw new InvokeError("CONFIG_MISSING", "PERSONAL-API-KEY is not set in .xiaoyienv");

@@ -51,12 +51,14 @@ const { clientId, skillName } = params;
 
 
     // (1) Build and send getLoginToken artifact
+    // lastChunk=false：本帧是 getLoginToken 请求（非文本块终点）
     const artifactId = uuidv4();
     const artifact = {
       taskId,
       kind: "artifact-update",
+      isNew: true,
       append: false,
-      lastChunk: true,
+      lastChunk: false,
       final: false,
       artifact: {
         artifactId,

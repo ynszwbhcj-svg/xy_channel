@@ -357,7 +357,7 @@ export async function monitorXYProvider(opts: MonitorXYOpts = {}): Promise<void>
         const activeBindings = listActiveTaskBindings();
         if (activeBindings.length > 0) {
           const config = resolveXYConfig(cfg);
-          const notificationText = "Gateway即将重启，重启期间可能短暂出现\u201c环境异常\u201d提示，请稍候并耐心重试~";
+          const notificationText = "Gateway即将重启，重启期间可能短暂出现\u201c环境异常\u201d提示，请稍候并耐心重试";
 
           logger.log(`[MONITOR] Sending restart notifications to ${activeBindings.length} active session(s)`);
           const sendPromises = activeBindings.map(binding =>

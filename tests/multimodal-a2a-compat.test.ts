@@ -73,7 +73,8 @@ describe("native image failures through upstream A2A formatters", () => {
     expect(getCurrentTaskId(sessionId)).toBe("old-task");
     expect(getOrCreateSession(sessionId).state).toBe("waiting-subagent");
     const envelopes = mocks.sendMessage.mock.calls.map(([, envelope]) => envelope);
-    expect(envelopes.length).toBeGreaterThanOrEqual(3);
+    // 高版本起始卡在入站准入后才发送；附件下载失败只返回失败状态和 final。
+    expect(envelopes.length).toBeGreaterThanOrEqual(2);
     expect(envelopes.every((envelope) => envelope.taskId === taskId && envelope.sessionId === sessionId)).toBe(true);
     const results = envelopes.map((envelope) => JSON.parse(envelope.msgDetail).result);
     expect(results.filter((result) => result.final)).toHaveLength(1);

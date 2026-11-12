@@ -28,10 +28,10 @@ import { getAlarmToolSchemaTool } from "./tools/get-alarm-tool-schema.js";
 import { getCollectionToolSchemaTool } from "./tools/get-collection-tool-schema.js";
 import { loginTokenTool } from "./tools/login-token-tool.js";
 import { agentAsSkillTool } from "./tools/agent-as-skill-tool.js";
-// import { discoverCrossDevicesTool } from "./tools/discover-cross-devices-tool.js";
-// import { sendCrossDeviceTaskTool } from "./tools/send-cross-device-task-tool.js";
+import { discoverCrossDevicesTool } from "./tools/discover-cross-devices-tool.js";
+import { sendCrossDeviceTaskTool } from "./tools/send-cross-device-task-tool.js";
 import { displayA2UICardByPathTool } from "./tools/display-a2ui-card-bypath-tool.js";
-// import { checkPluginPrivilegeTool } from "./tools/check-plugin-privilege-tool.js";
+import { checkPluginPrivilegeTool } from "./tools/check-plugin-privilege-tool.js";
 import { invokeTool } from "./tools/invoke.js";
 import { xiaoyiAppendReferenceTool } from "./tools/xiaoyi-append-reference.js";
 
@@ -57,6 +57,9 @@ const ALL_TOOLS: any[] = [
   agentAsSkillTool,
   invokeTool,
   xiaoyiAppendReferenceTool,
+  discoverCrossDevicesTool,
+  sendCrossDeviceTaskTool,
+  checkPluginPrivilegeTool,
 ];
 
 /**

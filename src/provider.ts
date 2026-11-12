@@ -438,7 +438,7 @@ function createRetryingStream(
 
 /**
  * Notify the user that Kimi_K3 failed and we are switching to MiniMax-M3.
- * Uses the same A2A status-update channel as the "任务正在处理中，请稍候~"
+ * Uses the same A2A status-update channel as the "任务正在处理中，请稍候"
  * heartbeat. No-op when there is no live session context (e.g. cron runs,
  * which do not go through ALS).
  */

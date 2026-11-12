@@ -55,6 +55,8 @@ export const displayA2UICardByPathTool = {
     const assembler = session?.assembler;
     if (session && assembler) {
       const fullText = assembler.injectArtifact(cardDSLContent);
+      // 帧文本 drain 时惰性读取装配器（与 reply-dispatcher partial 帧同理）：
+      // 在队期间发生分段边界（工具调用边界切分）时不会叠加携带旧 id 段文本。
       session.outboundQueue.enqueue({
         taskId,
         label: "a2ui-card",
@@ -65,7 +67,7 @@ export const displayA2UICardByPathTool = {
             sessionId,
             taskId,
             messageId,
-            text: fullText,
+            text: assembler.getFullText(),
             append: false,
             final: false,
           }),

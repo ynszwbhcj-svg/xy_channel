@@ -10,6 +10,7 @@ import { getXYWebSocketManager } from "../transport/client.js";
 import { XYPushService } from "../transport/push.js";
 import { getAllPushIds } from "../utils/pushid-manager.js";
 import { getOrCreateConvId } from "../utils/cron-conv-map.js";
+import { recordSentStreamingTextId } from "../utils/streaming-text-id.js";
 import { logger } from "../utils/logger.js";
 import type {
   XYChannelConfig,
@@ -43,6 +44,43 @@ function isMemoryFileReadCommand(command: A2ACommand): boolean {
 }
 
 /**
+ * 将混合携带 reasoningText 与 text 的 artifact-update 帧拆分为两帧
+ * （reasoning 帧在前、正文帧在后，保持原有相对时序）；非混合帧原样返回
+ * （单元素数组）。
+ *
+ * 协议约束：reasoningText 与正文 text 禁止同帧携带。当前上游组帧
+ * （formatter.sendA2AResponse / sendReasoningTextUpdate）天然分离两类 part，
+ * 本拆分是物理收口点的防御性兜底，命中说明上游出现了回归。
+ */
+function splitMixedReasoningFrames(payload: Record<string, any>): Array<Record<string, any>> {
+  const result = payload?.result;
+  const parts = result?.artifact?.parts;
+  if (!Array.isArray(parts) || parts.length < 2) return [payload];
+  const hasReasoning = parts.some((p: any) => p?.kind === "reasoningText");
+  const hasText = parts.some((p: any) => p?.kind === "text");
+  if (!hasReasoning || !hasText) return [payload];
+
+  logger.warn(`[A2A-OUT] Mixed reasoningText+text frame detected, splitting into separate frames`);
+  const reasoningParts = parts.filter((p: any) => p?.kind === "reasoningText");
+  const otherParts = parts.filter((p: any) => p?.kind !== "reasoningText");
+  const reasoningFrame = {
+    ...payload,
+    result: {
+      ...result,
+      // reasoning 帧后面还跟着正文帧，不再是末帧
+      lastChunk: false,
+      final: false,
+      artifact: { ...result.artifact, parts: reasoningParts },
+    },
+  };
+  const textFrame = {
+    ...payload,
+    result: { ...result, artifact: { ...result.artifact, parts: otherParts } },
+  };
+  return [reasoningFrame, textFrame];
+}
+
+/**
  * 发送一帧 A2A agent_response 到 xy server。
  * 统一封装 OutboundWebSocketMessage 信封（msgType/agentId/hostname）。
  */
@@ -50,39 +88,48 @@ export async function sendWsFrame(params: SendWsFrameParams): Promise<void> {
   const { config, sessionId, taskId, payload } = params;
   const wsManager = getXYWebSocketManager(config);
   const log = logger.withContext(sessionId, taskId);
-  const outboundMessage: OutboundWebSocketMessage = {
-    msgType: "agent_response",
-    agentId: config.agentId,
-    sessionId,
-    taskId,
-    msgDetail: JSON.stringify({ ...payload, hostname: os.hostname() }),
-  };
-  // MemoryFileRead 为保证端侧文件完整性会保留原文，只能记录元数据。
-  // 其他出站帧沿用完整日志，日志策略不改变实际发送内容。
-  log.log(
-    `[A2A-OUT] msgType=${outboundMessage.msgType}, agentId=${outboundMessage.agentId}, sessionId=${sessionId}, taskId=${taskId}, size=${outboundMessage.msgDetail.length}`,
-  );
-  const commands = extractCommands(payload);
-  if (commands.some(isMemoryFileReadCommand)) {
-    log.log(`[A2A-OUT] msgDetail omitted for MemoryFileRead response`);
-    for (const command of commands) {
-      if (isMemoryFileReadCommand(command)) {
-        const answer = command.payload?.ans;
-        const contentBytes = typeof answer?.contentBytes === "number" && Number.isFinite(answer.contentBytes)
-          ? answer.contentBytes
-          : typeof answer?.content === "string" ? Buffer.byteLength(answer.content, "utf8") : 0;
-        log.log(`[A2A-OUT] action=MemoryFileRead, ok=${answer?.ok === true}, contentBytes=${contentBytes}`);
-      } else {
-        log.log(`[A2A-OUT] command=${JSON.stringify(command)}`);
+  for (const frame of splitMixedReasoningFrames(payload)) {
+    const outboundMessage: OutboundWebSocketMessage = {
+      msgType: "agent_response",
+      agentId: config.agentId,
+      sessionId,
+      taskId,
+      msgDetail: JSON.stringify({ ...frame, hostname: os.hostname() }),
+    };
+    // MemoryFileRead 为保证端侧文件完整性会保留原文，只能记录元数据。
+    // 其他出站帧沿用完整日志，日志策略不改变实际发送内容。
+    log.log(
+      `[A2A-OUT] msgType=${outboundMessage.msgType}, agentId=${outboundMessage.agentId}, sessionId=${sessionId}, taskId=${taskId}, size=${outboundMessage.msgDetail.length}`,
+    );
+    const commands = extractCommands(frame);
+    if (commands.some(isMemoryFileReadCommand)) {
+      log.log(`[A2A-OUT] msgDetail omitted for MemoryFileRead response`);
+      for (const command of commands) {
+        if (isMemoryFileReadCommand(command)) {
+          const answer = command.payload?.ans;
+          const contentBytes = typeof answer?.contentBytes === "number" && Number.isFinite(answer.contentBytes)
+            ? answer.contentBytes
+            : typeof answer?.content === "string" ? Buffer.byteLength(answer.content, "utf8") : 0;
+          log.log(`[A2A-OUT] action=MemoryFileRead, ok=${answer?.ok === true}, contentBytes=${contentBytes}`);
+        } else {
+          log.log(`[A2A-OUT] command=${JSON.stringify(command)}`);
+        }
+      }
+    } else {
+      log.log(`[A2A-OUT] msgDetail=${outboundMessage.msgDetail}`);
+      if (commands.length > 0) {
+        log.log(`[A2A-OUT] commands=${JSON.stringify(commands)}`);
       }
     }
-  } else {
-    log.log(`[A2A-OUT] msgDetail=${outboundMessage.msgDetail}`);
-    if (commands.length > 0) {
-      log.log(`[A2A-OUT] commands=${JSON.stringify(commands)}`);
+    await wsManager.sendMessage(sessionId, outboundMessage);
+    // 帧已实际上送：登记"最后一帧 artifact-update 的 streamingTextId"。
+    // command 帧据此对齐端侧最后收到的 id（不允许引入新 id，见
+    // utils/streaming-text-id）。status-update 旁路帧不参与登记。
+    const result = frame?.result;
+    if (result?.kind === "artifact-update" && typeof result.streamingTextId === "string") {
+      recordSentStreamingTextId(taskId, result.streamingTextId);
     }
   }
-  await wsManager.sendMessage(sessionId, outboundMessage);
 }
 
 // ─── HTTP push 发送 ───────────────────────────────────────────
@@ -197,5 +244,6 @@ export async function pushCommand(params: PushCommandParams): Promise<void> {
   }
 
   const pushService = new XYPushService(config);
+  logger.log(`[A2A-OUT] push command, pushId=${pushId.substring(0, 20)}..., command=${JSON.stringify(command)}`);
   await pushService.sendPushWithDirectives(pushId, randomUUID(), [command]);
 }

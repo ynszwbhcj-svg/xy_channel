@@ -283,6 +283,7 @@ b. 操作超时时间为2分钟（120秒），请勿重复调用此工具，如�
           id: messageId,
           result: {
             kind: "artifact-update",
+            isNew: true,
             append: true,
             lastChunk: false,
             final: false,

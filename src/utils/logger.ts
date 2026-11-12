@@ -15,6 +15,8 @@ const MAX_FILE_BYTES = 10 * 1024 * 1024;
 // 全部日志文件总量上限 100MB：超过后按 mtime 从最旧的文件开始删
 // （正在写入的当天文件不删；Linux 下 unlink 一个打开中的文件会让日志静默丢失）
 const MAX_TOTAL_BYTES = 100 * 1024 * 1024;
+// A2A-OUT 出站帧日志单独成文件（全量 msgDetail 量大，与主日志隔离）
+const A2A_LOG_PREFIX = "A2A-OUT";
 
 // ── UTC+8 helpers ──
 function formatDateUTC8(d: Date): string {
@@ -45,6 +47,10 @@ function getLogFilePath(dateStr?: string): string {
   return join(LOG_DIR, `${LOG_PREFIX}-${dateStr ?? getTodayDateStr()}.log`);
 }
 
+function getA2ALogFilePath(dateStr?: string): string {
+  return join(LOG_DIR, `${A2A_LOG_PREFIX}-${dateStr ?? getTodayDateStr()}.log`);
+}
+
 // ── Ensure log directory ──
 try {
   mkdirSync(LOG_DIR, { recursive: true });
@@ -57,9 +63,9 @@ function cleanupOldLogs(): void {
   try {
     const files = readdirSync(LOG_DIR);
     const cutoffStr = getCutoffDateStr();
-    const dateRe = new RegExp(`^${LOG_PREFIX}-(\\d{8})`);
+    const dateRe = new RegExp(`^(?:${LOG_PREFIX}|${A2A_LOG_PREFIX})-(\\d{8})`);
     for (const f of files) {
-      if (!f.startsWith(LOG_PREFIX) || !f.endsWith(".log")) continue;
+      if (!(f.startsWith(LOG_PREFIX) || f.startsWith(A2A_LOG_PREFIX)) || !f.endsWith(".log")) continue;
       const m = dateRe.exec(f);
       if (!m) continue;
       if (m[1] < cutoffStr) {
@@ -73,14 +79,15 @@ function cleanupOldLogs(): void {
 }
 
 // ── Enforce total size cap ──
-// 所有 xiaoyi-channel-*.log 加起来超过 MAX_TOTAL_BYTES 时，按 mtime 从最旧的
-// 文件开始删，直到回到上限以内。正在写入的当天文件永不删除（否则会静默丢日志）。
+// 所有 xiaoyi-channel-*.log / A2A-OUT-*.log 加起来超过 MAX_TOTAL_BYTES 时，
+// 按 mtime 从最旧的文件开始删，直到回到上限以内。正在写入的当天文件永不删除
+// （否则会静默丢日志）。
 function enforceTotalCap(): void {
   try {
-    const activePath = getLogFilePath(currentDate);
+    const activePaths = new Set([getLogFilePath(currentDate), getA2ALogFilePath(currentDate)]);
     const files: { fp: string; size: number; mtimeMs: number }[] = [];
     for (const f of readdirSync(LOG_DIR)) {
-      if (!f.startsWith(LOG_PREFIX) || !f.endsWith(".log")) continue;
+      if (!(f.startsWith(LOG_PREFIX) || f.startsWith(A2A_LOG_PREFIX)) || !f.endsWith(".log")) continue;
       const fp = join(LOG_DIR, f);
       try {
         const st = statSync(fp);
@@ -92,7 +99,7 @@ function enforceTotalCap(): void {
     files.sort((a, b) => a.mtimeMs - b.mtimeMs);
     for (const f of files) {
       if (total <= MAX_TOTAL_BYTES) break;
-      if (f.fp === activePath) continue;
+      if (activePaths.has(f.fp)) continue;
       try {
         unlinkSync(f.fp);
         total -= f.size;
@@ -137,12 +144,16 @@ function rotateForSize(): void {
   enforceTotalCap();
 }
 
+// A2A-OUT 独立文件目的地（按日轮转；纳入 cleanupOldLogs / enforceTotalCap 治理）
+const a2aDest = pino.destination({ dest: getA2ALogFilePath(currentDate), sync: false, mkdir: true });
+
 // ── Rotation check ──
 function checkRotation(): void {
   const today = getTodayDateStr();
   if (today !== currentDate) {
     currentDate = today;
     dest.reopen(getLogFilePath(today));
+    a2aDest.reopen(getA2ALogFilePath(today));
     currentFileBytes = 0;
     cleanupOldLogs();
     return;
@@ -185,6 +196,12 @@ function writeLog(level: string, message: string, args: any[], explicitSid?: str
   const timestamp = formatTimestampUTC8();
   const msg = args.length ? formatMessage(message, args) : message;
   const line = `|${level}|${timestamp}|${sessionId}|${taskId}|${msg}\n`;
+  // [A2A-OUT] 标签的日志单独路由到 A2A-OUT-YYYYMMDD.log（不进主日志；
+  // 不计入主日志的单文件大小切分，仅受 7 天保留与总量上限治理）
+  if (msg.startsWith("[A2A-OUT]")) {
+    a2aDest.write(line);
+    return;
+  }
   currentFileBytes += Buffer.byteLength(line, "utf8");
   dest.write(line);
 }

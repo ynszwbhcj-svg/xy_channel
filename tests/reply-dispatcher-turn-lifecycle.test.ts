@@ -6,6 +6,8 @@ const mocks = vi.hoisted(() => ({
   sendStatusUpdate: vi.fn(),
   sendReasoningTextUpdate: vi.fn(),
   sendCommand: vi.fn(),
+  sendExecuteStatusCard: vi.fn(),
+  sendDisplayTaskCardData: vi.fn(),
   log: vi.fn(),
   warn: vi.fn(),
   error: vi.fn(),
@@ -31,6 +33,8 @@ vi.mock("../src/formatter.js", () => ({
   sendStatusUpdate: mocks.sendStatusUpdate,
   sendReasoningTextUpdate: mocks.sendReasoningTextUpdate,
   sendCommand: mocks.sendCommand,
+  sendExecuteStatusCard: mocks.sendExecuteStatusCard,
+  sendDisplayTaskCardData: mocks.sendDisplayTaskCardData,
 }));
 
 vi.mock("../src/tools/session-manager.js", () => ({
@@ -55,7 +59,10 @@ import {
   markTurnCanceled,
   markTurnInflight,
   registerTask,
+  rotateStreamingTextSegment,
 } from "../src/conversation/conversation-manager.js";
+import { peekStreamingTextId } from "../src/utils/streaming-text-id.js";
+import { nextStatusCardSeq } from "../src/utils/status-card-seq.js";
 
 function mockDispatcherFactory() {
   mocks.createDispatcher.mockImplementation((options) => ({
@@ -85,6 +92,8 @@ describe("reply dispatcher turn ownership", () => {
     mocks.sendStatusUpdate.mockResolvedValue(undefined);
     mocks.sendReasoningTextUpdate.mockResolvedValue(undefined);
     mocks.sendCommand.mockResolvedValue(undefined);
+    mocks.sendExecuteStatusCard.mockResolvedValue(undefined);
+    mocks.sendDisplayTaskCardData.mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -128,6 +137,18 @@ describe("reply dispatcher turn ownership", () => {
     expect(mocks.sendA2AResponse).not.toHaveBeenCalledWith(
       expect.objectContaining({ errorCode: 99921111 }),
     );
+    // 权威全文本由正文完成帧（lastChunk=true, final=false）携带
+    const textCompleteCalls = mocks.sendA2AResponse.mock.calls
+      .map(([params]) => params)
+      .filter((params) => params.lastChunk === true && params.final !== true);
+    expect(textCompleteCalls).toHaveLength(1);
+    expect(textCompleteCalls[0]).toMatchObject({
+      taskId: "task-new",
+      messageId: "message-new",
+      text: fullText,
+      append: false,
+    });
+    // final:true 留给空载终帧（仅标记流结束）
     const finalCalls = mocks.sendA2AResponse.mock.calls
       .map(([params]) => params)
       .filter((params) => params.final === true);
@@ -135,9 +156,8 @@ describe("reply dispatcher turn ownership", () => {
     expect(finalCalls[0]).toMatchObject({
       taskId: "task-new",
       messageId: "message-new",
-      text: fullText,
-      append: false,
-      final: true,
+      text: "",
+      append: true,
     });
   });
 
@@ -151,6 +171,18 @@ describe("reply dispatcher turn ownership", () => {
     await directTurn.dispatcher.deliver({ text: "完整回复" }, { kind: "final" });
     await directTurn.dispatcher.onIdle();
 
+    // 权威全文本由正文完成帧（lastChunk=true, final=false）携带，
+    // 身份跟随任务链末尾（steer 后的最新 taskId/messageId）
+    const textCompleteCalls = mocks.sendA2AResponse.mock.calls
+      .map(([params]) => params)
+      .filter((params) => params.lastChunk === true && params.final !== true);
+    expect(textCompleteCalls).toHaveLength(1);
+    expect(textCompleteCalls[0]).toMatchObject({
+      taskId: "task-steered",
+      messageId: "message-steered",
+      text: "完整回复",
+    });
+    // final:true 为空载终帧（仅标记流结束）
     const finalCalls = mocks.sendA2AResponse.mock.calls
       .map(([params]) => params)
       .filter((params) => params.final === true);
@@ -158,7 +190,182 @@ describe("reply dispatcher turn ownership", () => {
     expect(finalCalls[0]).toMatchObject({
       taskId: "task-steered",
       messageId: "message-steered",
-      text: "完整回复",
+      text: "",
+      append: true,
     });
+  });
+
+  it("rotates the streamingTextId at a tool boundary even before any body paragraph", async () => {
+    const sessionId = "sess-reasoning-seg";
+    registerTask(sessionId, "task-r", "msg-r");
+    const turn = createDispatcher(sessionId, "task-r", "msg-r");
+
+    // 思考段1 流式帧（id A）
+    await turn.replyOptions.onReasoningStream({ text: "思考前半段" });
+    await getOrCreateSession(sessionId).outboundQueue.whenIdle();
+    const idA = peekStreamingTextId("task-r");
+    expect(idA).toBeDefined();
+
+    // 分段边界（工具调用）：无条件拆分 —— 思考段1 以 id A 收尾（状态帧 +
+    // lastChunk 帧），轮换到 id B，基线切分
+    await rotateStreamingTextSegment({ config: {} as never, sessionId, taskId: "task-r", messageId: "msg-r" });
+    const idB = peekStreamingTextId("task-r");
+    expect(idB).toBeDefined();
+    expect(idB).not.toBe(idA);
+
+    // SDK 跨工具边界续流：全量快照含边界前文本 → 剥离基线后只下发增量段（id B）
+    await turn.replyOptions.onReasoningStream({ text: "思考前半段思考后半段" });
+    await turn.replyOptions.onReasoningEnd();
+    await getOrCreateSession(sessionId).outboundQueue.whenIdle();
+
+    const reasoningCalls = mocks.sendReasoningTextUpdate.mock.calls.map(([params]) => params);
+    const streamFrames = reasoningCalls.filter((params) => params.lastChunk !== true);
+    const closeFrames = reasoningCalls.filter((params) => params.lastChunk === true);
+    // 流式帧：段1 归 id A，段2 增量段归 id B
+    expect(streamFrames).toHaveLength(2);
+    expect(streamFrames[0]).toMatchObject({ text: "思考前半段", streamingTextId: idA });
+    expect(streamFrames[1]).toMatchObject({ text: "思考后半段", streamingTextId: idB });
+    // 收尾帧两帧：边界收尾（id A，isReasoningFinished=false）+ 思考结束标记帧
+    // （id B，isReasoningFinished=true）
+    expect(closeFrames).toHaveLength(2);
+    expect(closeFrames[0]).toMatchObject({
+      text: "思考前半段",
+      streamingTextId: idA,
+      isReasoningFinished: false,
+    });
+    expect(closeFrames[1]).toMatchObject({
+      text: "思考后半段",
+      streamingTextId: idB,
+      isReasoningFinished: true,
+    });
+
+    // 每个思考段结束前各补一帧 status-update（已完成深度思考），pin 该段 id，
+    // 且必须先于其 lastChunk=true 帧
+    const statusCalls = mocks.sendStatusUpdate.mock.calls
+      .map(([params], idx) => ({ params, idx }))
+      .filter(({ params }) => params.text === "已完成深度思考");
+    expect(statusCalls).toHaveLength(2);
+    expect(statusCalls[0].params.streamingTextId).toBe(idA);
+    expect(statusCalls[1].params.streamingTextId).toBe(idB);
+    const boundaryFlushIdx = mocks.sendReasoningTextUpdate.mock.calls.findIndex(
+      ([params]) => params.lastChunk === true && params.streamingTextId === idA,
+    );
+    const endMarkerIdx = mocks.sendReasoningTextUpdate.mock.calls.findIndex(
+      ([params]) => params.lastChunk === true && params.streamingTextId === idB,
+    );
+    expect(mocks.sendStatusUpdate.mock.invocationCallOrder[statusCalls[0].idx]).toBeLessThan(
+      mocks.sendReasoningTextUpdate.mock.invocationCallOrder[boundaryFlushIdx],
+    );
+    expect(mocks.sendStatusUpdate.mock.invocationCallOrder[statusCalls[1].idx]).toBeLessThan(
+      mocks.sendReasoningTextUpdate.mock.invocationCallOrder[endMarkerIdx],
+    );
+  });
+
+  it("switches to a new streamingTextId when body text starts after reasoning", async () => {
+    const sessionId = "sess-think-body-switch";
+    registerTask(sessionId, "task-tb", "msg-tb");
+    const turn = createDispatcher(sessionId, "task-tb", "msg-tb");
+
+    // 思考段1（id A）→ 工具边界（无条件拆分：id A 收尾，轮换到 id B）→
+    // 思考段2（id B，独立 id）
+    await turn.replyOptions.onReasoningStream({ text: "思考段1" });
+    await getOrCreateSession(sessionId).outboundQueue.whenIdle();
+    const idA = peekStreamingTextId("task-tb");
+    await rotateStreamingTextSegment({ config: {} as never, sessionId, taskId: "task-tb", messageId: "msg-tb" });
+    const idB = peekStreamingTextId("task-tb");
+    expect(idB).not.toBe(idA);
+
+    await turn.replyOptions.onReasoningStream({ text: "思考段1思考段2" });
+    await turn.replyOptions.onReasoningEnd();
+    await getOrCreateSession(sessionId).outboundQueue.whenIdle();
+    expect(peekStreamingTextId("task-tb")).toBe(idB);
+
+    // 正文段开始（思考→正文切换）：正文首帧起轮换为新 id —— 思考与正文不共用 id
+    await turn.replyOptions.onPartialReply({ text: "正文1" });
+    await getOrCreateSession(sessionId).outboundQueue.whenIdle();
+    const bodyId = peekStreamingTextId("task-tb");
+    expect(bodyId).toBeDefined();
+    expect(bodyId).not.toBe(idA);
+    expect(bodyId).not.toBe(idB);
+
+    // 思考段1 的帧归 id A，思考段2 的帧（流式帧 + 结束标记帧）归 id B（入队时 pin）
+    const reasoningCalls = mocks.sendReasoningTextUpdate.mock.calls.map(([params]) => params);
+    expect(reasoningCalls.length).toBeGreaterThan(0);
+    const segmentAFrames = reasoningCalls.filter((params) => params.text === "思考段1");
+    const segmentBFrames = reasoningCalls.filter((params) => params.text === "思考段2");
+    expect(segmentAFrames.length).toBeGreaterThan(0);
+    expect(segmentBFrames.length).toBeGreaterThan(0);
+    expect(segmentAFrames.every((params) => params.streamingTextId === idA)).toBe(true);
+    expect(segmentBFrames.every((params) => params.streamingTextId === idB)).toBe(true);
+    // 正文帧确实发出（id 由 formatter 在 drain 时读取在役注册表 = 切换后的新 id）
+    const bodyFrames = mocks.sendA2AResponse.mock.calls
+      .map(([params]) => params)
+      .filter((params) => (params.text ?? "").length > 0);
+    expect(bodyFrames.length).toBeGreaterThan(0);
+  });
+
+  it("does not emit an empty reasoning-end marker when the body-start switch already closed the segment", async () => {
+    const sessionId = "sess-reasoning-closed";
+    registerTask(sessionId, "task-r2", "msg-r2");
+    const turn = createDispatcher(sessionId, "task-r2", "msg-r2");
+
+    await turn.replyOptions.onReasoningStream({ text: "思考内容" });
+    // 正文段开始（思考→正文切换）：思考段仍未闭合（SDK 未发 thinking_end
+    // 的防御路径）→ 切换前以旧 id 补收尾帧
+    await turn.replyOptions.onPartialReply({ text: "正文段" });
+    await getOrCreateSession(sessionId).outboundQueue.whenIdle();
+
+    // 思考随即结束（无新增量）：分段已在切换时闭合，不再以新 id 补空标记帧
+    await turn.replyOptions.onReasoningEnd();
+    await getOrCreateSession(sessionId).outboundQueue.whenIdle();
+
+    const closeFrames = mocks.sendReasoningTextUpdate.mock.calls
+      .map(([params]) => params)
+      .filter((params) => params.lastChunk === true);
+    expect(closeFrames).toHaveLength(1);
+    expect(closeFrames[0]).toMatchObject({ text: "思考内容", isReasoningFinished: false });
+  });
+
+  it("terminal summary card excludes the last reasoning block but keeps earlier blocks", async () => {
+    const sessionId = "sess-think-index";
+    registerTask(sessionId, "task-t", "msg-t");
+    const turn = createDispatcher(sessionId, "task-t", "msg-t");
+
+    // 思考块一（id A，seq=1 —— 起始卡槽位）→ thinking_end 收尾
+    await turn.replyOptions.onReasoningStream({ text: "思考块一" });
+    await turn.replyOptions.onReasoningEnd();
+    // 正文段一出现（seq=1 卡槽）：其后的工具边界轮换 id（边界无条件拆分，
+    // 每个独立思考段都是独立 id，见上方用例）
+    await turn.replyOptions.onPartialReply({ text: "正文段一" });
+    await getOrCreateSession(sessionId).outboundQueue.whenIdle();
+    await rotateStreamingTextSegment({ config: {} as never, sessionId, taskId: "task-t", messageId: "msg-t" });
+
+    // 两张工具状态卡推进 seq：首张消费序号后 currentSeq 仍为 1（起始卡
+    // index=1 不占计数，首张状态卡同槽，见 status-card-seq），第二张推进
+    // 到 2 —— 思考块二落到 seq=2，与思考块一分属不同卡槽
+    nextStatusCardSeq("task-t");
+    nextStatusCardSeq("task-t");
+
+    // 思考块二（id B，seq=2，本 turn 最后一个思考块）→ thinking_end
+    await turn.replyOptions.onReasoningStream({ text: "思考块一思考块二" });
+    await turn.replyOptions.onReasoningEnd();
+
+    // 再一张状态卡推进到 3：终态 currentSeq=3 ≠ 最后思考块的 seq=2，
+    // 保证旧的"按当前卡序号过滤"无法偶然覆盖，只有确定性排除能剔除它
+    nextStatusCardSeq("task-t");
+
+    // 正文 + 终态序列
+    await turn.replyOptions.onPartialReply({ text: "正文" });
+    await turn.dispatcher.deliver({ text: "正文" }, { kind: "final" });
+    await turn.dispatcher.onIdle();
+    await getOrCreateSession(sessionId).outboundQueue.whenIdle();
+
+    const summaryCards = mocks.sendExecuteStatusCard.mock.calls
+      .map(([params]) => params)
+      .filter((params) => params.text === "任务处理已完成");
+    expect(summaryCards).toHaveLength(1);
+    // 最后思考块（seq=2）被剔除；中间思考块（seq=1）保留；
+    // 最后正文段（seq=3）从不标记，天然不在列表
+    expect(summaryCards[0].thinkIndex).toEqual(["1"]);
   });
 });

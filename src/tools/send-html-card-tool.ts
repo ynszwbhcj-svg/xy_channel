@@ -2,8 +2,9 @@
 import type { ChannelAgentTool } from "openclaw/plugin-sdk";
 import { XYFileUploadService } from "../file-upload.js";
 import { sendCard } from "../formatter.js";
+import { getCachedXYWebSocketManager } from "../transport/client.js";
 import type { SessionContext } from "./session-manager.js";
-import { getCurrentSessionContext } from './session-manager.js';
+import { getCurrentSessionContext, isCronToolCall } from './session-manager.js';
 
 import { logger } from "../utils/logger.js";
 
@@ -42,7 +43,21 @@ c. 仅当用户或者skill中显示说明使用send_html_card工具时才调用�
     },
 
     async execute(toolCallId: string, params: any) {
-      const _c = getCurrentSessionContext();
+      let _c = getCurrentSessionContext();
+
+      // 定时任务判定与 sendCommand → sendCommandViaPush 的路由判定拉齐
+      // （formatter.ts）：toolCallId 被 before_tool_call hook 标记，或合成
+      // sessionId 带 "cron-" 前缀。cron 场景无活跃 WebSocket 会话，H5 卡片
+      // 无法投递：跳过卡片下发，但仍正常获取预览链接并直接返回结果。
+      const isCron = isCronToolCall(toolCallId) || (_c?.sessionId ?? "").startsWith("cron-");
+
+      // Cron 场景 ALS 上下文可能不存在（cron 不经过 bot.ts →
+      // runWithSessionContext），从 WebSocketManager 兜底取 config，
+      // 供本地文件上传使用。
+      if (!_c && isCron) {
+        _c = { config: getCachedXYWebSocketManager().config } as SessionContext;
+      }
+
       const { config, sessionId, taskId, messageId } = _c;
 // Validate at least one parameter is provided
       if (!params.htmlUrl && !params.htmlLocal) {
@@ -92,15 +107,19 @@ c. 仅当用户或者skill中显示说明使用send_html_card工具时才调用�
           },
         ];
 
-        // Send card via sendCard
-        await sendCard({
-          config,
-          sessionId,
-          taskId,
-          messageId,
-          toolCallId,
-          cardsInfo,
-        });
+        // Send card via sendCard (cron 场景无活跃会话，跳过卡片下发)
+        if (isCron) {
+          logger.log(`[SEND-HTML-CARD] Cron scenario detected (toolCallId=${toolCallId}), skip card delivery`);
+        } else {
+          await sendCard({
+            config,
+            sessionId,
+            taskId,
+            messageId,
+            toolCallId,
+            cardsInfo,
+          });
+        }
 
         return {
           content: [
@@ -108,7 +127,9 @@ c. 仅当用户或者skill中显示说明使用send_html_card工具时才调用�
               type: "text",
               text: JSON.stringify({
                 success: true,
-                message: `HTML卡片发送成功，html的在线链接如下，生成markdown超链接时与此url需保持完整一致 ${url}`,
+                message: isCron
+                  ? `定时任务场景，HTML卡片不下发，html的在线链接如下，生成markdown超链接时与此url需保持完整一致 ${url}`
+                  : `HTML卡片发送成功，html的在线链接如下，生成markdown超链接时与此url需保持完整一致 ${url}`,
               }),
             },
           ],

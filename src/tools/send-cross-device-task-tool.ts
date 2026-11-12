@@ -128,6 +128,7 @@ async function sendFileCardsToUser(ctx: SessionContext, fileCards: SentFileCard[
         id: messageId,
         result: {
           kind: "artifact-update",
+          isNew: true,
           append: true,
           lastChunk: false,
           final: false,

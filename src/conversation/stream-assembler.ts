@@ -10,11 +10,27 @@
 //   - 权威文本修正：openclaw 在 message_end 发出的最终清洗文本不走
 //     onPartialReply，流式累计可能缺尾；deliver(kind=final) 提供 canonical
 //     文本，finalize() 时以它替换当前轮（或最后一个 model 段）。
+//   - 分段边界切分：工具调用边界、streamingTextId 轮换时 cutSegment()
+//     清空已装配内容，后续全量帧只携带边界后新段的文本（禁止新 id 叠加
+//     旧 id 段内容下发）。
+//   - 低版本链路（app_ver < 11.7.9.310，accumulateModelSegments=false）：
+//     模型不同轮产生的回复文本不累加 —— 跨调用边界处直接丢弃上一轮文本
+//     （历史装配文本在下一轮发送前清空），全量帧/终帧只携带当前轮文本。
 //   - 本类是纯逻辑，不做任何发送；发送由调用方经 outbound-queue 完成。
 
 export interface AssemblerSegment {
   kind: "model" | "injected";
   text: string;
+}
+
+export interface StreamAssemblerOptions {
+  /**
+   * 跨模型调用边界是否累加历史轮文本（默认 true）。
+   * true：边界处把上一轮完整文本锁存为 model 段，后续全量帧携带全部历史轮
+   * 文本；false（低版本链路）：边界处丢弃上一轮文本，下一轮发送的正文只
+   * 携带本轮文本。
+   */
+  accumulateModelSegments?: boolean;
 }
 
 export interface FinalizeResult {
@@ -34,16 +50,25 @@ export class StreamAssembler {
   private currentModelText = "";
   /** deliver(kind=final) 捕获的权威最终文本（最后一次模型调用的 canonical 文本）。 */
   private canonicalFinalText = "";
+  /** 跨模型调用边界是否累加历史轮文本（低版本链路置 false，见 StreamAssemblerOptions）。 */
+  private readonly accumulateModelSegments: boolean;
+
+  constructor(options: StreamAssemblerOptions = {}) {
+    this.accumulateModelSegments = options.accumulateModelSegments ?? true;
+  }
 
   /**
    * onPartialReply 喂入。text 是当前模型调用的累计清洗文本（非增量）。
    * 同一调用内 text 递增；跨调用时 text 刷新（!startsWith），此时把上一个
-   * 调用的完整文本锁存为 model 段。
+   * 调用的完整文本锁存为 model 段（不累加模式下直接丢弃 —— 历史装配文本
+   * 在下一轮发送前清空，正文只携带本轮文本）。
    */
   onStreamText(text: string): { fullText: string; latched: boolean } {
     let latched = false;
     if (this.currentModelText && !text.startsWith(this.currentModelText)) {
-      this.segments.push({ kind: "model", text: this.currentModelText });
+      if (this.accumulateModelSegments) {
+        this.segments.push({ kind: "model", text: this.currentModelText });
+      }
       latched = true;
     }
     this.currentModelText = text;
@@ -54,12 +79,14 @@ export class StreamAssembler {
    * 工具注入非模型文本（如卡片 DSL）。先锁存当前模型文本（保持相对位置），
    * 再把注入内容作为独立段压入。注入后所有全量帧自然携带该段，
    * 客户端 append:false 整体替换不会抹掉注入内容。
+   * 不累加模式：注入前的模型文本属于历史轮，与 onStreamText 边界同语义
+   * 直接丢弃；注入段本身保留，后续全量帧（含终帧）继续携带。
    */
   injectArtifact(text: string): string {
-    if (this.currentModelText) {
+    if (this.currentModelText && this.accumulateModelSegments) {
       this.segments.push({ kind: "model", text: this.currentModelText });
-      this.currentModelText = "";
     }
+    this.currentModelText = "";
     this.segments.push({ kind: "injected", text });
     return this.getFullText();
   }
@@ -133,6 +160,19 @@ export class StreamAssembler {
   /** 是否有任何已装配内容（已锁存段或当前模型文本非空）。 */
   hasContent(): boolean {
     return this.segments.length > 0 || this.currentModelText.length > 0;
+  }
+
+  /**
+   * 分段边界切分（工具调用边界、streamingTextId 轮换时调用）：
+   * 已装配内容（含当前模型文本）全部移出全文本 —— 之后的
+   * getFullText()/finalize() 只返回边界之后新段的文本，新 streamingTextId
+   * 的文本帧不再叠加携带旧 id 段的内容。
+   * canonical 权威文本只在 turn 末尾 deliver(kind=final) 时捕获（晚于任何
+   * 切分），不在此处清除。无内容时为 no-op。
+   */
+  cutSegment(): void {
+    this.segments = [];
+    this.currentModelText = "";
   }
 
   /** 新 turn 清空（dispatcher 创建时调用；终帧发出后也应复位）。 */

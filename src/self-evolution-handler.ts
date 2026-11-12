@@ -132,14 +132,16 @@ export async function handleSelfEvolutionStateGetEvent(
     };
 
     // 构造 artifact update 消息，直接通过当前 wsManager 发送
+    // lastChunk=false：本帧是命令（data part），不是文本块终点
     const jsonRpcResponse = {
       jsonrpc: "2.0",
       id: messageId,
       result: {
         taskId,
         kind: "artifact-update",
+        isNew: true,
         append: false,
-        lastChunk: true,
+        lastChunk: false,
         final: true,
         artifact: {
           artifactId: uuidv4(),
@@ -161,9 +163,8 @@ export async function handleSelfEvolutionStateGetEvent(
       msgDetail: JSON.stringify({ ...jsonRpcResponse, hostname: os.hostname() }),
     };
 
-    logger.log(`[A2A_COMMAND] Sending A2A command, taskId: ${taskId}`);
     await wsManager.sendMessage(sessionId, outboundMessage);
-    logger.log(`[SELF_EVOLUTION_GET] command sent successfully`);
+    logger.log(`[SELF_EVOLUTION_GET] command sent successfully, taskId: ${taskId}`);
   } catch (err) {
     logger.error("[SELF_EVOLUTION_GET] failed to handle event:", err);
   }

@@ -431,6 +431,7 @@ export class XYWebSocketManager extends EventEmitter {
   private startHeartbeat(): void {
     if (!this.ws) return;
 
+    const hostname = os.hostname();
     const heartbeat = new HeartbeatManager(
       this.ws,
       {
@@ -439,7 +440,7 @@ export class XYWebSocketManager extends EventEmitter {
         message: JSON.stringify({
           msgType: "heartbeat",
           agentId: this.config.agentId,
-          msgDetail: JSON.stringify({ timestamp: Date.now() }),
+          msgDetail: JSON.stringify({ timestamp: Date.now() , hostname}),
         }),
       },
       () => {
@@ -967,7 +968,15 @@ export class XYWebSocketManager extends EventEmitter {
   }
 
   /**
-   * Reconnect with exponential backoff.
+   * Reconnect with exponential backoff + full jitter.
+   *
+   * A server outage makes every client detect the drop at the same moment and
+   * start from the same attempt counter, so a deterministic delay sequence
+   * (1s, 2s, 4s, ...) makes all clients reconnect in lock-step waves. Full
+   * jitter draws each delay uniformly from [0, window] so the herd spreads
+   * out and stays decorrelated even after many rounds at the cap:
+   * - attempt 1: window = reconnectFirstMaxMs (dilutes the first burst)
+   * - attempt ≥2: window = min(base * 2^(n-1), reconnectMaxMs)
    */
   private reconnectServer(): void {
     if (this.isShuttingDown) return;
@@ -979,9 +988,18 @@ export class XYWebSocketManager extends EventEmitter {
     }
 
     this.state.reconnectAttempts++;
+    const attempt = this.state.reconnectAttempts;
 
-    const delay = Math.min(1000 * Math.pow(2, this.state.reconnectAttempts - 1), 30000);
-    this.log(`Reconnecting in ${delay}ms (attempt ${this.state.reconnectAttempts})...`);
+    const baseMs = this.config.reconnectBaseMs ?? 1000;
+    const maxMs = this.config.reconnectMaxMs ?? 30000;
+    const firstMaxMs = this.config.reconnectFirstMaxMs ?? 3000;
+
+    const windowMs = attempt === 1
+      ? firstMaxMs
+      : Math.min(baseMs * Math.pow(2, attempt - 1), maxMs);
+    const delay = Math.round(Math.random() * windowMs);
+
+    this.log(`Reconnecting in ${delay}ms (attempt ${attempt}, window ${windowMs}ms)...`);
 
     const timer = setTimeout(() => {
       this.reconnectTimer = null;
