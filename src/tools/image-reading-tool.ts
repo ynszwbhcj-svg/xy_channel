@@ -244,7 +244,7 @@ async function callImageUnderstandingAPI(
 export const imageReadingTool = {
     name: "image_reading",
     label: "Image Reading",
-    description: `图片理解工具，支持单图/多图（最多10张），返回图片描述文本。调用条件：用户消息含 media 图片或询问图片内容时必须调用。`,
+    description: `图片理解工具，支持单图/多图（最多10张），返回图片描述文本。当前模型不支持原生图片输入时，用户消息含 media 图片或询问图片内容时必须调用；当前模型支持原生图片且图片已随消息提供时，直接理解图片，无需调用此工具。`,
 
     parameters: {
       type: "object",

@@ -4,7 +4,9 @@ import type { RuntimeEnv } from "openclaw/plugin-sdk";
 import { resolveXYConfig } from "../config.js";
 import { getXYWebSocketManager, diagnoseAllManagers, cleanupOrphanConnections, removeXYWebSocketManager } from "../transport/client.js";
 import { handleXYMessage } from "./bot.js";
-import { parseA2AMessage } from "../parser.js";
+import { extractFileParts, extractModelInput, extractModelName, parseA2AMessage } from "../parser.js";
+import { inheritSelectedModelName, isImageAttachment, modelSelectionChanged, type ModelSelection } from "../model-input.js";
+import { createInboundAdmissionQueue } from "./inbound-admission.js";
 import { hasActiveTask, listActiveTaskBindings } from "../conversation/conversation-manager.js";
 import { sendA2AResponse } from "../formatter.js";
 import { handleTriggerEvent } from "../trigger-handler.js";
@@ -23,26 +25,6 @@ export type MonitorXYOpts = {
   accountId?: string;
   setStatus?: (status: { lastEventAt?: number; lastInboundAt?: number; connected?: boolean }) => void;
 };
-
-/**
- * Per-session serial queue that ensures messages from the same session are processed
- * in arrival order while allowing different sessions to run concurrently.
- * Following feishu/monitor.account.ts pattern.
- */
-function createSessionQueue() {
-  const queues = new Map<string, Promise<void>>();
-  return (sessionId: string, task: () => Promise<void>): Promise<void> => {
-    const prev = queues.get(sessionId) ?? Promise.resolve();
-    const next = prev.then(task, task);
-    queues.set(sessionId, next);
-    void next.finally(() => {
-      if (queues.get(sessionId) === next) {
-        queues.delete(sessionId);
-      }
-    });
-    return next;
-  };
-}
 
 /**
  * Monitor XY channel WebSocket connections.
@@ -91,7 +73,8 @@ export async function monitorXYProvider(opts: MonitorXYOpts = {}): Promise<void>
   const activeTurnTasks = new Map<string, Set<Promise<void>>>();
 
   // Create session queue for ordered message processing
-  const enqueue = createSessionQueue();
+  const admission = createInboundAdmissionQueue();
+  const activeSelections = new Map<string, ModelSelection>();
 
   // Global gate that serializes dispatch initialization across sessions.
   // When a new session starts dispatching, it acquires this gate and holds it
@@ -109,10 +92,18 @@ export async function monitorXYProvider(opts: MonitorXYOpts = {}): Promise<void>
 
   // Health check interval
   let healthCheckInterval: NodeJS.Timeout | null = null;
+  let stopped = false;
 
   return new Promise<void>((resolve, reject) => {
     // Event handlers (defined early so they can be referenced in cleanup)
-    const messageHandler = (message: any, sessionId: string, serverId: string) => {
+    const messageHandler = (message: any, webSocketSessionId: string, serverId: string) => {
+      // A wrapped transport session can carry multiple A2A conversations.
+      // Admission and capabilities belong to the conversation, not the socket.
+      const sessionId = typeof message.params?.sessionId === "string" && message.params.sessionId
+        ? message.params.sessionId
+        : typeof message.sessionId === "string" && message.sessionId
+          ? message.sessionId
+          : webSocketSessionId;
       const messageKey = `${sessionId}::${message.id}`;
 
       logger.log(`[MONITOR-HANDLER] messageHandler triggered: messageId=${message.id}`);
@@ -127,16 +118,25 @@ export async function monitorXYProvider(opts: MonitorXYOpts = {}): Promise<void>
 
       activeMessages.add(messageKey);
       const previousTurnTasks = Array.from(activeTurnTasks.get(sessionId) ?? []);
+      let forceNewTurn = false;
+      let selection: ModelSelection | undefined;
 
       const task = async () => {
         try {
+          if (stopped || opts.abortSignal?.aborted) return;
           await handleXYMessage({
             cfg,
             runtime,
             message,
             accountId,  // ✅ Pass accountId ("default")
-            webSocketSessionId: sessionId,  // ✅ 传递 WebSocket 层级的 sessionId
+            webSocketSessionId,
             acquireDispatchInitGate,
+            forceNewTurn,
+            onTurnAdmitted: () => {
+              if (selection) {
+                activeSelections.set(sessionId, inheritSelectedModelName(activeSelections.get(sessionId), selection));
+              }
+            },
             waitForPreviousTurn: async () => {
               await Promise.allSettled(previousTurnTasks);
             },
@@ -146,6 +146,7 @@ export async function monitorXYProvider(opts: MonitorXYOpts = {}): Promise<void>
           logger.error(`XY gateway: error handling message from ${serverId}: ${String(err)}`);
         } finally {
           activeMessages.delete(messageKey);
+          if (!hasActiveTask(sessionId)) activeSelections.delete(sessionId);
         }
       };
 
@@ -174,7 +175,10 @@ export async function monitorXYProvider(opts: MonitorXYOpts = {}): Promise<void>
       // to settle before starting a replacement dispatch.
       const messageMethod = message.method;
       if (messageMethod === "clearContext" || messageMethod === "clear_context") {
-        void enqueue(sessionId, runTask).catch((err) => {
+        void admission.enqueue(sessionId, async () => {
+          await runTask();
+          activeSelections.delete(sessionId);
+        }, true).catch((err) => {
           logger.error(`XY gateway: queue processing failed: ${String(err)}`);
           activeMessages.delete(messageKey);
         });
@@ -189,23 +193,35 @@ export async function monitorXYProvider(opts: MonitorXYOpts = {}): Promise<void>
       } else {
         try {
           const parsed = parseA2AMessage(message);
+          selection = {
+            modelName: extractModelName(parsed.parts),
+            modelCapabilities: extractModelInput(parsed.parts),
+          };
           const steerMode = cfg.messages?.queue?.mode === "steer";
           const hasActiveRun = hasActiveTask(parsed.sessionId);
+          const nativeImages = selection.modelCapabilities.supportsNativeImages &&
+            extractFileParts(parsed.parts).some(isImageAttachment);
+          const changedSelection = hasActiveRun && modelSelectionChanged(activeSelections.get(sessionId), selection);
+          forceNewTurn = (hasActiveRun && nativeImages) || changedSelection || admission.hasBarrier(sessionId);
 
-          if (steerMode && hasActiveRun) {
+          if (steerMode && hasActiveRun && !forceNewTurn) {
             logger.log(`[MONITOR] STEER MODE: executing concurrently, sessionId=${parsed.sessionId}, messageKey=${messageKey}`);
             void runTask().catch((err) => {
               logger.error(`XY gateway: concurrent steer task failed for ${messageKey}: ${String(err)}`);
               activeMessages.delete(messageKey);
             });
           } else {
-            void enqueue(sessionId, runTask).catch((err) => {
+            // Mark a boundary synchronously, before async downloads/dispatch.
+            // Later text messages must not jump ahead into the previous run.
+            const barrier = forceNewTurn || admission.hasQueued(sessionId);
+            forceNewTurn = barrier;
+            void admission.enqueue(sessionId, runTask, barrier).catch((err) => {
               logger.error(`XY gateway: queue processing failed: ${String(err)}`);
               activeMessages.delete(messageKey);
             });
           }
         } catch {
-          void enqueue(sessionId, runTask).catch((err) => {
+          void admission.enqueue(sessionId, runTask, true).catch((err) => {
             logger.error(`XY gateway: queue processing failed: ${String(err)}`);
             activeMessages.delete(messageKey);
           });
@@ -285,6 +301,7 @@ export async function monitorXYProvider(opts: MonitorXYOpts = {}): Promise<void>
     };
 
     const cleanup = () => {
+      stopped = true;
       logger.log("XY gateway: cleaning up...");
 
       // 🔍 Diagnose before cleanup
@@ -323,6 +340,8 @@ export async function monitorXYProvider(opts: MonitorXYOpts = {}): Promise<void>
       loggedServers.clear();
       activeMessages.clear();
       activeTurnTasks.clear();
+      activeSelections.clear();
+      admission.clear();
       logger.log(`[MONITOR-HANDLER] Cleanup complete, cleared active messages and sessions`);
 
       // 🔍 Diagnose after cleanup

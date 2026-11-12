@@ -1,6 +1,7 @@
 // A2A message parsing utilities
 import type { A2AJsonRpcRequest, A2AMessagePart, A2ADataEvent, RunCrossTaskContext, SentFileCard } from "./types.js";
 import { logger } from "./utils/logger.js";
+import { resolveModelInput, type ModelInputCapabilities } from "./model-input.js";
 
 /**
  * Parsed message information extracted from A2A request.
@@ -210,21 +211,42 @@ export function extractDeviceType(parts: A2AMessagePart[]): string | null {
   return null;
 }
 
-/**
- * Extract modelName from message parts.
- * Looks for modelName in data parts under variables.clientVariables.modelName
- * (same level as systemVariables).
- */
-export function extractModelName(parts: A2AMessagePart[]): string | null {
+function selectedModelName(variables: Record<string, unknown> | undefined): string | null {
+  const raw = variables?.modelName;
+  if (typeof raw !== "string") return null;
+  const modelName = raw.trim();
+  return modelName && modelName.toLowerCase() !== "none" ? modelName : null;
+}
+
+/** Keep a model and its capability declaration in the same clientVariables object. */
+function selectClientModelVariables(parts: A2AMessagePart[]): Record<string, unknown> | undefined {
   for (const part of parts) {
-    if (part.kind === "data" && part.data) {
-      const modelName = part.data.variables?.clientVariables?.modelName;
-      if (modelName && typeof modelName === "string" && modelName.trim() !== "" && modelName.toLowerCase() !== "none") {
-        return modelName;
-      }
+    if (part.kind !== "data" || !part.data) continue;
+    const variables = part.data.variables?.clientVariables;
+    if (!variables || typeof variables !== "object" || Array.isArray(variables)) continue;
+    if (selectedModelName(variables) || Object.prototype.hasOwnProperty.call(variables, "modelInput")) {
+      return variables;
     }
   }
-  return null;
+  return undefined;
+}
+
+/** Extract modelName from the first client model declaration in this request. */
+export function extractModelName(parts: A2AMessagePart[]): string | null {
+  return selectedModelName(selectClientModelVariables(parts));
+}
+
+/**
+ * Read the current request's model input declaration next to modelName.
+ * A modelName-only declaration from an older client remains text-only. Never
+ * combine its name with a different declaration's modelInput in a later part.
+ * Empty or invalid explicit values also win over later declarations.
+ */
+export function extractModelInput(parts: A2AMessagePart[]): ModelInputCapabilities {
+  const variables = selectClientModelVariables(parts);
+  return resolveModelInput(variables && Object.prototype.hasOwnProperty.call(variables, "modelInput")
+    ? variables.modelInput
+    : undefined);
 }
 
 /**

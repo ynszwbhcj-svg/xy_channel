@@ -107,8 +107,12 @@ export const xyPlugin: ChannelPlugin = {
   /** Static tool list (3.24 pattern). Tools read SessionContext at execute time via ALS. */
   agentTools: () => {
     const ctx = getCurrentSessionContext();
-    const filtered = filterToolsByDevice(ALL_TOOLS, ctx?.deviceType);
-    logger.log(`[DEVICE-FILTER] deviceType=${ctx?.deviceType ?? "(none)"}, tools: ${ALL_TOOLS.length} → ${filtered.length} (${filtered.map(t => t.name).join(", ")})`);
+    const deviceFiltered = filterToolsByDevice(ALL_TOOLS, ctx?.deviceType);
+    const filtered = ctx?.modelCapabilities?.supportsNativeImages
+      ? deviceFiltered.filter((tool) => tool.name !== "image_reading")
+      : deviceFiltered;
+    logger.log(`[DEVICE-FILTER] deviceType=${ctx?.deviceType ?? "(none)"}, tools: ${ALL_TOOLS.length} → ${deviceFiltered.length}`);
+    logger.log(`[MODEL-INPUT-FILTER] nativeImages=${ctx?.modelCapabilities?.supportsNativeImages ?? false}, tools: ${deviceFiltered.length} → ${filtered.length} (${filtered.map(t => t.name).join(", ")})`);
     return filtered;
   },
 

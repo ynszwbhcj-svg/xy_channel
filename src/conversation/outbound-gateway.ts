@@ -27,6 +27,21 @@ export interface SendWsFrameParams {
   payload: Record<string, any>;
 }
 
+/** 从 artifact parts 中提取内嵌的 A2ACommand 列表（data part 的 commands 字段）。 */
+function extractCommands(payload: Record<string, any>): A2ACommand[] {
+  const parts = payload?.result?.artifact?.parts;
+  if (!Array.isArray(parts)) return [];
+  return parts
+    .filter((p: any) => p?.kind === "data" && Array.isArray(p.data?.commands))
+    .flatMap((p: any) => p.data.commands);
+}
+
+function isMemoryFileReadCommand(command: A2ACommand): boolean {
+  return command?.header?.namespace === "AgentEvent"
+    && command?.header?.name === "MemoryQuery"
+    && command?.payload?.action === "MemoryFileRead";
+}
+
 /**
  * 发送一帧 A2A agent_response 到 xy server。
  * 统一封装 OutboundWebSocketMessage 信封（msgType/agentId/hostname）。
@@ -34,6 +49,7 @@ export interface SendWsFrameParams {
 export async function sendWsFrame(params: SendWsFrameParams): Promise<void> {
   const { config, sessionId, taskId, payload } = params;
   const wsManager = getXYWebSocketManager(config);
+  const log = logger.withContext(sessionId, taskId);
   const outboundMessage: OutboundWebSocketMessage = {
     msgType: "agent_response",
     agentId: config.agentId,
@@ -41,6 +57,31 @@ export async function sendWsFrame(params: SendWsFrameParams): Promise<void> {
     taskId,
     msgDetail: JSON.stringify({ ...payload, hostname: os.hostname() }),
   };
+  // MemoryFileRead 为保证端侧文件完整性会保留原文，只能记录元数据。
+  // 其他出站帧沿用完整日志，日志策略不改变实际发送内容。
+  log.log(
+    `[A2A-OUT] msgType=${outboundMessage.msgType}, agentId=${outboundMessage.agentId}, sessionId=${sessionId}, taskId=${taskId}, size=${outboundMessage.msgDetail.length}`,
+  );
+  const commands = extractCommands(payload);
+  if (commands.some(isMemoryFileReadCommand)) {
+    log.log(`[A2A-OUT] msgDetail omitted for MemoryFileRead response`);
+    for (const command of commands) {
+      if (isMemoryFileReadCommand(command)) {
+        const answer = command.payload?.ans;
+        const contentBytes = typeof answer?.contentBytes === "number" && Number.isFinite(answer.contentBytes)
+          ? answer.contentBytes
+          : typeof answer?.content === "string" ? Buffer.byteLength(answer.content, "utf8") : 0;
+        log.log(`[A2A-OUT] action=MemoryFileRead, ok=${answer?.ok === true}, contentBytes=${contentBytes}`);
+      } else {
+        log.log(`[A2A-OUT] command=${JSON.stringify(command)}`);
+      }
+    }
+  } else {
+    log.log(`[A2A-OUT] msgDetail=${outboundMessage.msgDetail}`);
+    if (commands.length > 0) {
+      log.log(`[A2A-OUT] commands=${JSON.stringify(commands)}`);
+    }
+  }
   await wsManager.sendMessage(sessionId, outboundMessage);
 }
 

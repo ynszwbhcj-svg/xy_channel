@@ -2,11 +2,13 @@
 import type { ClawdbotConfig, RuntimeEnv, ReplyPayload } from "openclaw/plugin-sdk";
 import { resolveRuntimeConversationBindingRoute } from "openclaw/plugin-sdk/conversation-runtime";
 import { updateSessionStoreEntry, updateSessionStore, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
-import { callGatewayTool } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { callGatewayTool, resolveActiveEmbeddedRunSessionId } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { getXYRuntime } from "../runtime.js";
 import { createXYReplyDispatcher } from "./reply-dispatcher.js";
-import { parseA2AMessage, extractTextFromParts, extractFileParts, extractPushId, extractDeviceType, extractAppVer, extractSdkApiVersion, extractModelName, extractTriggerData, extractRunCrossTaskContext, isClearContextMessage, isTasksCancelMessage } from "../parser.js";
+import { parseA2AMessage, extractTextFromParts, extractFileParts, extractPushId, extractDeviceType, extractAppVer, extractSdkApiVersion, extractModelName, extractModelInput, extractTriggerData, extractRunCrossTaskContext, isClearContextMessage, isTasksCancelMessage } from "../parser.js";
 import { downloadFilesFromParts } from "../file-download.js";
+import { isImageAttachment } from "../model-input.js";
+import { loadNativeImages, NATIVE_IMAGE_MAX_BYTES, NativeImageInputError } from "../native-images.js";
 import { resolveXYConfig } from "../config.js";
 import { sendStatusUpdate, sendClearContextResponse, sendTasksCancelResponse, sendA2AResponse } from "../formatter.js";
 import {
@@ -23,6 +25,7 @@ import { toolCallNudgeManager } from "../utils/tool-call-nudge-manager.js";
 import { tryDirectSteer } from "../conversation/steer-service.js";
 import {
   registerTask,
+  getOrCreateSession,
   completeTask,
   hasActiveTask,
   bindSessionKey,
@@ -39,8 +42,60 @@ import {
   clearWaitState,
 } from "../conversation/conversation-manager.js";
 import { clearPendingApproval } from "../approval-bridge.js";
-import type { A2AJsonRpcRequest } from "../types.js";
+import type { A2AJsonRpcRequest, XYChannelConfig } from "../types.js";
 import { logger } from "../utils/logger.js";
+
+const CHANNEL_READY_POLL_MS = 100;
+const SDK_TURN_IDLE_TIMEOUT_MS = 30_000;
+
+/** A full image/model turn must not enter the SDK's text-only steer branch. */
+async function waitForSdkTurnIdle(
+  sessionKey: string | undefined,
+  log: ReturnType<typeof logger.withContext>,
+): Promise<"idle" | "timeout" | "unavailable"> {
+  if (!sessionKey) return "unavailable";
+  const deadline = Date.now() + SDK_TURN_IDLE_TIMEOUT_MS;
+  for (;;) {
+    try {
+      if (!resolveActiveEmbeddedRunSessionId(sessionKey)) return "idle";
+    } catch (err) {
+      log.error(`[BOT-DISPATCH] Cannot verify SDK turn readiness:`, err);
+      return "unavailable";
+    }
+    if (Date.now() >= deadline) return "timeout";
+    await new Promise<void>((resolve) => setTimeout(resolve, CHANNEL_READY_POLL_MS));
+  }
+}
+
+/** Close only the rejected incoming task; an older live run keeps its state. */
+async function failBeforeDispatch(params: {
+  config: XYChannelConfig;
+  sessionId: string;
+  taskId: string;
+  messageId: string;
+  text: string;
+  stepName: string;
+}): Promise<void> {
+  const { config, sessionId, taskId, messageId, text } = params;
+  const outboundQueue = getOrCreateSession(sessionId).outboundQueue;
+  outboundQueue.enqueue({
+    taskId,
+    label: "inbound-failure-status",
+    send: () => sendStatusUpdate({
+      config, sessionId, taskId, messageId, text, state: "failed",
+    }),
+  });
+  outboundQueue.enqueue({
+    taskId,
+    label: "inbound-failure-final",
+    send: () => sendA2AResponse({
+      config, sessionId, taskId, messageId, text, append: false, final: true,
+      errorCode: 99921111, errorMessage: text,
+    }),
+  });
+  await outboundQueue.whenIdle();
+  completeTask(sessionId, taskId);
+}
 
 /**
  * Parameters for handling an XY message.
@@ -55,6 +110,10 @@ export interface HandleXYMessageParams {
   acquireDispatchInitGate?: () => Promise<() => void>;
   /** steer 回退前等待同 session 的旧 dispatch 收尾，避免并发争用会话写锁。 */
   waitForPreviousTurn?: () => Promise<void>;
+  /** Attachments/model changes must enter a complete turn instead of text-only steer. */
+  forceNewTurn?: boolean;
+  /** Commit the monitor's model snapshot only after this complete turn is admitted. */
+  onTurnAdmitted?: () => void;
 }
 
 const PREVIOUS_TURN_SETTLE_TIMEOUT_MS = 70_000;
@@ -248,6 +307,8 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
     if (modelName) {
       log.log(`[BOT] Extracted modelName: ${modelName}`);
     }
+    const modelCapabilities = extractModelInput(parsed.parts);
+    log.log(`[MODEL-INPUT] source=${modelCapabilities.source}, input=${modelCapabilities.input.join(",")}`);
     const runCrossTaskContext = extractRunCrossTaskContext(parsed.parts);
 
     // Resolve configuration (needed for status updates)
@@ -269,18 +330,8 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
 
     log.log(`[BOT] Resolved route, sessionKey=${route.sessionKey}`);
 
-    // Register sessionKey→A2A sessionId mapping for subagent hook translation.
-    // Hooks receive openclaw sessionKey (e.g. "agent:main:direct:xxx") but
-    // xy_channel operates on A2A sessionId. This bridge lets subagent_spawned/
-    // subagent_ended hooks find the correct wait state.
-    // IMPORTANT: Only register on the FIRST message. Steer messages have a
-    // different taskId — overwriting the mapping would break subagent wait
-    // state tracking for the original message's subagents.
-    // 例外：steer 直接注入失败（no-active-run）且无存活等待态时，下方
-    // steer 重分发路径会重绑定到新 taskId（旧 run 已消失，无历史等待态需保护）。
-    if (!isUpdate) {
-      bindSessionKey(route.sessionKey, parsed.sessionId, parsed.taskId, parsed.messageId);
-    }
+    // Bind sessionKey→A2A identity only after full-turn admission below.
+    // Direct steer preserves the older run's subagent ownership mapping.
 
     // Check for ACP runtime binding on this A2A conversation
     const runtimeRoute = resolveRuntimeConversationBindingRoute({
@@ -296,55 +347,6 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
           ? `[BOT] routed via bound conversation ${parsed.sessionId} -> ${runtimeRoute.boundSessionKey}`
           : `[BOT] plugin-bound conversation ${parsed.sessionId}`,
       );
-    }
-
-    // ALS only: no registerSession. The sessionContext built below is handed
-    // to runWithSessionContext() inside withReplyDispatcher.run, which is the
-    // single wrap point for the whole agent turn.
-    // 🔑 Sync A2A modelName to OpenClaw session store so that session_status
-    // reports the correct model. Without this, session_status returns the
-    // configured default model instead of the A2A-specified one.
-    if (modelName && modelName.trim() !== "" && modelName.toLowerCase() !== "none") {
-      try {
-        const storePath = resolveStorePath();
-        const result = await updateSessionStoreEntry({
-          storePath,
-          sessionKey: route.sessionKey,
-          update: async () => ({
-            providerOverride: "xiaoyiprovider",
-            modelOverride: modelName,
-            modelOverrideSource: "user",
-            model: "",
-            modelProvider: "",
-            contextTokens: 256_000,
-          }),
-        });
-        if (!result) {
-          // Session entry doesn't exist yet (first message, xy_channel
-          // bypasses the standard turn kernel). Create a minimal entry
-          // with the override via updateSessionStore.
-          await updateSessionStore(storePath, (store) => {
-            if (!store[route.sessionKey]) {
-              store[route.sessionKey] = {
-                // sessionId must pass validateSessionId regex /^[a-z0-9][a-z0-9._-]{0,127}$/i
-                // route.sessionKey like "agent:main:direct:xxx" contains colons which are invalid.
-                // Use parsed.sessionId (raw UUID from A2A) which is always safe.
-                sessionId: parsed.sessionId,
-                updatedAt: Date.now(),
-                providerOverride: "xiaoyiprovider",
-                modelOverride: modelName,
-                modelOverrideSource: "user",
-                contextTokens: 256_000,
-              } as any;
-            }
-          });
-          log.log(`[BOT] Created session entry with model override: xiaoyiprovider/${modelName}`);
-        } else {
-          log.log(`[BOT] Patched session store model override: xiaoyiprovider/${modelName}`);
-        }
-      } catch (patchErr) {
-        log.error(`[BOT] Failed to patch session model override:`, patchErr);
-      }
     }
 
     // 🔑 发送初始状态更新
@@ -395,14 +397,38 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
     // File download — for both first message and steer messages
     let mediaPayload: ReturnType<typeof buildXYMediaPayload> = {};
     const fileParts = extractFileParts(parsed.parts);
-    const downloadedFiles = await downloadFilesFromParts(fileParts);
+    const downloadedFiles = await downloadFilesFromParts(fileParts, undefined,
+      modelCapabilities.supportsNativeImages ? { maxImageBytes: NATIVE_IMAGE_MAX_BYTES } : undefined);
     log.log(`[BOT] Downloaded ${downloadedFiles.length} file(s)`);
     mediaPayload = buildXYMediaPayload(downloadedFiles);
+    const imageParts = fileParts.filter(isImageAttachment);
+    let nativeImages: Awaited<ReturnType<typeof loadNativeImages>> = [];
+    if (modelCapabilities.supportsNativeImages && imageParts.length > 0) {
+      try {
+        const downloadedImages = downloadedFiles.filter(isImageAttachment);
+        if (downloadedImages.length !== imageParts.length) {
+          throw new NativeImageInputError("部分图片下载失败或超过大小限制，请重新上传后重试。");
+        }
+        nativeImages = await loadNativeImages(downloadedImages, cfg);
+        log.log(`[MODEL-INPUT] native images expected=${imageParts.length}, loaded=${nativeImages.length}`);
+      } catch (err) {
+        const text = err instanceof NativeImageInputError
+          ? err.message
+          : "图片处理失败，请检查图片格式和大小后重试。";
+        log.error(`[MODEL-INPUT] Native image preparation failed:`, err);
+        await failBeforeDispatch({
+          config, sessionId: parsed.sessionId, taskId: parsed.taskId,
+          messageId: parsed.messageId, text, stepName: "图片处理失败",
+        });
+        return;
+      }
+    }
+    const requiresNewTurn = params.forceNewTurn || nativeImages.length > 0;
 
     // 🔑 对于 steer 消息，将文件路径附加到消息文本中。
     // auto-reply 管道的 steer 注入只携带 prompt 文本（followupRun.prompt），
     // 不携带 mediaPayload，所以模型需要以文本形式看到附件路径。
-    if (isUpdate && mediaPayload.MediaPaths?.length) {
+    if (isUpdate && !requiresNewTurn && mediaPayload.MediaPaths?.length) {
       const fileHint = `\n【用户上传附件】：${JSON.stringify(mediaPayload.MediaPaths)}`;
       textForAgent = `${textForAgent}${fileHint}`;
       log.log(`[BOT] Steer: appended file paths to text`);
@@ -416,18 +442,26 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
     //
     // 直接注入失败时，先等旧 dispatch 收尾，再落回普通 tasks/send 派发：
     // 活跃 run 已关闭或正在退出时，避免新旧 turn 并发争用 session 写锁。
+    // Legacy requests without a capability declaration retain the existing
+    // text fallback policy unless admission explicitly requires a new turn.
+    const strictFullTurn = requiresNewTurn ||
+      (modelCapabilities.source === "request" && Boolean(modelName));
+    let steerFailReason: string | undefined;
     if (isUpdate && route.sessionKey) {
       const previousTaskId = getCurrentTaskId(parsed.sessionId);
       const previousMessageId = getCurrentMessageId(parsed.sessionId);
-      const steerResult = tryDirectSteer({
-        sessionId: parsed.sessionId,
-        sessionKey: route.sessionKey,
-        text: textForAgent,
-        source: "user",
-      });
+      const steerResult = requiresNewTurn
+        ? { ok: false as const, reason: "new-turn-required" }
+        : tryDirectSteer({
+            sessionId: parsed.sessionId,
+            sessionKey: route.sessionKey,
+            text: textForAgent,
+            source: "user",
+          });
       if (steerResult.ok) {
         if (previousTaskId && previousMessageId) {
-          // 只通知端侧关闭旧任务，不取消内部 run，避免影响 steer 后的回复。
+          // Preserve upstream #81: close the previous device task without
+          // canceling the embedded run receiving this text steer.
           try {
             await sendA2AResponse({
               config,
@@ -450,35 +484,118 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
         // completeTask(sessionId) which removes the entire binding.
         return;
       }
-      const steerFailReason = (steerResult as { reason: string }).reason;
+      steerFailReason = (steerResult as { reason: string }).reason;
       log.log(`[BOT-STEER] Direct steer failed (${steerFailReason}), waiting for previous turn before re-dispatch`);
       // 队列关闭或 run 已消失时，旧 dispatch 仍可能持有 session 写锁。
       // 等它完成收尾再开新 turn，避免并发写锁竞争和 60s 超时。
       await waitForPreviousTurnWithTimeoutWarning(params.waitForPreviousTurn, () => {
         log.error(`[BOT-STEER] Previous turn did not settle within ${PREVIOUS_TURN_SETTLE_TIMEOUT_MS}ms; proceeding with fallback dispatch`);
       });
-      registerTask(parsed.sessionId, parsed.taskId, parsed.messageId);
-      log.log(`[BOT-STEER] Previous turn settled, re-dispatching as a new turn`);
+    }
 
-      // 🔑 steer 失败重分发前重绑 sessionKey → 本消息的 A2A 身份。
-      // 首条消息绑定刻意不被 steer 覆盖（见上方 bindSessionKey 注释），但那会让
-      // 新 turn 派生的 subagent 等待态挂在旧 taskId 上：spawn/ended 计数走
-      // sessionKeyIndex（旧身份），onIdle/onSettled/announce 捕获走新 taskId，
-      // 两套身份错位导致 final 帧提前发出、parentSettled 永远缺失、announce
-      // 落 push 兜底。旧 run 已不存在（no-active-run）时重绑定可让三者对齐。
-      // 安全条件：
-      //   - 仅 no-active-run —— queue-rejected 说明旧 run 仍存活，重绑定会
-      //     打断旧 run 的 subagent 跟踪；
-      //   - 无存活等待态 —— 旧 subagent 未归时保持旧绑定，保住旧任务的
-      //     final 交付（新 turn 的 subagent 跟踪退化为已知限制）。
-      if (steerFailReason === "no-active-run" && !hasWaitState(parsed.sessionId)) {
-        bindSessionKey(route.sessionKey, parsed.sessionId, parsed.taskId, parsed.messageId);
-        log.log(`[BOT-STEER] Rebound sessionKey to new taskId (no active run, no pending subagent wait)`);
+    // This check is independent of channel task tracking: the SDK may retain a
+    // streaming run after our task chain has cleared, including canceled turns.
+    if (strictFullTurn) {
+      const readiness = await waitForSdkTurnIdle(route.sessionKey, log);
+      if (readiness !== "idle") {
+        const text = readiness === "timeout"
+          ? "上一条任务仍在处理中，本次请求暂未执行，请稍后重试。"
+          : "暂时无法确认会话状态，本次请求暂未执行，请稍后重试。";
+        log.warn(`[BOT-DISPATCH] Full turn rejected: SDK readiness=${readiness}`);
+        await failBeforeDispatch({
+          config, sessionId: parsed.sessionId, taskId: parsed.taskId,
+          messageId: parsed.messageId, text, stepName: "请求暂未执行",
+        });
+        return;
       }
     }
 
-    if (!isUpdate) {
-      registerTask(parsed.sessionId, parsed.taskId, parsed.messageId);
+    registerTask(parsed.sessionId, parsed.taskId, parsed.messageId);
+    if (!isUpdate || ((steerFailReason === "no-active-run" || strictFullTurn) &&
+        !hasWaitState(parsed.sessionId))) {
+      bindSessionKey(route.sessionKey, parsed.sessionId, parsed.taskId, parsed.messageId);
+    }
+    if (isUpdate) log.log(`[BOT-STEER] Previous turn settled, re-dispatching as a new turn`);
+
+    // Update selection only after new-turn admission; an incoming steer must
+    // never mutate the model selected by an older in-flight run.
+    // ALS only: no registerSession. The sessionContext built below is handed
+    // to runWithSessionContext() inside withReplyDispatcher.run, which is the
+    // single wrap point for the whole agent turn.
+    // 🔑 Sync A2A modelName to OpenClaw session store so that session_status
+    // reports the correct model. Without this, session_status returns the
+    // configured default model instead of the A2A-specified one.
+    if (modelName && modelName.trim() !== "" && modelName.toLowerCase() !== "none") {
+      try {
+        const storePath = resolveStorePath();
+        const result = await updateSessionStoreEntry({
+          storePath,
+          sessionKey: route.sessionKey,
+          update: async () => ({
+            providerOverride: "xiaoyiprovider",
+            modelOverride: modelName,
+            modelOverrideSource: "user",
+            model: "",
+            modelProvider: "",
+            contextTokens: 256_000,
+          }),
+        });
+        if (!result) {
+          // Session entry doesn't exist yet (first message, xy_channel
+          // bypasses the standard turn kernel). Create a minimal entry
+          // with the override via updateSessionStore.
+          await updateSessionStore(storePath, (store) => {
+            if (!store[route.sessionKey]) {
+              store[route.sessionKey] = {
+                // sessionId must pass validateSessionId regex /^[a-z0-9][a-z0-9._-]{0,127}$/i
+                // route.sessionKey like "agent:main:direct:xxx" contains colons which are invalid.
+                // Use parsed.sessionId (raw UUID from A2A) which is always safe.
+                sessionId: parsed.sessionId,
+                updatedAt: Date.now(),
+                providerOverride: "xiaoyiprovider",
+                modelOverride: modelName,
+                modelOverrideSource: "user",
+                contextTokens: 256_000,
+              } as any;
+            }
+          });
+          log.log(`[BOT] Created session entry with model override: xiaoyiprovider/${modelName}`);
+        } else {
+          log.log(`[BOT] Patched session store model override: xiaoyiprovider/${modelName}`);
+        }
+      } catch (patchErr) {
+        log.error(`[BOT] Failed to patch session model override:`, patchErr);
+      }
+    }
+
+    let dispatchCfg = cfg;
+    if (modelCapabilities.supportsNativeImages) {
+      dispatchCfg = {
+        ...dispatchCfg,
+        tools: {
+          ...dispatchCfg.tools,
+          media: {
+            ...dispatchCfg.tools?.media,
+            image: { ...dispatchCfg.tools?.media?.image, enabled: false },
+          },
+        },
+      };
+    }
+    if (requiresNewTurn) {
+      // Runtime queue resolution accepts plugin channel ids as overrides.
+      const byChannel = { ...dispatchCfg.messages?.queue?.byChannel };
+      byChannel["xiaoyi-channel"] = "followup";
+      dispatchCfg = {
+        ...dispatchCfg,
+        messages: {
+          ...dispatchCfg.messages,
+          queue: {
+            ...dispatchCfg.messages?.queue,
+            mode: "followup",
+            byChannel,
+          },
+        },
+      };
     }
 
     // Resolve envelope format options (following feishu pattern)
@@ -576,6 +693,7 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
       appVer: appVer ?? undefined,
       sdkApiVersion: sdkApiVersion ?? undefined,
       modelName,
+      modelCapabilities,
       runCrossTaskContext: runCrossTaskContext ?? undefined,
     };
 
@@ -649,11 +767,14 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
             log.log(`[ALS-PROOF] bot entered dispatch scope sessionId=${(sessionContext as any).sessionId} taskId=${(sessionContext as any).taskId} isSteer=${isUpdate}`);
             log.log(`[BOT-DISPATCH] dispatchReplyFromConfig starting, body.length=${(ctxPayload.Body as string)?.length ?? 0}`);
             try {
+              params.onTurnAdmitted?.();
               const result = await core.channel.reply.dispatchReplyFromConfig({
                 ctx: ctxPayload,
-                cfg,
+                cfg: dispatchCfg,
                 dispatcher,
-                replyOptions,
+                replyOptions: nativeImages.length > 0
+                  ? { ...replyOptions, images: nativeImages, imageOrder: nativeImages.map(() => "inline" as const) }
+                  : replyOptions,
               });
 
               log.log(`[BOT-DISPATCH] dispatchReplyFromConfig returned, result=${JSON.stringify(result)}`);
@@ -790,7 +911,7 @@ function buildXYMediaPayload(
   const first = mediaList[0];
   const mediaPaths = mediaList.map((media) => media.path);
   const mediaUrls = mediaList.map((media) => media.uri);
-  const mediaTypes = mediaList.map((media) => media.mimeType).filter(Boolean);
+  const mediaTypes = mediaList.map((media) => media.mimeType || "application/octet-stream");
   return {
     MediaPath: first?.path,
     MediaType: first?.mimeType,
