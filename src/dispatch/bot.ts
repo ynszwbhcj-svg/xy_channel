@@ -10,11 +10,13 @@ import {
 import { getXYRuntime } from "../runtime.js";
 import { createXYReplyDispatcher } from "./reply-dispatcher.js";
 import { createLegacyReplyDispatcher } from "../legacy/reply-dispatcher.js";
-import { sendStatusUpdate as legacySendStatusUpdate } from "../legacy/formatter.js";
-import { parseA2AMessage, extractTextFromParts, extractFileParts, extractPushId, extractDeviceType, extractAppVer, extractSdkApiVersion, extractModelName, extractTriggerData, extractRunCrossTaskContext, isClearContextMessage, isTasksCancelMessage } from "../parser.js";
+import { sendStatusUpdate as legacySendStatusUpdate, sendA2AResponse as legacySendA2AResponse } from "../legacy/formatter.js";
+import { parseA2AMessage, extractTextFromParts, extractFileParts, extractPushId, extractDeviceType, extractAppVer, extractSdkApiVersion, extractModelName, extractModelInput, extractTriggerData, extractRunCrossTaskContext, isClearContextMessage, isTasksCancelMessage } from "../parser.js";
 import { downloadFilesFromParts } from "../file-download.js";
+import { isImageAttachment } from "../model-input.js";
+import { loadNativeImages, NATIVE_IMAGE_MAX_BYTES, NativeImageInputError } from "../native-images.js";
 import { resolveXYConfig } from "../config.js";
-import { sendClearContextResponse, sendTasksCancelResponse, sendA2AResponse, sendDisplayTaskCardData } from "../formatter.js";
+import { sendClearContextResponse, sendTasksCancelResponse, sendA2AResponse, sendDisplayTaskCardData, sendStatusUpdate } from "../formatter.js";
 import {
   appendSelfEvolutionKeywordNudge,
   shouldNudgeForSelfEvolutionKeyword,
@@ -50,7 +52,7 @@ import {
   getOrCreateSession,
 } from "../conversation/conversation-manager.js";
 import { clearPendingApproval } from "../approval-bridge.js";
-import type { A2AJsonRpcRequest } from "../types.js";
+import type { A2AJsonRpcRequest, XYChannelConfig } from "../types.js";
 import { logger } from "../utils/logger.js";
 
 // ── steer 回退重分发前的 channel 侧就绪判定 ───────────────────────
@@ -97,6 +99,67 @@ async function waitForChannelTurnReady(
   }
 }
 
+const SDK_TURN_IDLE_TIMEOUT_MS = 30_000;
+
+/** A full image/model turn must not enter the SDK's text-only steer branch. */
+async function waitForSdkTurnIdle(
+  sessionKey: string | undefined,
+  log: ReturnType<typeof logger.withContext>,
+): Promise<"idle" | "timeout" | "unavailable"> {
+  if (!sessionKey) return "unavailable";
+  const deadline = Date.now() + SDK_TURN_IDLE_TIMEOUT_MS;
+  for (;;) {
+    try {
+      if (!resolveActiveEmbeddedRunSessionId(sessionKey)) return "idle";
+    } catch (err) {
+      log.error(`[BOT-DISPATCH] Cannot verify SDK turn readiness:`, err);
+      return "unavailable";
+    }
+    if (Date.now() >= deadline) return "timeout";
+    await new Promise<void>((resolve) => setTimeout(resolve, CHANNEL_READY_POLL_MS));
+  }
+}
+
+/** Close only the rejected incoming task; an older live run keeps its state. */
+async function failBeforeDispatch(params: {
+  config: XYChannelConfig;
+  sessionId: string;
+  taskId: string;
+  messageId: string;
+  text: string;
+  stepName: string;
+}): Promise<void> {
+  const { config, sessionId, taskId, messageId, text, stepName } = params;
+  const outboundQueue = getOrCreateSession(sessionId).outboundQueue;
+  const legacy = isLegacyAppVersion(taskId);
+  outboundQueue.enqueue({
+    taskId,
+    label: "inbound-failure-status",
+    send: () => (legacy ? legacySendStatusUpdate : sendStatusUpdate)({
+      config, sessionId, taskId, messageId, text, state: "failed",
+    }),
+  });
+  if (!legacy) {
+    outboundQueue.enqueue({
+      taskId,
+      label: "inbound-failure-card",
+      send: () => sendDisplayTaskCardData({
+        config, sessionId, taskId, messageId, index: 1, stepName, isFinal: true,
+      }),
+    });
+  }
+  outboundQueue.enqueue({
+    taskId,
+    label: "inbound-failure-final",
+    send: () => (legacy ? legacySendA2AResponse : sendA2AResponse)({
+      config, sessionId, taskId, messageId, text, append: false, final: true,
+      errorCode: 99921111, errorMessage: text,
+    }),
+  });
+  await outboundQueue.whenIdle();
+  completeTask(sessionId, taskId);
+}
+
 /**
  * Parameters for handling an XY message.
  */
@@ -110,6 +173,10 @@ export interface HandleXYMessageParams {
   acquireDispatchInitGate?: () => Promise<() => void>;
   /** steer 回退前等待同 session 的旧 dispatch 收尾，避免并发争用会话写锁。 */
   waitForPreviousTurn?: () => Promise<void>;
+  /** Attachments/model changes must enter a complete turn instead of text-only steer. */
+  forceNewTurn?: boolean;
+  /** Commit the monitor's model snapshot only after this complete turn is admitted. */
+  onTurnAdmitted?: () => void;
 }
 
 /**
@@ -304,6 +371,8 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
     if (modelName) {
       log.log(`[BOT] Extracted modelName: ${modelName}`);
     }
+    const modelCapabilities = extractModelInput(parsed.parts);
+    log.log(`[MODEL-INPUT] source=${modelCapabilities.source}, input=${modelCapabilities.input.join(",")}`);
     const runCrossTaskContext = extractRunCrossTaskContext(parsed.parts);
 
     // Resolve configuration (needed for status updates)
@@ -362,18 +431,8 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
 
     log.log(`[BOT] Resolved route, sessionKey=${route.sessionKey}`);
 
-    // Register sessionKey→A2A sessionId mapping for subagent hook translation.
-    // Hooks receive openclaw sessionKey (e.g. "agent:main:direct:xxx") but
-    // xy_channel operates on A2A sessionId. This bridge lets subagent_spawned/
-    // subagent_ended hooks find the correct wait state.
-    // IMPORTANT: Only register on the FIRST message. Steer messages have a
-    // different taskId — overwriting the mapping would break subagent wait
-    // state tracking for the original message's subagents.
-    // 例外：steer 直接注入失败（no-active-run）且无存活等待态时，下方
-    // steer 重分发路径会重绑定到新 taskId（旧 run 已消失，无历史等待态需保护）。
-    if (!isUpdate) {
-      bindSessionKey(route.sessionKey, parsed.sessionId, parsed.taskId, parsed.messageId);
-    }
+    // Bind sessionKey→A2A identity only after full-turn admission below.
+    // Direct steer preserves the older run's subagent ownership mapping.
 
     // Check for ACP runtime binding on this A2A conversation
     const runtimeRoute = resolveRuntimeConversationBindingRoute({
@@ -391,6 +450,165 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
       );
     }
 
+    // Extract text and files from parts
+    const text = extractTextFromParts(parsed.parts);
+    let textForAgent = text || "";
+
+    // Self-evolution keyword nudge — only for real user messages
+    if (route.sessionKey && textForAgent) {
+      try {
+        const selfEvolutionEnabled = await selfEvolutionManager.isEnabled();
+        if (selfEvolutionEnabled && shouldNudgeForSelfEvolutionKeyword(textForAgent)) {
+          const shouldNudge = toolCallNudgeManager.tryMarkKeywordNudge(route.sessionKey);
+          log.log(
+            `[SELF_EVOLUTION] Keyword check hit during inbound build: sessionKey=${route.sessionKey}, shouldNudge=${shouldNudge}`,
+          );
+          if (shouldNudge) {
+            const augmented = appendSelfEvolutionKeywordNudge(textForAgent);
+            textForAgent = augmented.text;
+            if (augmented.appended) {
+              log.log(
+                `[SELF_EVOLUTION] Keyword-triggered inline nudge appended: sessionKey=${route.sessionKey}`,
+              );
+            }
+          }
+        }
+      } catch (selfEvolutionError) {
+        log.error(
+          `[SELF_EVOLUTION] Failed to append inline keyword nudge: ${String(selfEvolutionError)}`,
+        );
+      }
+    }
+    // ── Build message and dispatch via auto-reply pipeline ──────────
+    // 首条消息和 steer 回退都走此统一 dispatch 路径。
+
+    // File download — for both first message and steer messages
+    let mediaPayload: ReturnType<typeof buildXYMediaPayload> = {};
+    const fileParts = extractFileParts(parsed.parts);
+    const downloadedFiles = await downloadFilesFromParts(fileParts, undefined,
+      modelCapabilities.supportsNativeImages ? { maxImageBytes: NATIVE_IMAGE_MAX_BYTES } : undefined);
+    log.log(`[BOT] Downloaded ${downloadedFiles.length} file(s)`);
+    mediaPayload = buildXYMediaPayload(downloadedFiles);
+    const imageParts = fileParts.filter(isImageAttachment);
+    let nativeImages: Awaited<ReturnType<typeof loadNativeImages>> = [];
+    if (modelCapabilities.supportsNativeImages && imageParts.length > 0) {
+      try {
+        const downloadedImages = downloadedFiles.filter(isImageAttachment);
+        if (downloadedImages.length !== imageParts.length) {
+          throw new NativeImageInputError("部分图片下载失败或超过大小限制，请重新上传后重试。");
+        }
+        nativeImages = await loadNativeImages(downloadedImages, cfg);
+        log.log(`[MODEL-INPUT] native images expected=${imageParts.length}, loaded=${nativeImages.length}`);
+      } catch (err) {
+        const text = err instanceof NativeImageInputError
+          ? err.message
+          : "图片处理失败，请检查图片格式和大小后重试。";
+        log.error(`[MODEL-INPUT] Native image preparation failed:`, err);
+        await failBeforeDispatch({
+          config, sessionId: parsed.sessionId, taskId: parsed.taskId,
+          messageId: parsed.messageId, text, stepName: "图片处理失败",
+        });
+        return;
+      }
+    }
+    const requiresNewTurn = params.forceNewTurn || nativeImages.length > 0;
+
+    // 🔑 对于 steer 消息，将文件路径附加到消息文本中。
+    // auto-reply 管道的 steer 注入只携带 prompt 文本（followupRun.prompt），
+    // 不携带 mediaPayload，所以模型需要以文本形式看到附件路径。
+    if (isUpdate && !requiresNewTurn && mediaPayload.MediaPaths?.length) {
+      const fileHint = `\n【用户上传附件】：${JSON.stringify(mediaPayload.MediaPaths)}`;
+      textForAgent = `${textForAgent}${fileHint}`;
+      log.log(`[BOT] Steer: appended file paths to text`);
+    }
+
+    // 🔑 Direct steer: bypass dispatchReplyFromConfig entirely and inject the
+    // message directly into the active embedded agent run (via 对话管理层
+    // steer 服务). This avoids the per-session ReplyOperation lock in
+    // admitReplyTurn which would otherwise block the steer message until the
+    // first message completes — making steer indistinguishable from a followup.
+    //
+    // 直接注入失败时，先等旧 dispatch 收尾，再落回普通 tasks/send 派发：
+    // 活跃 run 已关闭或正在退出时，避免新旧 turn 并发争用 session 写锁。
+    // Legacy requests without a capability declaration retain the existing
+    // text fallback policy unless admission explicitly requires a new turn.
+    const strictFullTurn = requiresNewTurn ||
+      (modelCapabilities.source === "request" && Boolean(modelName));
+    let steerFailReason: string | undefined;
+    if (isUpdate && route.sessionKey) {
+      const previousTaskId = getCurrentTaskId(parsed.sessionId);
+      const previousMessageId = getCurrentMessageId(parsed.sessionId);
+      const steerResult = requiresNewTurn
+        ? { ok: false as const, reason: "new-turn-required" }
+        : tryDirectSteer({
+            sessionId: parsed.sessionId,
+            sessionKey: route.sessionKey,
+            text: textForAgent,
+            source: "user",
+          });
+      if (steerResult.ok) {
+        if (previousTaskId && previousMessageId) {
+          // Preserve upstream #81: close the previous device task without
+          // canceling the embedded run receiving this text steer.
+          try {
+            await sendA2AResponse({
+              config,
+              sessionId: parsed.sessionId,
+              taskId: previousTaskId,
+              messageId: previousMessageId,
+              text: "",
+              append: true,
+              final: true,
+            });
+          } catch (err) {
+            log.error(`[BOT-STEER] Failed to close previous device task:`, err);
+          }
+        }
+        registerTask(parsed.sessionId, parsed.taskId, parsed.messageId);
+        log.log(`[BOT-STEER] Direct steer succeeded — message injected into active run`);
+        // Steer message taskId stays in the binding so getActiveTaskId()
+        // resolves to the latest taskId for onPartialReply replies.
+        // Cleanup happens via the original dispatcher's onIdleComplete →
+        // completeTask(sessionId) which removes the entire binding.
+        return;
+      }
+      steerFailReason = (steerResult as { reason: string }).reason;
+      log.log(`[BOT-STEER] Direct steer failed (${steerFailReason}), waiting for previous turn before re-dispatch`);
+      // 队列关闭或 run 已消失时，旧 dispatch 仍可能持有 session 写锁。
+      // 等它完成收尾再开新 turn，避免并发写锁竞争和 60s 超时。
+      await params.waitForPreviousTurn?.();
+      // Preserve the existing permissive 3s fallback only for legacy text turns.
+      if (!strictFullTurn) {
+        await waitForChannelTurnReady(parsed.sessionId, route.sessionKey, log);
+      }
+    }
+
+    // This check is independent of channel task tracking: the SDK may retain a
+    // streaming run after our task chain has cleared, including canceled turns.
+    if (strictFullTurn) {
+      const readiness = await waitForSdkTurnIdle(route.sessionKey, log);
+      if (readiness !== "idle") {
+        const text = readiness === "timeout"
+          ? "上一条任务仍在处理中，本次请求暂未执行，请稍后重试。"
+          : "暂时无法确认会话状态，本次请求暂未执行，请稍后重试。";
+        log.warn(`[BOT-DISPATCH] Full turn rejected: SDK readiness=${readiness}`);
+        await failBeforeDispatch({
+          config, sessionId: parsed.sessionId, taskId: parsed.taskId,
+          messageId: parsed.messageId, text, stepName: "请求暂未执行",
+        });
+        return;
+      }
+    }
+
+    registerTask(parsed.sessionId, parsed.taskId, parsed.messageId);
+    if (!isUpdate || ((steerFailReason === "no-active-run" || strictFullTurn) &&
+        !hasWaitState(parsed.sessionId))) {
+      bindSessionKey(route.sessionKey, parsed.sessionId, parsed.taskId, parsed.messageId);
+    }
+    if (isUpdate) log.log(`[BOT-STEER] Previous turn settled, re-dispatching as a new turn`);
+
+    // Update selection only after new-turn admission; an incoming steer must
+    // never mutate the model selected by an older in-flight run.
     // ALS only: no registerSession. The sessionContext built below is handed
     // to runWithSessionContext() inside withReplyDispatcher.run, which is the
     // single wrap point for the whole agent turn.
@@ -440,126 +658,34 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
       }
     }
 
-    // Extract text and files from parts
-    const text = extractTextFromParts(parsed.parts);
-    let textForAgent = text || "";
-
-    // Self-evolution keyword nudge — only for real user messages
-    if (route.sessionKey && textForAgent) {
-      try {
-        const selfEvolutionEnabled = await selfEvolutionManager.isEnabled();
-        if (selfEvolutionEnabled && shouldNudgeForSelfEvolutionKeyword(textForAgent)) {
-          const shouldNudge = toolCallNudgeManager.tryMarkKeywordNudge(route.sessionKey);
-          log.log(
-            `[SELF_EVOLUTION] Keyword check hit during inbound build: sessionKey=${route.sessionKey}, shouldNudge=${shouldNudge}`,
-          );
-          if (shouldNudge) {
-            const augmented = appendSelfEvolutionKeywordNudge(textForAgent);
-            textForAgent = augmented.text;
-            if (augmented.appended) {
-              log.log(
-                `[SELF_EVOLUTION] Keyword-triggered inline nudge appended: sessionKey=${route.sessionKey}`,
-              );
-            }
-          }
-        }
-      } catch (selfEvolutionError) {
-        log.error(
-          `[SELF_EVOLUTION] Failed to append inline keyword nudge: ${String(selfEvolutionError)}`,
-        );
-      }
+    let dispatchCfg = cfg;
+    if (modelCapabilities.supportsNativeImages) {
+      dispatchCfg = {
+        ...dispatchCfg,
+        tools: {
+          ...dispatchCfg.tools,
+          media: {
+            ...dispatchCfg.tools?.media,
+            image: { ...dispatchCfg.tools?.media?.image, enabled: false },
+          },
+        },
+      };
     }
-    // ── Build message and dispatch via auto-reply pipeline ──────────
-    // 首条消息和 steer 回退都走此统一 dispatch 路径。
-
-    // File download — for both first message and steer messages
-    let mediaPayload: ReturnType<typeof buildXYMediaPayload> = {};
-    const fileParts = extractFileParts(parsed.parts);
-    const downloadedFiles = await downloadFilesFromParts(fileParts);
-    log.log(`[BOT] Downloaded ${downloadedFiles.length} file(s)`);
-    mediaPayload = buildXYMediaPayload(downloadedFiles);
-
-    // 🔑 对于 steer 消息，将文件路径附加到消息文本中。
-    // auto-reply 管道的 steer 注入只携带 prompt 文本（followupRun.prompt），
-    // 不携带 mediaPayload，所以模型需要以文本形式看到附件路径。
-    if (isUpdate && mediaPayload.MediaPaths?.length) {
-      const fileHint = `\n【用户上传附件】：${JSON.stringify(mediaPayload.MediaPaths)}`;
-      textForAgent = `${textForAgent}${fileHint}`;
-      log.log(`[BOT] Steer: appended file paths to text`);
-    }
-
-    // 🔑 Direct steer: bypass dispatchReplyFromConfig entirely and inject the
-    // message directly into the active embedded agent run (via 对话管理层
-    // steer 服务). This avoids the per-session ReplyOperation lock in
-    // admitReplyTurn which would otherwise block the steer message until the
-    // first message completes — making steer indistinguishable from a followup.
-    //
-    // 直接注入失败时，先等旧 dispatch 收尾，再落回普通 tasks/send 派发：
-    // 活跃 run 已关闭或正在退出时，避免新旧 turn 并发争用 session 写锁。
-    if (isUpdate && route.sessionKey) {
-      const previousTaskId = getCurrentTaskId(parsed.sessionId);
-      const previousMessageId = getCurrentMessageId(parsed.sessionId);
-      const steerResult = tryDirectSteer({
-        sessionId: parsed.sessionId,
-        sessionKey: route.sessionKey,
-        text: textForAgent,
-        source: "user",
-      });
-      if (steerResult.ok) {
-        if (previousTaskId && previousMessageId) {
-          // 只通知端侧关闭旧任务，不取消内部 run，避免影响 steer 后的回复。
-          try {
-            await sendA2AResponse({
-              config,
-              sessionId: parsed.sessionId,
-              taskId: previousTaskId,
-              messageId: previousMessageId,
-              text: "",
-              append: true,
-              final: true,
-            });
-          } catch (err) {
-            log.error(`[BOT-STEER] Failed to close previous device task:`, err);
-          }
-        }
-        registerTask(parsed.sessionId, parsed.taskId, parsed.messageId);
-        log.log(`[BOT-STEER] Direct steer succeeded — message injected into active run`);
-        // Steer message taskId stays in the binding so getActiveTaskId()
-        // resolves to the latest taskId for onPartialReply replies.
-        // Cleanup happens via the original dispatcher's onIdleComplete →
-        // completeTask(sessionId) which removes the entire binding.
-        return;
-      }
-      const steerFailReason = (steerResult as { reason: string }).reason;
-      log.log(`[BOT-STEER] Direct steer failed (${steerFailReason}), waiting for previous turn before re-dispatch`);
-      // 队列关闭或 run 已消失时，旧 dispatch 仍可能持有 session 写锁。
-      // 等它完成收尾再开新 turn，避免并发写锁竞争和 60s 超时。
-      await params.waitForPreviousTurn?.();
-      // 等 channel 侧旧 turn 收尾 + 上游活跃 run 退出，避免新 turn 被排成 followup。
-      // 超时放行、不重试；残余竞态由 reply-dispatcher 的空 idle 延后收尾兜底。
-      await waitForChannelTurnReady(parsed.sessionId, route.sessionKey, log);
-      registerTask(parsed.sessionId, parsed.taskId, parsed.messageId);
-      log.log(`[BOT-STEER] Previous turn settled, re-dispatching as a new turn`);
-
-      // 🔑 steer 失败重分发前重绑 sessionKey → 本消息的 A2A 身份。
-      // 首条消息绑定刻意不被 steer 覆盖（见上方 bindSessionKey 注释），但那会让
-      // 新 turn 派生的 subagent 等待态挂在旧 taskId 上：spawn/ended 计数走
-      // sessionKeyIndex（旧身份），onIdle/onSettled/announce 捕获走新 taskId，
-      // 两套身份错位导致 final 帧提前发出、parentSettled 永远缺失、announce
-      // 落 push 兜底。旧 run 已不存在（no-active-run）时重绑定可让三者对齐。
-      // 安全条件：
-      //   - 仅 no-active-run —— queue-rejected 说明旧 run 仍存活，重绑定会
-      //     打断旧 run 的 subagent 跟踪；
-      //   - 无存活等待态 —— 旧 subagent 未归时保持旧绑定，保住旧任务的
-      //     final 交付（新 turn 的 subagent 跟踪退化为已知限制）。
-      if (steerFailReason === "no-active-run" && !hasWaitState(parsed.sessionId)) {
-        bindSessionKey(route.sessionKey, parsed.sessionId, parsed.taskId, parsed.messageId);
-        log.log(`[BOT-STEER] Rebound sessionKey to new taskId (no active run, no pending subagent wait)`);
-      }
-    }
-
-    if (!isUpdate) {
-      registerTask(parsed.sessionId, parsed.taskId, parsed.messageId);
+    if (requiresNewTurn) {
+      // Runtime queue resolution accepts plugin channel ids as overrides.
+      const byChannel = { ...dispatchCfg.messages?.queue?.byChannel };
+      byChannel["xiaoyi-channel"] = "followup";
+      dispatchCfg = {
+        ...dispatchCfg,
+        messages: {
+          ...dispatchCfg.messages,
+          queue: {
+            ...dispatchCfg.messages?.queue,
+            mode: "followup",
+            byChannel,
+          },
+        },
+      };
     }
 
     // Resolve envelope format options (following feishu pattern)
@@ -673,6 +799,7 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
       appVer: appVer ?? undefined,
       sdkApiVersion: sdkApiVersion ?? undefined,
       modelName,
+      modelCapabilities,
       runCrossTaskContext: runCrossTaskContext ?? undefined,
     };
 
@@ -755,11 +882,14 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
             log.log(`[ALS-PROOF] bot entered dispatch scope sessionId=${(sessionContext as any).sessionId} taskId=${(sessionContext as any).taskId} isSteer=${isUpdate}`);
             log.log(`[BOT-DISPATCH] dispatchReplyFromConfig starting, body.length=${(ctxPayload.Body as string)?.length ?? 0}`);
             try {
+              params.onTurnAdmitted?.();
               const result = await core.channel.reply.dispatchReplyFromConfig({
                 ctx: ctxPayload,
-                cfg,
+                cfg: dispatchCfg,
                 dispatcher,
-                replyOptions,
+                replyOptions: nativeImages.length > 0
+                  ? { ...replyOptions, images: nativeImages, imageOrder: nativeImages.map(() => "inline" as const) }
+                  : replyOptions,
               });
 
               log.log(`[BOT-DISPATCH] dispatchReplyFromConfig returned, result=${JSON.stringify(result)}`);
@@ -896,7 +1026,7 @@ function buildXYMediaPayload(
   const first = mediaList[0];
   const mediaPaths = mediaList.map((media) => media.path);
   const mediaUrls = mediaList.map((media) => media.uri);
-  const mediaTypes = mediaList.map((media) => media.mimeType).filter(Boolean);
+  const mediaTypes = mediaList.map((media) => media.mimeType || "application/octet-stream");
   return {
     MediaPath: first?.path,
     MediaType: first?.mimeType,

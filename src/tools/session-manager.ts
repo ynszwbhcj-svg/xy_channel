@@ -12,6 +12,7 @@
 // 不需要 getCurrentSessionContext。所以这里不保留任何全局回退。
 import { AsyncLocalStorage } from "async_hooks";
 import type { RunCrossTaskContext, SentFileCard, XYChannelConfig } from "../types.js";
+import type { ModelInputCapabilities } from "../model-input.js";
 import { logger } from "../utils/logger.js";
 import { getCurrentTaskId, getCurrentMessageId } from "../conversation/conversation-manager.js";
 
@@ -30,6 +31,8 @@ export interface SessionContext {
   /** Model name extracted from A2A user variables (variables.clientVariables.modelName).
    *  When set, provider.ts replaces model.id in the OpenAI request body. */
   modelName?: string;
+  /** Current A2A request's declared input capabilities; never inherited from a previous turn. */
+  modelCapabilities?: ModelInputCapabilities;
   runCrossTaskContext?: RunCrossTaskContext;
   /** When true, this context was created for a cron/scheduled task execution.
    *  Tools should use the push channel instead of WebSocket sendCommand. */
