@@ -219,6 +219,92 @@ describe("bot steer fallback sequencing", () => {
     }));
   });
 
+  it("logs a timeout error and dispatches after waiting 70 seconds", async () => {
+    vi.useFakeTimers();
+    try {
+      mocks.tryDirectSteer.mockReturnValue({ ok: false, reason: "queue-rejected" });
+
+      const promise = handleXYMessage({
+        cfg: {},
+        runtime: { error: mocks.error },
+        message,
+        accountId: "default",
+        waitForPreviousTurn: () => new Promise<void>(() => {}),
+      });
+      await vi.advanceTimersByTimeAsync(69_999);
+
+      expect(mocks.error).not.toHaveBeenCalledWith(
+        expect.stringContaining("Previous turn did not settle"),
+      );
+      expect(mocks.createXYReplyDispatcher).not.toHaveBeenCalled();
+      expect(getCurrentTaskId("session-steer")).toBe("task-old");
+
+      await vi.advanceTimersByTimeAsync(1);
+      await promise;
+
+      expect(mocks.error).toHaveBeenCalledWith(
+        "[BOT-STEER] Previous turn did not settle within 70000ms; proceeding with fallback dispatch",
+      );
+      expect(mocks.dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+      expect(getCurrentTaskId("session-steer")).toBe("task-new");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([true, false])("keeps native images safe after upstream's 70s wait (SDK active=%s)", async (sdkStillActive) => {
+    vi.useFakeTimers();
+    try {
+      const file = { name: "native.png", mimeType: "image/png", uri: "https://example.test/native.png" };
+      const images = [{ type: "image", data: "native-image", mimeType: "image/png" }];
+      mocks.extractModelInput.mockReturnValue({ input: ["text", "image"], supportsNativeImages: true, source: "request" });
+      mocks.extractModelName.mockReturnValue("Vision_Model");
+      mocks.extractFileParts.mockReturnValue([file]);
+      mocks.downloadFilesFromParts.mockResolvedValue([{ ...file, path: "/tmp/xy_channel/native.png" }]);
+      mocks.loadNativeImages.mockResolvedValue(images);
+      mocks.resolveActiveEmbeddedRunSessionId.mockReturnValue(sdkStillActive ? "old-sdk-run" : undefined);
+      const onTurnAdmitted = vi.fn();
+      const pending = handleXYMessage({
+        cfg: { messages: { queue: { mode: "steer" } } }, runtime: { error: mocks.error },
+        message, accountId: "default", onTurnAdmitted,
+        waitForPreviousTurn: () => new Promise<void>(() => {}),
+      });
+
+      await vi.advanceTimersByTimeAsync(69_999);
+      expect(mocks.dispatchReplyFromConfig).not.toHaveBeenCalled();
+      expect(mocks.updateSessionStoreEntry).not.toHaveBeenCalled();
+      expect(getCurrentTaskId("session-steer")).toBe("task-old");
+      await vi.advanceTimersByTimeAsync(1);
+      expect(mocks.error).toHaveBeenCalledWith(
+        "[BOT-STEER] Previous turn did not settle within 70000ms; proceeding with fallback dispatch",
+      );
+      expect(mocks.tryDirectSteer).not.toHaveBeenCalled();
+
+      if (sdkStillActive) {
+        await vi.advanceTimersByTimeAsync(29_999);
+        expect(mocks.dispatchReplyFromConfig).not.toHaveBeenCalled();
+        expect(mocks.updateSessionStoreEntry).not.toHaveBeenCalled();
+        expect(onTurnAdmitted).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(1);
+        await pending;
+        expect(mocks.sendA2AResponse).toHaveBeenCalledWith(expect.objectContaining({
+          final: true, text: expect.stringContaining("暂未执行"),
+        }));
+        expect(getCurrentTaskId("session-steer")).toBe("task-old");
+      } else {
+        await pending;
+        expect(mocks.dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+        expect(mocks.dispatchReplyFromConfig.mock.calls[0][0].replyOptions.images).toEqual(images);
+        expect(mocks.dispatchReplyFromConfig.mock.calls[0][0].cfg.messages.queue.mode).toBe("followup");
+        expect(onTurnAdmitted).toHaveBeenCalledTimes(1);
+        expect(getCurrentTaskId("session-steer")).toBe("task-new");
+      }
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
   it("direct success closes the previous device task without a replacement dispatch", async () => {
     mocks.tryDirectSteer.mockReturnValue({ ok: true, mode: "direct" });
     const waitForPreviousTurn = vi.fn();
