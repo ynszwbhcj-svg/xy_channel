@@ -17,7 +17,6 @@ import { createBeforePromptBuildHandler } from "./src/skill-retriever/hooks.js";
 import { normalizeToolRetrieverConfig } from "./src/skill-retriever/config.js";
 import { registerCLIHook } from "./src/tools/hmos-cli.js";
 import { recoverCronState } from "./src/cron-recovery.js";
-import { registerSessionLockGuard } from "./src/session-lock-guard/integration.js";
 import type { CronRecoveryResult } from "./src/cron-recovery.js";
 import { writeCronRunLog } from "./src/utils/cron-run-logger.js";
 import { writeSkillUsage } from "./src/utils/skills-logger.js";
@@ -570,10 +569,6 @@ function registerFullHooks(api: OpenClawPluginApi) {
     return beforePromptBuildHandler(event, ctx);
   });
   registerSelfEvolutionToolResultNudge(api);
-
-  // SESSION LOCK GUARD: 旁路订阅 lifecycle 错误事件，识别会话写锁泄漏并借
-  // supervisord 重启 gateway。不进入 dispatch 主链路，不影响任何响应帧。
-  registerSessionLockGuard(api);
 }
 
 const plugin: OpenClawPluginDefinition = definePluginEntry({
