@@ -75,6 +75,50 @@ function splitMixedReasoningFrames(payload: Record<string, any>): Array<Record<s
 }
 
 /**
+ * 生成日志用的 msgDetail 精简版：text / reasoningText / reference 的内容
+ * 替换为 *** 并标注原始大小，避免全量打印刷屏；其余字段原样保留。
+ * 沿路径构造新对象，不修改实际发送的 frame。
+ */
+function buildLoggableMsgDetail(frame: Record<string, any>): string {
+  const parts = frame?.result?.artifact?.parts;
+  let logFrame = frame;
+  if (Array.isArray(parts)) {
+    logFrame = {
+      ...frame,
+      result: {
+        ...frame.result,
+        artifact: {
+          ...frame.result.artifact,
+          parts: parts.map((p: any) => {
+            if (p?.kind === "text" && typeof p.text === "string") {
+              return { ...p, text: `***(len=${p.text.length})` };
+            }
+            if (p?.kind === "reasoningText" && typeof p.reasoningText === "string") {
+              return { ...p, reasoningText: `***(len=${p.reasoningText.length})` };
+            }
+            // reference 引用数据（kind:"data" 且带 data.reference）：
+            // 整条引用块替换为 ***，标注条目数与序列化长度
+            if (p?.kind === "data" && p.data?.reference !== undefined) {
+              const ref = p.data.reference;
+              const items = Array.isArray(ref?.items) ? ref.items.length : 0;
+              return {
+                ...p,
+                data: {
+                  ...p.data,
+                  reference: `***(items=${items}, len=${JSON.stringify(ref).length})`,
+                },
+              };
+            }
+            return p;
+          }),
+        },
+      },
+    };
+  }
+  return JSON.stringify({ ...logFrame, hostname: os.hostname() });
+}
+
+/**
  * 发送一帧 A2A agent_response 到 xy server。
  * 统一封装 OutboundWebSocketMessage 信封（msgType/agentId/hostname）。
  */
@@ -91,12 +135,13 @@ export async function sendWsFrame(params: SendWsFrameParams): Promise<void> {
       taskId,
       msgDetail: JSON.stringify({ ...frame, hostname: os.hostname() }),
     };
-    // 完整出站 A2A 日志：每一帧都打印信封摘要 + msgDetail 全量 + 内嵌 command
-    // 单独打印（内容字段已在组帧时脱敏，日志不会额外泄露敏感信息）
+    // 出站 A2A 日志：每一帧打印信封摘要 + msgDetail 精简版（text/reasoningText
+    // 内容替换为 *** 并标注长度）+ 内嵌 command 单独打印
+    // （内容字段已在组帧时脱敏，日志不会额外泄露敏感信息）
     log.log(
       `[A2A-OUT] msgType=${outboundMessage.msgType}, agentId=${outboundMessage.agentId}, sessionId=${sessionId}, taskId=${taskId}, size=${outboundMessage.msgDetail.length}`,
     );
-    log.log(`[A2A-OUT] msgDetail=${outboundMessage.msgDetail}`);
+    log.log(`[A2A-OUT] msgDetail=${buildLoggableMsgDetail(frame)}`);
     const commands = extractCommands(frame);
     if (commands.length > 0) {
       log.log(`[A2A-OUT] commands=${JSON.stringify(commands)}`);
