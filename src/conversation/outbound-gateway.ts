@@ -11,7 +11,7 @@ import { XYPushService } from "../transport/push.js";
 import { getAllPushIds } from "../utils/pushid-manager.js";
 import { getOrCreateConvId } from "../utils/cron-conv-map.js";
 import { recordSentStreamingTextId } from "../utils/streaming-text-id.js";
-import { logger } from "../utils/logger.js";
+import { logger, isA2AOutLogEnabled } from "../utils/logger.js";
 import type {
   XYChannelConfig,
   OutboundWebSocketMessage,
@@ -54,7 +54,9 @@ function splitMixedReasoningFrames(payload: Record<string, any>): Array<Record<s
   const hasText = parts.some((p: any) => p?.kind === "text");
   if (!hasReasoning || !hasText) return [payload];
 
-  logger.warn(`[A2A-OUT] Mixed reasoningText+text frame detected, splitting into separate frames`);
+  if (isA2AOutLogEnabled()) {
+    logger.warn(`[A2A-OUT] Mixed reasoningText+text frame detected, splitting into separate frames`);
+  }
   const reasoningParts = parts.filter((p: any) => p?.kind === "reasoningText");
   const otherParts = parts.filter((p: any) => p?.kind !== "reasoningText");
   const reasoningFrame = {
@@ -137,16 +139,20 @@ export async function sendWsFrame(params: SendWsFrameParams): Promise<void> {
       taskId,
       msgDetail: JSON.stringify({ ...frame, hostname: os.hostname() }),
     };
-    // 出站 A2A 日志：每一帧打印信封摘要 + msgDetail 精简版（text/reasoningText
-    // 内容替换为 *** 并标注长度）+ 内嵌 command 单独打印
+    // 出站 A2A 日志（受 XY_A2A_OUT_LOG 开关控制，关闭时整块跳过，
+    // 省掉 buildLoggableMsgDetail / extractCommands 的序列化开销）：
+    // 每一帧打印信封摘要 + msgDetail 精简版（text/reasoningText 内容只留
+    // 首尾各 5 字符并标注长度）+ 内嵌 command 单独打印
     // （内容字段已在组帧时脱敏，日志不会额外泄露敏感信息）
-    log.log(
-      `[A2A-OUT] msgType=${outboundMessage.msgType}, agentId=${outboundMessage.agentId}, sessionId=${sessionId}, taskId=${taskId}, size=${outboundMessage.msgDetail.length}`,
-    );
-    log.log(`[A2A-OUT] msgDetail=${buildLoggableMsgDetail(frame)}`);
-    const commands = extractCommands(frame);
-    if (commands.length > 0) {
-      log.log(`[A2A-OUT] commands=${JSON.stringify(commands)}`);
+    if (isA2AOutLogEnabled()) {
+      log.log(
+        `[A2A-OUT] msgType=${outboundMessage.msgType}, agentId=${outboundMessage.agentId}, sessionId=${sessionId}, taskId=${taskId}, size=${outboundMessage.msgDetail.length}`,
+      );
+      log.log(`[A2A-OUT] msgDetail=${buildLoggableMsgDetail(frame)}`);
+      const commands = extractCommands(frame);
+      if (commands.length > 0) {
+        log.log(`[A2A-OUT] commands=${JSON.stringify(commands)}`);
+      }
     }
     await wsManager.sendMessage(sessionId, outboundMessage);
     // 帧已实际上送：登记"最后一帧 artifact-update 的 streamingTextId"。
@@ -271,6 +277,8 @@ export async function pushCommand(params: PushCommandParams): Promise<void> {
   }
 
   const pushService = new XYPushService(config);
-  logger.log(`[A2A-OUT] push command, pushId=${pushId.substring(0, 20)}..., command=${JSON.stringify(command)}`);
+  if (isA2AOutLogEnabled()) {
+    logger.log(`[A2A-OUT] push command, pushId=${pushId.substring(0, 20)}..., command=${JSON.stringify(command)}`);
+  }
   await pushService.sendPushWithDirectives(pushId, randomUUID(), [command]);
 }
