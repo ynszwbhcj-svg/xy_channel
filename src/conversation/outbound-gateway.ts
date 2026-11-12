@@ -75,9 +75,18 @@ function splitMixedReasoningFrames(payload: Record<string, any>): Array<Record<s
 }
 
 /**
+ * 日志内容预览：首尾各保留 5 个字符，中间折叠为 ***(len=N)；
+ * ≤10 字符的短串原样输出（无需折叠）。
+ */
+function previewContent(s: string): string {
+  if (s.length <= 10) return s;
+  return `${s.slice(0, 5)}***(len=${s.length})${s.slice(-5)}`;
+}
+
+/**
  * 生成日志用的 msgDetail 精简版：text / reasoningText / reference 的内容
- * 替换为 *** 并标注原始大小，避免全量打印刷屏；其余字段原样保留。
- * 沿路径构造新对象，不修改实际发送的 frame。
+ * 只保留首尾各 5 个字符、中间替换为 ***(len=N)，避免全量打印刷屏；
+ * 其余字段原样保留。沿路径构造新对象，不修改实际发送的 frame。
  */
 function buildLoggableMsgDetail(frame: Record<string, any>): string {
   const parts = frame?.result?.artifact?.parts;
@@ -91,23 +100,16 @@ function buildLoggableMsgDetail(frame: Record<string, any>): string {
           ...frame.result.artifact,
           parts: parts.map((p: any) => {
             if (p?.kind === "text" && typeof p.text === "string") {
-              return { ...p, text: `***(len=${p.text.length})` };
+              return { ...p, text: previewContent(p.text) };
             }
             if (p?.kind === "reasoningText" && typeof p.reasoningText === "string") {
-              return { ...p, reasoningText: `***(len=${p.reasoningText.length})` };
+              return { ...p, reasoningText: previewContent(p.reasoningText) };
             }
             // reference 引用数据（kind:"data" 且带 data.reference）：
-            // 整条引用块替换为 ***，标注条目数与序列化长度
+            // 序列化后按同样规则折叠
             if (p?.kind === "data" && p.data?.reference !== undefined) {
-              const ref = p.data.reference;
-              const items = Array.isArray(ref?.items) ? ref.items.length : 0;
-              return {
-                ...p,
-                data: {
-                  ...p.data,
-                  reference: `***(items=${items}, len=${JSON.stringify(ref).length})`,
-                },
-              };
+              const refJson = JSON.stringify(p.data.reference);
+              return { ...p, data: { ...p.data, reference: previewContent(refJson) } };
             }
             return p;
           }),
