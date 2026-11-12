@@ -114,9 +114,13 @@ export const xyPlugin: ChannelPlugin = {
   agentTools: () => {
     const ctx = getCurrentSessionContext();
     const deviceFiltered = filterToolsByDevice(ALL_TOOLS, ctx?.deviceType);
-    const filtered = filterToolsByAppVersion(deviceFiltered, ctx?.appVer);
+    const versionFiltered = filterToolsByAppVersion(deviceFiltered, ctx?.appVer);
+    const filtered = ctx?.modelCapabilities?.supportsNativeImages
+      ? versionFiltered.filter((tool) => tool.name !== "image_reading")
+      : versionFiltered;
     logger.log(`[DEVICE-FILTER] deviceType=${ctx?.deviceType ?? "(none)"}, tools: ${ALL_TOOLS.length} → ${deviceFiltered.length}`);
-    logger.log(`[APP-VERSION-FILTER] appVer=${ctx?.appVer ?? "(none)"}, tools: ${deviceFiltered.length} → ${filtered.length} (${filtered.map(t => t.name).join(", ")})`);
+    logger.log(`[APP-VERSION-FILTER] appVer=${ctx?.appVer ?? "(none)"}, tools: ${deviceFiltered.length} → ${versionFiltered.length}`);
+    logger.log(`[MODEL-INPUT-FILTER] nativeImages=${ctx?.modelCapabilities?.supportsNativeImages ?? false}, tools: ${versionFiltered.length} → ${filtered.length} (${filtered.map(t => t.name).join(", ")})`);
     return filtered;
   },
 
