@@ -16,7 +16,7 @@
     "openclaw.plugin.json"
   ],
   "scripts": {
-    "build": "node ./node_modules/typescript/bin/tsc && node ./scripts/copy-assets.mjs",
+    "build": "node ./node_modules/typescript/bin/tsc",
     "prepack": "npm run build",
     "test": "vitest run"
   },
