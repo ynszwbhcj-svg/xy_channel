@@ -16,6 +16,26 @@ import { selfEvolutionManager } from "./utils/self-evolution-manager.js";
 import { setCompactionConfig, setCompactionSessionSnapshot } from "./compaction-provider.js";
 import { sendStatusUpdate } from "./formatter.js";
 
+/** Apply a channel turn's declaration before OpenClaw decides whether to load images. */
+function applyRequestModelInput<T extends { id: string; input?: readonly string[] }>(model: T): T {
+  const session = getCurrentSessionContext();
+  const capabilities = session?.modelCapabilities;
+  if (!capabilities) return model;
+
+  // A resolver can also be used for a different model (e.g. compaction). A
+  // client's capability declaration belongs only to the model selected for
+  // this turn, never to every model looked up inside its async scope.
+  const selectedModel = session.modelName?.trim().replace(/^xiaoyiprovider\//i, "");
+  if (selectedModel && selectedModel.toLowerCase() !== "none" && selectedModel !== model.id) return model;
+  return { ...model, input: [...capabilities.input] };
+}
+
+function hasImageContent(messages: readonly unknown[] | undefined): boolean {
+  return messages?.some((message: any) =>
+    Array.isArray(message?.content) && message.content.some((block: any) => block?.type === "image"),
+  ) ?? false;
+}
+
 // ── Retry config ──────────────────────────────────────────────
 const RETRY_DELAYS_MS = [10_000, 20_000, 40_000, 60_000, 60_000];
 const MAX_RETRY_ATTEMPTS = 5;
@@ -736,6 +756,13 @@ export const xiaoyiProvider: ProviderPlugin = {
   auth: [],
   isCacheTtlEligible: () => true,
 
+  // Static/explicit models skip resolveDynamicModel. This hook covers those
+  // models too, and runs before the embedded runner loads prompt images.
+  normalizeResolvedModel: (ctx) => {
+    if (ctx.provider !== "xiaoyiprovider") return undefined;
+    return applyRequestModelInput(ctx.model);
+  },
+
   /**
    * Dynamic model resolution for A2A-specified model names.
    * A2A messages carry a dynamic modelName that isn't in any static catalog.
@@ -750,7 +777,7 @@ export const xiaoyiProvider: ProviderPlugin = {
       baseUrl = (ctx.config as any)?.models?.providers?.zai?.baseUrl;
     }
     if (!baseUrl || typeof baseUrl !== "string") return null;
-    return {
+    return applyRequestModelInput({
       id: ctx.modelId,
       name: ctx.modelId,
       api: ctx.providerConfig?.api ?? "openai-completions",
@@ -775,7 +802,7 @@ export const xiaoyiProvider: ProviderPlugin = {
             [HEADER_SESSION_ID]: globalTraceContext.sessionId,
             [HEADER_INTERACTION_ID]: globalTraceContext.interactionId,
           } } : {})),
-    };
+    });
   },
 
   /**
@@ -1112,11 +1139,14 @@ export const xiaoyiProvider: ProviderPlugin = {
       }
 
       // ── Override model.id if A2A message specified modelName ──
-      const modelNameOverride = getCurrentSessionContext()?.modelName;
-      if (modelNameOverride && modelNameOverride.trim() !== "" && modelNameOverride.toLowerCase() !== "none") {
+      const modelNameOverride = getCurrentSessionContext()?.modelName?.trim().replace(/^xiaoyiprovider\//i, "");
+      if (modelNameOverride && modelNameOverride.toLowerCase() !== "none") {
         logger.log(`[xiaoyiprovider] overriding model.id: ${model.id} → ${modelNameOverride}`);
         model = { ...model, id: modelNameOverride };
       }
+      // Keep the HTTP serializer consistent with the early resolver decision.
+      // This does not append/reload images on each tool round or retry.
+      model = applyRequestModelInput(model);
 
       // ── Retry-capable streaming ──────────────────────────────
       const cronJob = isCronTriggered(context.messages);
@@ -1136,10 +1166,16 @@ export const xiaoyiProvider: ProviderPlugin = {
       // fallback id is applied only inside the fallback factory, so later
       // requests still use whatever model.id they actually carry.
       const isKimiK3 = model.id === KIMI_K3_MODEL_ID;
+      // Apply the new image fallback guard only to native-image Channel turns.
+      // Legacy text turns, cron and other provider consumers keep their policy.
+      const nativeImageContext = sessionCtx?.modelCapabilities?.supportsNativeImages && hasImageContent(context.messages);
+      const canUseKimiFallback = isKimiK3 && !nativeImageContext;
       if (isKimiK3) {
         logger.log(
           `[xiaoyiprovider] ${KIMI_K3_MODEL_ID} request — any error retries up to ` +
-          `${MAX_RETRY_ATTEMPTS}x, then falls back to ${KIMI_K3_FALLBACK_MODEL_ID} once`,
+          `${MAX_RETRY_ATTEMPTS}x` + (canUseKimiFallback
+            ? `, then falls back to ${KIMI_K3_FALLBACK_MODEL_ID} once`
+            : "; image context disables the text-only fallback"),
         );
       }
 
@@ -1158,11 +1194,12 @@ export const xiaoyiProvider: ProviderPlugin = {
       return createRetryingStream(makeStream, {
         cronJob,
         retryOnAnyError: isKimiK3,
-        fallbackCreateStream: isKimiK3
-          ? () => underlying({ ...model, id: KIMI_K3_FALLBACK_MODEL_ID, name: KIMI_K3_FALLBACK_MODEL_ID }, context, streamCallOptions)
+        fallbackCreateStream: canUseKimiFallback
+          ? () => underlying({ ...model, id: KIMI_K3_FALLBACK_MODEL_ID, name: KIMI_K3_FALLBACK_MODEL_ID,
+              input: sessionCtx?.modelCapabilities ? ["text"] : model.input }, context, streamCallOptions)
           : undefined,
-        onFallback: isKimiK3 ? notifyKimiK3Fallback : undefined,
-        onFallbackDone: isKimiK3
+        onFallback: canUseKimiFallback ? notifyKimiK3Fallback : undefined,
+        onFallbackDone: canUseKimiFallback
           ? () => {
               const sid = getCurrentSessionContext()?.sessionId;
               if (sid) {

@@ -7,6 +7,14 @@ const mocks = vi.hoisted(() => ({
   resolveActiveEmbeddedRunSessionId: vi.fn(),
   sendStatusUpdate: vi.fn(),
   sendA2AResponse: vi.fn(),
+  sendDisplayTaskCardData: vi.fn(),
+  extractModelInput: vi.fn(),
+  extractModelName: vi.fn(),
+  extractFileParts: vi.fn(),
+  downloadFilesFromParts: vi.fn(),
+  loadNativeImages: vi.fn(),
+  updateSessionStoreEntry: vi.fn(),
+  runWithSessionContext: vi.fn(),
   log: vi.fn(),
   warn: vi.fn(),
   error: vi.fn(),
@@ -23,7 +31,7 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", () => ({
 }));
 
 vi.mock("openclaw/plugin-sdk/session-store-runtime", () => ({
-  updateSessionStoreEntry: vi.fn(),
+  updateSessionStoreEntry: mocks.updateSessionStoreEntry,
   updateSessionStore: vi.fn(),
   resolveStorePath: vi.fn(),
 }));
@@ -60,12 +68,13 @@ vi.mock("../src/parser.js", () => ({
     parts: message.params.message.parts,
   }),
   extractTextFromParts: () => "还有体育新闻",
-  extractFileParts: () => [],
+  extractFileParts: mocks.extractFileParts,
   extractPushId: () => undefined,
   extractDeviceType: () => "winpc",
   extractAppVer: () => undefined,
   extractSdkApiVersion: () => undefined,
-  extractModelName: () => undefined,
+  extractModelName: mocks.extractModelName,
+  extractModelInput: mocks.extractModelInput,
   extractTriggerData: () => undefined,
   extractRunCrossTaskContext: () => undefined,
   isClearContextMessage: () => false,
@@ -73,7 +82,13 @@ vi.mock("../src/parser.js", () => ({
 }));
 
 vi.mock("../src/file-download.js", () => ({
-  downloadFilesFromParts: async () => [],
+  downloadFilesFromParts: mocks.downloadFilesFromParts,
+}));
+
+vi.mock("../src/native-images.js", () => ({
+  loadNativeImages: mocks.loadNativeImages,
+  NATIVE_IMAGE_MAX_BYTES: 6 * 1024 * 1024,
+  NativeImageInputError: class NativeImageInputError extends Error {},
 }));
 
 vi.mock("../src/config.js", () => ({
@@ -85,6 +100,7 @@ vi.mock("../src/formatter.js", () => ({
   sendClearContextResponse: vi.fn(),
   sendTasksCancelResponse: vi.fn(),
   sendA2AResponse: mocks.sendA2AResponse,
+  sendDisplayTaskCardData: mocks.sendDisplayTaskCardData,
 }));
 
 vi.mock("../src/self-evolution-keyword.js", () => ({
@@ -93,7 +109,7 @@ vi.mock("../src/self-evolution-keyword.js", () => ({
 }));
 
 vi.mock("../src/tools/session-manager.js", () => ({
-  runWithSessionContext: (_ctx, fn) => fn(),
+  runWithSessionContext: mocks.runWithSessionContext,
 }));
 
 vi.mock("../src/utils/config-manager.js", () => ({
@@ -147,6 +163,14 @@ describe("bot steer fallback sequencing", () => {
     vi.clearAllMocks();
     // 默认无上游活跃 run：P1 的就绪等待立即放行，既有顺序断言保持不变。
     mocks.resolveActiveEmbeddedRunSessionId.mockReturnValue(undefined);
+    mocks.extractModelInput.mockReturnValue({ input: ["text"], supportsNativeImages: false, source: "missing" });
+    mocks.extractModelName.mockReturnValue(undefined);
+    mocks.extractFileParts.mockReturnValue([]);
+    mocks.downloadFilesFromParts.mockResolvedValue([]);
+    mocks.loadNativeImages.mockResolvedValue([]);
+    mocks.updateSessionStoreEntry.mockResolvedValue({});
+    mocks.runWithSessionContext.mockImplementation((_ctx, fn) => fn());
+    mocks.sendDisplayTaskCardData.mockResolvedValue(undefined);
     mocks.sendStatusUpdate.mockResolvedValue(undefined);
     mocks.sendA2AResponse.mockResolvedValue(undefined);
     mocks.createXYReplyDispatcher.mockReturnValue({
@@ -195,9 +219,96 @@ describe("bot steer fallback sequencing", () => {
     }));
   });
 
-  it("direct success neither waits nor starts a replacement dispatch", async () => {
+  it("logs a timeout error and dispatches after waiting 70 seconds", async () => {
+    vi.useFakeTimers();
+    try {
+      mocks.tryDirectSteer.mockReturnValue({ ok: false, reason: "queue-rejected" });
+
+      const promise = handleXYMessage({
+        cfg: {},
+        runtime: { error: mocks.error },
+        message,
+        accountId: "default",
+        waitForPreviousTurn: () => new Promise<void>(() => {}),
+      });
+      await vi.advanceTimersByTimeAsync(69_999);
+
+      expect(mocks.error).not.toHaveBeenCalledWith(
+        expect.stringContaining("Previous turn did not settle"),
+      );
+      expect(mocks.createXYReplyDispatcher).not.toHaveBeenCalled();
+      expect(getCurrentTaskId("session-steer")).toBe("task-old");
+
+      await vi.advanceTimersByTimeAsync(1);
+      await promise;
+
+      expect(mocks.error).toHaveBeenCalledWith(
+        "[BOT-STEER] Previous turn did not settle within 70000ms; proceeding with fallback dispatch",
+      );
+      expect(mocks.dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+      expect(getCurrentTaskId("session-steer")).toBe("task-new");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([true, false])("keeps native images safe after upstream's 70s wait (SDK active=%s)", async (sdkStillActive) => {
+    vi.useFakeTimers();
+    try {
+      const file = { name: "native.png", mimeType: "image/png", uri: "https://example.test/native.png" };
+      const images = [{ type: "image", data: "native-image", mimeType: "image/png" }];
+      mocks.extractModelInput.mockReturnValue({ input: ["text", "image"], supportsNativeImages: true, source: "request" });
+      mocks.extractModelName.mockReturnValue("Vision_Model");
+      mocks.extractFileParts.mockReturnValue([file]);
+      mocks.downloadFilesFromParts.mockResolvedValue([{ ...file, path: "/tmp/xy_channel/native.png" }]);
+      mocks.loadNativeImages.mockResolvedValue(images);
+      mocks.resolveActiveEmbeddedRunSessionId.mockReturnValue(sdkStillActive ? "old-sdk-run" : undefined);
+      const onTurnAdmitted = vi.fn();
+      const pending = handleXYMessage({
+        cfg: { messages: { queue: { mode: "steer" } } }, runtime: { error: mocks.error },
+        message, accountId: "default", onTurnAdmitted,
+        waitForPreviousTurn: () => new Promise<void>(() => {}),
+      });
+
+      await vi.advanceTimersByTimeAsync(69_999);
+      expect(mocks.dispatchReplyFromConfig).not.toHaveBeenCalled();
+      expect(mocks.updateSessionStoreEntry).not.toHaveBeenCalled();
+      expect(getCurrentTaskId("session-steer")).toBe("task-old");
+      await vi.advanceTimersByTimeAsync(1);
+      expect(mocks.error).toHaveBeenCalledWith(
+        "[BOT-STEER] Previous turn did not settle within 70000ms; proceeding with fallback dispatch",
+      );
+      expect(mocks.tryDirectSteer).not.toHaveBeenCalled();
+
+      if (sdkStillActive) {
+        await vi.advanceTimersByTimeAsync(29_999);
+        expect(mocks.dispatchReplyFromConfig).not.toHaveBeenCalled();
+        expect(mocks.updateSessionStoreEntry).not.toHaveBeenCalled();
+        expect(onTurnAdmitted).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(1);
+        await pending;
+        expect(mocks.sendA2AResponse).toHaveBeenCalledWith(expect.objectContaining({
+          final: true, text: expect.stringContaining("暂未执行"),
+        }));
+        expect(getCurrentTaskId("session-steer")).toBe("task-old");
+      } else {
+        await pending;
+        expect(mocks.dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+        expect(mocks.dispatchReplyFromConfig.mock.calls[0][0].replyOptions.images).toEqual(images);
+        expect(mocks.dispatchReplyFromConfig.mock.calls[0][0].cfg.messages.queue.mode).toBe("followup");
+        expect(onTurnAdmitted).toHaveBeenCalledTimes(1);
+        expect(getCurrentTaskId("session-steer")).toBe("task-new");
+      }
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it("direct success closes the previous device task without a replacement dispatch", async () => {
     mocks.tryDirectSteer.mockReturnValue({ ok: true, mode: "direct" });
     const waitForPreviousTurn = vi.fn();
+    const onTurnAdmitted = vi.fn();
 
     await handleXYMessage({
       cfg: {},
@@ -205,11 +316,225 @@ describe("bot steer fallback sequencing", () => {
       message,
       accountId: "default",
       waitForPreviousTurn,
+      onTurnAdmitted,
     });
 
+    expect(mocks.sendA2AResponse).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: "session-steer",
+      taskId: "task-old",
+      messageId: "message-old",
+      text: "",
+      append: true,
+      final: true,
+    }));
     expect(waitForPreviousTurn).not.toHaveBeenCalled();
     expect(mocks.dispatchReplyFromConfig).not.toHaveBeenCalled();
+    expect(onTurnAdmitted).not.toHaveBeenCalled();
     expect(getCurrentTaskId("session-steer")).toBe("task-new");
+  });
+
+
+  it("native image steer keeps real images and source metadata in a complete new turn", async () => {
+    const capabilities = { input: ["text", "image"], supportsNativeImages: true, source: "request" };
+    const file = { name: "photo.png", mimeType: "image/png", uri: "https://example.test/photo.png" };
+    const downloaded = { ...file, path: "/tmp/xy_channel/unique_photo.png" };
+    const images = [{ type: "image", data: "png-data", mimeType: "image/png" }];
+    const order: string[] = [];
+    const originalCfg = {
+      tools: { media: { image: { enabled: true, models: [{ provider: "vision" }] }, audio: { enabled: true } } },
+      messages: { queue: { mode: "steer", cap: 8, byChannel: { "xiaoyi-channel": "steer", telegram: "collect" } } },
+    } as any;
+    const originalJson = JSON.stringify(originalCfg);
+    mocks.extractModelInput.mockReturnValue(capabilities);
+    mocks.extractModelName.mockReturnValue("Vision_Model");
+    mocks.extractFileParts.mockReturnValue([file]);
+    mocks.downloadFilesFromParts.mockResolvedValue([downloaded]);
+    mocks.loadNativeImages.mockResolvedValue(images);
+    mocks.tryDirectSteer.mockReturnValue({ ok: true, mode: "direct" });
+    mocks.updateSessionStoreEntry.mockImplementation(async () => { order.push("model-store"); return {}; });
+    mocks.dispatchReplyFromConfig.mockImplementation(async ({ ctx, cfg, replyOptions }) => {
+      order.push("dispatch");
+      expect(cfg).not.toBe(originalCfg);
+      expect(cfg.tools.media.image).toEqual({ enabled: false, models: [{ provider: "vision" }] });
+      expect(cfg.tools.media.audio).toEqual({ enabled: true });
+      expect(cfg.messages.queue).toEqual({ mode: "followup", cap: 8, byChannel: { "xiaoyi-channel": "followup", telegram: "collect" } });
+      expect(replyOptions.images).toEqual(images);
+      expect(replyOptions.imageOrder).toEqual(["inline"]);
+      expect(ctx.MediaPaths).toEqual([downloaded.path]);
+      expect(ctx.RawBody).not.toContain(downloaded.path);
+      return {};
+    });
+
+    await handleXYMessage({
+      cfg: originalCfg, runtime: { error: mocks.error }, message, accountId: "default",
+      waitForPreviousTurn: async () => { order.push("wait-old-turn"); },
+      onTurnAdmitted: () => { order.push("admitted"); },
+    });
+
+    expect(order).toEqual(["wait-old-turn", "model-store", "admitted", "dispatch"]);
+    expect(JSON.stringify(originalCfg)).toBe(originalJson);
+    expect(mocks.tryDirectSteer).not.toHaveBeenCalled();
+    expect(mocks.runWithSessionContext).toHaveBeenCalledWith(
+      expect.objectContaining({ modelName: "Vision_Model", modelCapabilities: capabilities }), expect.any(Function));
+  });
+
+  it("forced model selection change waits before updating the session model", async () => {
+    const order: string[] = [];
+    mocks.extractModelName.mockReturnValue("Text_Model");
+    mocks.tryDirectSteer.mockReturnValue({ ok: true, mode: "direct" });
+    mocks.updateSessionStoreEntry.mockImplementation(async () => { order.push("model-store"); return {}; });
+    mocks.dispatchReplyFromConfig.mockImplementation(async () => { order.push("dispatch"); return {}; });
+
+    await handleXYMessage({
+      cfg: {}, runtime: { error: mocks.error }, message, accountId: "default", forceNewTurn: true,
+      waitForPreviousTurn: async () => { order.push("wait-old-turn"); },
+    });
+
+    expect(order).toEqual(["wait-old-turn", "model-store", "dispatch"]);
+    expect(mocks.tryDirectSteer).not.toHaveBeenCalled();
+  });
+
+  it("does not dispatch a native image request when a picture failed to download", async () => {
+    mocks.extractModelInput.mockReturnValue({ input: ["text", "image"], supportsNativeImages: true, source: "request" });
+    mocks.extractFileParts.mockReturnValue([{ name: "missing.png", mimeType: "image/png", uri: "https://example.test/missing" }]);
+    mocks.downloadFilesFromParts.mockResolvedValue([]);
+
+    const onTurnAdmitted = vi.fn();
+    await handleXYMessage({ cfg: {}, runtime: { error: mocks.error }, message, accountId: "default", onTurnAdmitted });
+
+    expect(mocks.dispatchReplyFromConfig).not.toHaveBeenCalled();
+    expect(mocks.tryDirectSteer).not.toHaveBeenCalled();
+    expect(mocks.sendA2AResponse).toHaveBeenCalledWith(expect.objectContaining({
+      final: true, errorCode: 99921111, text: expect.stringContaining("图片下载失败"),
+    }));
+    expect(getCurrentTaskId("session-steer")).toBe("task-old");
+    expect(mocks.updateSessionStoreEntry).not.toHaveBeenCalled();
+    expect(onTurnAdmitted).not.toHaveBeenCalled();
+  });
+
+  it("keeps media MIME positions aligned when older clients omit a MIME", async () => {
+    deleteSession("session-steer");
+    const originalCfg = { tools: { media: { image: { enabled: true } } }, messages: { queue: { mode: "steer" } } } as any;
+    mocks.downloadFilesFromParts.mockResolvedValue([
+      { path: "/tmp/document", name: "document", mimeType: "", uri: "https://example.test/doc" },
+      { path: "/tmp/photo.png", name: "photo.png", mimeType: "image/png", uri: "https://example.test/img" },
+    ]);
+    mocks.dispatchReplyFromConfig.mockImplementation(async ({ ctx, cfg, replyOptions }) => {
+      expect(cfg).toBe(originalCfg);
+      expect(ctx.MediaTypes).toEqual(["application/octet-stream", "image/png"]);
+      expect(ctx.MediaPaths).toEqual(["/tmp/document", "/tmp/photo.png"]);
+      expect(replyOptions.images).toBeUndefined();
+      return {};
+    });
+
+    await handleXYMessage({ cfg: originalCfg, runtime: { error: mocks.error }, message, accountId: "default" });
+
+    expect(mocks.dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+    expect(mocks.loadNativeImages).not.toHaveBeenCalled();
+  });
+
+  it("declared model selections wait for the SDK run even after the channel task chain cleared", async () => {
+    vi.useFakeTimers();
+    try {
+      deleteSession("session-steer");
+      mocks.extractModelName.mockReturnValue("New_Model");
+      mocks.extractModelInput.mockReturnValue({ input: ["text"], supportsNativeImages: false, source: "request" });
+      let sdkRun: string | undefined = "sdk-run-still-streaming";
+      mocks.resolveActiveEmbeddedRunSessionId.mockImplementation(() => sdkRun);
+      const onTurnAdmitted = vi.fn();
+      const pending = handleXYMessage({
+        cfg: {}, runtime: { error: mocks.error }, message, accountId: "default", onTurnAdmitted,
+      });
+
+      await vi.advanceTimersByTimeAsync(4_000);
+      expect(mocks.dispatchReplyFromConfig).not.toHaveBeenCalled();
+      expect(mocks.updateSessionStoreEntry).not.toHaveBeenCalled();
+      expect(onTurnAdmitted).not.toHaveBeenCalled();
+      sdkRun = undefined;
+      await vi.advanceTimersByTimeAsync(100);
+      await pending;
+      expect(mocks.dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+      expect(mocks.updateSessionStoreEntry).toHaveBeenCalledTimes(1);
+      expect(onTurnAdmitted).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it("retains upstream's three-second text fallback for legacy requests carrying modelName", async () => {
+    vi.useFakeTimers();
+    try {
+      mocks.extractModelName.mockReturnValue("Legacy_Model");
+      mocks.tryDirectSteer.mockReturnValue({ ok: false, reason: "queue-rejected" });
+      mocks.resolveActiveEmbeddedRunSessionId.mockReturnValue("old-sdk-run");
+      const originalCfg = { messages: { queue: { mode: "steer" } } } as any;
+      const pending = handleXYMessage({
+        cfg: originalCfg, runtime: { error: mocks.error }, message,
+        accountId: "default", waitForPreviousTurn: async () => {},
+      });
+      await vi.advanceTimersByTimeAsync(2_900);
+      expect(mocks.dispatchReplyFromConfig).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(200);
+      await pending;
+      expect(mocks.dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+      expect(mocks.dispatchReplyFromConfig.mock.calls[0][0].cfg).toBe(originalCfg);
+      expect(mocks.updateSessionStoreEntry).toHaveBeenCalledTimes(1);
+      expect(mocks.sendA2AResponse).not.toHaveBeenCalled();
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(["canceled-old-task", "cleared-task-chain"])("strict SDK timeout rejects a new turn with %s", async (state) => {
+    vi.useFakeTimers();
+    try {
+      if (state === "cleared-task-chain") deleteSession("session-steer");
+      else markTurnCanceled("session-steer", "task-old");
+      mocks.extractModelName.mockReturnValue("New_Model");
+      mocks.resolveActiveEmbeddedRunSessionId.mockReturnValue("sdk-run-still-streaming");
+      const onTurnAdmitted = vi.fn();
+      const pending = handleXYMessage({
+        cfg: {}, runtime: { error: mocks.error }, message, accountId: "default",
+        forceNewTurn: true, onTurnAdmitted, waitForPreviousTurn: async () => {},
+      });
+
+      await vi.advanceTimersByTimeAsync(29_900);
+      expect(mocks.sendA2AResponse).not.toHaveBeenCalled();
+      expect(mocks.updateSessionStoreEntry).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(200);
+      await pending;
+      expect(mocks.dispatchReplyFromConfig).not.toHaveBeenCalled();
+      expect(mocks.updateSessionStoreEntry).not.toHaveBeenCalled();
+      expect(onTurnAdmitted).not.toHaveBeenCalled();
+      expect(mocks.sendA2AResponse).toHaveBeenCalledWith(expect.objectContaining({
+        final: true, errorCode: 99921111, text: expect.stringContaining("暂未执行"),
+      }));
+      expect(getCurrentTaskId("session-steer")).toBe(state === "cleared-task-chain" ? null : "task-old");
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it("fails closed when the SDK readiness check throws", async () => {
+    mocks.extractModelName.mockReturnValue("New_Model");
+    mocks.resolveActiveEmbeddedRunSessionId.mockImplementation(() => { throw new Error("runtime unavailable"); });
+    const onTurnAdmitted = vi.fn();
+
+    await handleXYMessage({
+      cfg: {}, runtime: { error: mocks.error }, message, accountId: "default",
+      forceNewTurn: true, onTurnAdmitted,
+    });
+
+    expect(mocks.dispatchReplyFromConfig).not.toHaveBeenCalled();
+    expect(mocks.updateSessionStoreEntry).not.toHaveBeenCalled();
+    expect(onTurnAdmitted).not.toHaveBeenCalled();
+    expect(mocks.sendA2AResponse).toHaveBeenCalledWith(expect.objectContaining({
+      final: true, text: expect.stringContaining("无法确认会话状态"),
+    }));
+    expect(getCurrentTaskId("session-steer")).toBe("task-old");
   });
 
   // P1：steer 直注失败重分发前的就绪等待，避免新 turn 撞上活跃 run 被排成 followup。

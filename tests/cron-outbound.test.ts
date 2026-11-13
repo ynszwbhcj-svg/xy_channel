@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   gateCronSendText: vi.fn(),
   closeCronTurn: vi.fn(),
+  isCronAnnounceTarget: vi.fn(),
   savePushData: vi.fn(),
   pushBroadcast: vi.fn(),
   log: vi.fn(),
@@ -17,6 +18,7 @@ vi.mock("../src/config.js", () => ({
 vi.mock("../src/conversation/cron-buffer.js", () => ({
   gateCronSendText: mocks.gateCronSendText,
   closeCronTurn: mocks.closeCronTurn,
+  isCronAnnounceTarget: mocks.isCronAnnounceTarget,
 }));
 
 vi.mock("../src/conversation/outbound-gateway.js", () => ({
@@ -53,6 +55,8 @@ describe("cron outbound full-text delivery", () => {
     vi.clearAllMocks();
     mocks.savePushData.mockResolvedValue("push-data-id");
     mocks.pushBroadcast.mockResolvedValue(undefined);
+    // 默认模拟 isCronAnnounceTarget 行为：空或 "default" 返回 true，其余 false
+    mocks.isCronAnnounceTarget.mockImplementation((to: string | undefined) => !to || to === "default");
   });
 
   it("persists and pushes the merged cron text instead of the announce tail", async () => {
@@ -83,5 +87,45 @@ describe("cron outbound full-text delivery", () => {
       cronTitle: "每日推荐",
     }));
     expect(mocks.closeCronTurn).toHaveBeenCalledWith("job-1", "announce-delivered");
+  });
+
+  it("routes to=00000000 through isCronAnnounceTarget and merges full text when gate returns announce", async () => {
+    // 复现线上事故场景：openclaw cron announce 的 to 是 "00000000"，
+    // isCronAnnounceTarget 识别为 announce，gate 返回合并全文。
+    const fullReview = "A股11月2日收评：创业板指反弹收涨1.87%，全市场涨停个股超百只...（完整复盘正文）";
+    const closingText = "引用工具临时降级，正文已归档。";
+    const mergedText = `${fullReview}\n\n${closingText}`;
+
+    mocks.isCronAnnounceTarget.mockReturnValue(true);
+    mocks.gateCronSendText.mockReturnValue({
+      gate: "announce",
+      text: mergedText,
+      jobId: "job-cron-00000000",
+      meta: { jobId: "job-cron-00000000", jobTitle: "A股每日收盘复盘" },
+    });
+
+    await xyOutbound.sendText({
+      cfg: {},
+      to: "00000000",
+      text: closingText,
+      accountId: "default",
+    });
+
+    // 验证 isCronAnnounceTarget 被用来判定 announceLike
+    expect(mocks.isCronAnnounceTarget).toHaveBeenCalledWith("00000000");
+    // 验证 gateCronSendText 收到的 announceLike=true
+    expect(mocks.gateCronSendText).toHaveBeenCalledWith(closingText, true, expect.anything());
+    // 验证最终保存的是合并全文，不是 391 字降级说明
+    expect(mocks.savePushData).toHaveBeenCalledWith(mergedText, {
+      cronJobId: "job-cron-00000000",
+      cronTitle: "A股每日收盘复盘",
+    });
+    expect(mocks.pushBroadcast).toHaveBeenCalledWith(expect.objectContaining({
+      text: mergedText.length > 1000 ? mergedText.slice(0, 1000) : mergedText,
+      pushDataId: "push-data-id",
+      cronJobId: "job-cron-00000000",
+      cronTitle: "A股每日收盘复盘",
+    }));
+    expect(mocks.closeCronTurn).toHaveBeenCalledWith("job-cron-00000000", "announce-delivered");
   });
 });

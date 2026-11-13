@@ -148,25 +148,28 @@ export async function sendWsFrame(params: SendWsFrameParams): Promise<void> {
     };
     // 出站 A2A 日志（受 index.ts 的 A2A_OUT_LOG_ENABLED 常量开关控制，关闭时
     // 整块跳过，省掉 buildLoggableMsgDetail / extractCommands 的序列化开销）：
-    // 每一帧打印信封摘要 + msgDetail 精简版（text/reasoningText 内容只留
-    // 首尾各 5 字符并标注长度）+ 内嵌 command 单独打印
-    // （内容字段已在组帧时脱敏，日志不会额外泄露敏感信息）。
-    // MemoryFileRead 必须原样传输文件正文，因此仅记录响应元数据 ——
-    // 不打 msgDetail / commands 全量，避免文件正文进入日志。
+    // 每一帧打印信封摘要 + msgDetail 精简版（text/reasoningText/reference
+    // 内容只留首尾各 5 字符并标注长度）+ 内嵌 command 单独打印。
+    // MemoryFileRead 为保证端侧文件完整性会保留原文，日志只能记录元数据：
+    // 含 MemoryFileRead 的帧省略 msgDetail 全量；MemoryFileRead 命令只打
+    // action/ok/contentBytes，同帧其它命令照常全量打印。
     if (isA2AOutLogEnabled()) {
       log.log(
         `[A2A-OUT] msgType=${outboundMessage.msgType}, agentId=${outboundMessage.agentId}, sessionId=${sessionId}, taskId=${taskId}, size=${outboundMessage.msgDetail.length}`,
       );
       const commands = extractCommands(frame);
-      const memoryFileReadCommands = commands.filter(isMemoryFileReadCommand);
-      if (memoryFileReadCommands.length > 0) {
-        for (const command of memoryFileReadCommands) {
-          const ans = command.payload?.ans;
-          const contentBytes = Number.isSafeInteger(ans?.contentBytes) ? ans.contentBytes : "none";
-          const errorCode = typeof ans?.errorCode === "string" ? ans.errorCode : "none";
-          log.log(
-            `[A2A-OUT] command action=MemoryFileRead, ok=${ans?.ok === true}, contentBytes=${contentBytes}, errorCode=${errorCode}`,
-          );
+      if (commands.some(isMemoryFileReadCommand)) {
+        log.log(`[A2A-OUT] msgDetail omitted for MemoryFileRead response`);
+        for (const command of commands) {
+          if (isMemoryFileReadCommand(command)) {
+            const answer = command.payload?.ans;
+            const contentBytes = typeof answer?.contentBytes === "number" && Number.isFinite(answer.contentBytes)
+              ? answer.contentBytes
+              : typeof answer?.content === "string" ? Buffer.byteLength(answer.content, "utf8") : 0;
+            log.log(`[A2A-OUT] action=MemoryFileRead, ok=${answer?.ok === true}, contentBytes=${contentBytes}`);
+          } else {
+            log.log(`[A2A-OUT] command=${JSON.stringify(command)}`);
+          }
         }
       } else {
         log.log(`[A2A-OUT] msgDetail=${buildLoggableMsgDetail(frame)}`);

@@ -2,18 +2,23 @@
 import fetch from "node-fetch";
 import fs from "fs/promises";
 import path from "path";
+import { randomUUID } from "node:crypto";
 import { logger } from "./utils/logger.js";
+import { isImageAttachment } from "./model-input.js";
 
 /**
  * Download a file from URL to local path.
  */
-export async function downloadFile(url: string, destPath: string): Promise<void> {
+export async function downloadFile(url: string, destPath: string, maxBytes?: number): Promise<void> {
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 30000); // 30 seconds timeout
 
   try {
-    const response = await fetch(url, { signal: controller.signal });
+    const response = await fetch(url, {
+      signal: controller.signal,
+      ...(maxBytes ? { size: maxBytes } : {}),
+    });
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}: ${response.statusText}`);
     }
@@ -40,7 +45,8 @@ export async function downloadFile(url: string, destPath: string): Promise<void>
  */
 export async function downloadFilesFromParts(
   fileParts: Array<{ name: string; mimeType: string; uri: string }>,
-  tempDir: string = "/tmp/xy_channel"
+  tempDir: string = "/tmp/xy_channel",
+  options?: { maxImageBytes?: number },
 ): Promise<Array<{ path: string; name: string; mimeType: string; uri: string }>> {
   // Create temp directory if it doesn't exist
   await fs.mkdir(tempDir, { recursive: true });
@@ -52,10 +58,10 @@ export async function downloadFilesFromParts(
 
     // Generate safe file name
     const safeName = name.replace(/[^a-zA-Z0-9._-]/g, "_");
-    const destPath = path.join(tempDir, `${Date.now()}_${safeName}`);
+    const destPath = path.join(tempDir, `${Date.now()}_${randomUUID()}_${safeName}`);
 
     try {
-      await downloadFile(uri, destPath);
+      await downloadFile(uri, destPath, isImageAttachment(filePart) ? options?.maxImageBytes : undefined);
       downloadedFiles.push({
         path: destPath,
         name,
