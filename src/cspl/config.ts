@@ -3,13 +3,8 @@
  */
 
 import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-import {HttpHeaders, CONFIG_FILE_NAME, ENV_FILE_PATH, REQUIRED_ENV_VARS} from './constants.js';
+import {HttpHeaders, ENV_FILE_PATH, REQUIRED_ENV_VARS, TOOL_OUTPUT_ACTION} from './constants.js';
 import { logger } from '../utils/logger.js';
 
 export interface ApiConfig {
@@ -26,6 +21,17 @@ export interface Config {
     requestFrom: string;
     textSource: string;
 }
+
+const DEFAULT_CONFIG = {
+    api: {
+        timeout: 5000,
+    },
+    headers: {} as HttpHeaders,
+    skillId: 'ai-security',
+    requestFrom: 'openclaw',
+    textSource: 'question',
+    action: TOOL_OUTPUT_ACTION,
+};
 
 let cachedConfig: Config | null = null;
 
@@ -73,36 +79,6 @@ function readEnvFile(): Record<string, string> {
     return envVars;
 }
 
-function loadConfigFile(configPath: string): Record<string, unknown> {
-    let configData: string;
-    try {
-        configData = fs.readFileSync(configPath, 'utf-8');
-    } catch (error) {
-        throw new Error(`Failed to read config file: ${CONFIG_FILE_NAME}.`);
-    }
-    try {
-        return JSON.parse(configData) as Record<string, unknown>;
-    } catch (error) {
-        throw new Error(`Failed to parse config file: ${CONFIG_FILE_NAME}.`);
-    }
-}
-
-function validateConfigStructure(config: Partial<Config>): void {
-    const validators: Array<{ field: string; check: () => boolean }> = [
-        { field: 'api', check: () => !config.api || typeof config.api !== 'object' },
-        { field: 'api.timeout', check: () => !config.api?.timeout || typeof config.api.timeout !== 'number' },
-        { field: 'skillId', check: () => !config.skillId || typeof config.skillId !== 'string' },
-        { field: 'requestFrom', check: () => !config.requestFrom || typeof config.requestFrom !== 'string' },
-        { field: 'textSource', check: () => !config.textSource || typeof config.textSource !== 'string' },
-    ];
-
-    for (const { field, check } of validators) {
-        if (check()) {
-            throw new Error(`Invalid config: missing or invalid '${field}' in ${CONFIG_FILE_NAME}`);
-        }
-    }
-}
-
 function validateEnvVars(): Record<string, string> {
     let envVars: Record<string, string>;
     try {
@@ -135,23 +111,17 @@ export function getConfig(api): Config {
         return cachedConfig;
     }
 
-    const configPath = path.join(__dirname, CONFIG_FILE_NAME);
-
-    if (!fs.existsSync(configPath)) {
-        throw new Error(`Config file not found: ${CONFIG_FILE_NAME}`);
-    }
-
-    const parsedConfig = loadConfigFile(configPath);
-    const config = parsedConfig as Partial<Config>;
-
-    validateConfigStructure(config);
     const envVars = validateEnvVars();
 
-    config.apiKey = envVars['PERSONAL-API-KEY'].trim();
-    config.uid = envVars['PERSONAL-UID'].trim();
-    config.api.url = envVars.SERVICE_URL.trim();
-
-    cachedConfig = config as Config;
+    cachedConfig = {
+        ...DEFAULT_CONFIG,
+        api: {
+            ...DEFAULT_CONFIG.api,
+            url: envVars.SERVICE_URL.trim(),
+        },
+        apiKey: envVars['PERSONAL-API-KEY'].trim(),
+        uid: envVars['PERSONAL-UID'].trim(),
+    };
     logger.log(`[SENTINEL HOOK] Config loaded successfully`);
     return cachedConfig;
 }

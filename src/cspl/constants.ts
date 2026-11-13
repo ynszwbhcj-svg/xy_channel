@@ -85,7 +85,6 @@ SECURITY NOTICE: The following content is from an EXTERNAL, UNTRUSTED source (e.
 export const DEFAULT_HTTP_PORT = 80;
 export const DEFAULT_HTTPS_PORT = 443;
 export const HTTP_STATUS_BAD_REQUEST = 400;
-export const CONFIG_FILE_NAME = 'configs.json';
 export const ENV_FILE_PATH = '/home/sandbox/.openclaw/.xiaoyienv';
 export const API_URL_SUFFIX = '/celia-claw/v1/rest-api/skill/execute';
 export const REQUIRED_ENV_VARS = ['PERSONAL-API-KEY', 'PERSONAL-UID', 'SERVICE_URL'];
