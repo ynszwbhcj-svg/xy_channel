@@ -59,8 +59,6 @@ import { markAppVersion, releaseAppVersion } from "../src/utils/app-version.js";
 import { releaseThinkIndex } from "../src/utils/think-index.js";
 import {
   markLastChunkBlock,
-  markReasoningBlockEnd,
-  peekLastReasoningBlockSeq,
   getAccumulatedThinkIndex,
 } from "../src/utils/think-index.js";
 
@@ -175,38 +173,30 @@ describe("reasoning-segment seq pinning (taskUniqIndexId 锁存)", () => {
 });
 
 
-describe("think-index last reasoning block tracking", () => {
+describe("think-index accumulation（所有文本块含全部思考块）", () => {
   const taskId = "task-thinkidx";
 
   afterEach(() => {
     releaseThinkIndex(taskId);
   });
 
-  it("records the latest closed reasoning block while keeping all blocks in the list", () => {
-    markReasoningBlockEnd(taskId, 1);
-    markReasoningBlockEnd(taskId, 2);
-    markLastChunkBlock(taskId, 3); // 中间正文段只入列表，不覆盖最近思考块
+  it("accumulates every closed text block in order", () => {
+    markLastChunkBlock(taskId, 1); // 思考块一
+    markLastChunkBlock(taskId, 2); // 思考块二
+    markLastChunkBlock(taskId, 3); // 中间正文段
     expect(getAccumulatedThinkIndex(taskId)).toEqual(["1", "2", "3"]);
-    expect(peekLastReasoningBlockSeq(taskId)).toBe("2");
   });
 
   it("dedups blocks sharing the same seq (同 seq 即同一块)", () => {
-    markReasoningBlockEnd(taskId, 1);
-    markReasoningBlockEnd(taskId, 1);
-    expect(getAccumulatedThinkIndex(taskId)).toEqual(["1"]);
-    expect(peekLastReasoningBlockSeq(taskId)).toBe("1");
-  });
-
-  it("returns undefined when no reasoning block has closed", () => {
     markLastChunkBlock(taskId, 1);
-    expect(peekLastReasoningBlockSeq(taskId)).toBeUndefined();
+    markLastChunkBlock(taskId, 1);
+    expect(getAccumulatedThinkIndex(taskId)).toEqual(["1"]);
   });
 
-  it("release clears both the list and the last-reasoning record", () => {
-    markReasoningBlockEnd(taskId, 1);
+  it("release clears the accumulated list", () => {
+    markLastChunkBlock(taskId, 1);
     releaseThinkIndex(taskId);
     expect(getAccumulatedThinkIndex(taskId)).toEqual([]);
-    expect(peekLastReasoningBlockSeq(taskId)).toBeUndefined();
   });
 });
 

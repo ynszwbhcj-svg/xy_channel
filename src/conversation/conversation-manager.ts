@@ -14,7 +14,7 @@ import { randomUUID } from "crypto";
 import { logger } from "../utils/logger.js";
 import { releaseStreamingTextId, releaseLastSentStreamingTextId, rotateStreamingTextId, peekStreamingTextId, getOrCreateStreamingTextId } from "../utils/streaming-text-id.js";
 import { releaseStatusCardSeq, getCurrentStatusCardSeq } from "../utils/status-card-seq.js";
-import { markLastChunkBlock, markReasoningBlockEnd, getAccumulatedThinkIndex, peekLastReasoningBlockSeq, releaseThinkIndex } from "../utils/think-index.js";
+import { markLastChunkBlock, getAccumulatedThinkIndex, releaseThinkIndex } from "../utils/think-index.js";
 import { releaseAppVersion, isLegacyAppVersion } from "../utils/app-version.js";
 import { clearBodyTextState, isBodyTextSent } from "../utils/body-text-state.js";
 import {
@@ -239,11 +239,10 @@ export async function rotateStreamingTextSegment(params: {
   // 于轮换，drain 时 lazy 读 id 的帧也仍以旧 id 发出。
   if (session && isReasoningSegmentOpen(taskId)) {
     // 攒入思考块的 taskUniqIndexId（与 onReasoningEnd 同理，终态汇总卡统一
-    // 携带），同步标记不受出站队列时序影响；同时登记为本 turn 最近闭合
-    // 思考块，汇总卡组装时按登记值剔除最后一个思考块。
+    // 携带），同步标记不受出站队列时序影响。
     // 取思考块开块时锁存的序号：块期间下发的状态卡 command 推高的全局
     // 计数不属于本块（见 utils/reasoning-segment）。
-    markReasoningBlockEnd(taskId, peekReasoningSegmentSeq(taskId));
+    markLastChunkBlock(taskId, peekReasoningSegmentSeq(taskId));
     // 同步闭合分段（不等收尾帧 drain），onReasoningEnd 据此不再补标记帧
     closeReasoningSegment(taskId);
     // 段文本与 streamingTextId 均在入队时捕获/pin —— drain 期间新快照或
@@ -342,9 +341,9 @@ export async function rotateStreamingTextForBodyStart(params: {
   // 显式 pin false —— 此处是思考→正文的类型切换，非 thinking_end 语义。
   if (session && isReasoningSegmentOpen(taskId)) {
     // 攒入思考块的 taskUniqIndexId（终态汇总卡统一携带），同步标记不受出站
-    // 队列时序影响；同时登记为本 turn 最近闭合思考块。
+    // 队列时序影响。
     // 取思考块开块时锁存的序号（见 utils/reasoning-segment）。
-    markReasoningBlockEnd(taskId, peekReasoningSegmentSeq(taskId));
+    markLastChunkBlock(taskId, peekReasoningSegmentSeq(taskId));
     // 同步闭合分段（不等收尾帧 drain），onReasoningEnd 据此不再补标记帧
     closeReasoningSegment(taskId);
     // 段文本与 streamingTextId 均在入队时捕获/pin —— drain 期间新快照或
@@ -766,9 +765,9 @@ export function clearWaitState(sessionId: string, reason: string, taskId?: strin
 /**
  * 当所有 subagent 完成且父 turn 已 settle 时，由 manager 发送终态帧并真正
  * 结束当前 A2A session：
- *   1. completed 状态帧（"已完成深度思考"）→ final:true 全文本帧（合并
- *      completionTexts）——与 reply-dispatcher 正常终态同序，xy_tester
- *      与客户端依赖该顺序
+ *   1. 正文文本完成帧（lastChunk=true 全文本帧，合并 completionTexts）——
+ *      与 reply-dispatcher 正常终态同序（终态不下发 status-update
+ *      "已完成深度思考"：该文案是思考期状态，发正文时不下发）
  *   2. 清理等待态、停止心跳、移除任务链
  *   3. 会话状态迁移到 completed
  */
@@ -826,18 +825,11 @@ export async function deliverSubagentFinalResult(params: {
 
   const terminalFrameDelayMs = config.terminalFrameDelayMs ?? 0;
   const session = sessions.get(state.sessionId);
-  const sendCompletedStatus = () =>
-    sendStatusUpdate({
-      config,
-      sessionId: state.sessionId,
-      taskId: effectiveTaskId,
-      messageId: effectiveMessageId,
-      text: "已完成深度思考",
-      state: "completed",
-    });
   // 正文文本完成帧（lastChunk=true, final=false）：权威全文本在此下发，
   // final=true 留给最后的空载终帧 —— 与 reply-dispatcher 终态序列一致
-  // （正文 lastChunk → 汇总卡 → final）。
+  // （正文 lastChunk → 汇总卡 → final）。终态不下发 status-update
+  // （"已完成深度思考" state=completed）：该文案是思考期状态，发正文时
+  // 不下发。终态帧延迟挂在本帧上（原 terminal-status 帧的 delayMs 语义）。
   const sendTextComplete = () =>
     sendA2AResponse({
       config,
@@ -862,9 +854,9 @@ export async function deliverSubagentFinalResult(params: {
       references: pendingReferences,
     });
   // 汇总状态卡：thinkIndex 攒批，text=任务处理已完成；排在 final 帧之前。
-  // 携带规则（与 reply-dispatcher 终态路径一致）：除最后一个思考块和最后
-  // 一个正文段外其余块都进 thinkIndex —— 最后一轮正文 id = 当前卡序号
-  // （同 seq 即同一块，一并过滤）；最后一个思考块按最近闭合登记值剔除。
+  // 携带规则（与 reply-dispatcher 终态路径一致）：除最后一轮正文段外，其余
+  // 所有文本块都进 thinkIndex（全部思考块无一例外）—— 最后一轮正文 id =
+  // 当前卡序号（同 seq 即同一块，一并过滤）。
   const sendSummaryCard = () =>
     sendExecuteStatusCard({
       config,
@@ -873,8 +865,7 @@ export async function deliverSubagentFinalResult(params: {
       messageId: effectiveMessageId,
       text: "任务处理已完成",
       thinkIndex: getAccumulatedThinkIndex(effectiveTaskId)
-        .filter((id) => id !== String(getCurrentStatusCardSeq(effectiveTaskId)))
-        .filter((id) => id !== peekLastReasoningBlockSeq(effectiveTaskId)),
+        .filter((id) => id !== String(getCurrentStatusCardSeq(effectiveTaskId))),
     });
   // DisplayTaskCardData final 帧收尾对话轮（起始卡在 bot.ts 下发）；
   // 排在汇总卡之后（index 惰性读取，落在汇总卡序号上），final 帧之前。
@@ -902,13 +893,8 @@ export async function deliverSubagentFinalResult(params: {
   if (session) {
     session.outboundQueue.enqueue({
       taskId: effectiveTaskId,
-      label: "subagent-terminal-status",
-      delayMs: terminalFrameDelayMs,
-      send: sendCompletedStatus,
-    });
-    session.outboundQueue.enqueue({
-      taskId: effectiveTaskId,
       label: "subagent-text-complete",
+      delayMs: terminalFrameDelayMs,
       send: sendTextComplete,
     });
     if (pendingReferences.length > 0) {
@@ -936,7 +922,6 @@ export async function deliverSubagentFinalResult(params: {
     });
     await session.outboundQueue.whenIdle();
   } else {
-    await sendCompletedStatus();
     await sendTextComplete();
     if (pendingReferences.length > 0) {
       await sendPendingReferences();
