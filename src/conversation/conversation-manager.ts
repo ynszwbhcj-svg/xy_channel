@@ -22,6 +22,7 @@ import {
   closeReasoningSegment,
   cutReasoningSegment,
   peekReasoningSegmentText,
+  peekReasoningSegmentSeq,
   releaseReasoningSegment,
 } from "../utils/reasoning-segment.js";
 import { sendStatusUpdate, sendA2AResponse, sendDisplayTaskCardData, sendExecuteStatusCard, sendReasoningTextUpdate, sendReference } from "../formatter.js";
@@ -240,7 +241,9 @@ export async function rotateStreamingTextSegment(params: {
     // 攒入思考块的 taskUniqIndexId（与 onReasoningEnd 同理，终态汇总卡统一
     // 携带），同步标记不受出站队列时序影响；同时登记为本 turn 最近闭合
     // 思考块，汇总卡组装时按登记值剔除最后一个思考块。
-    markReasoningBlockEnd(taskId, getCurrentStatusCardSeq(taskId));
+    // 取思考块开块时锁存的序号：块期间下发的状态卡 command 推高的全局
+    // 计数不属于本块（见 utils/reasoning-segment）。
+    markReasoningBlockEnd(taskId, peekReasoningSegmentSeq(taskId));
     // 同步闭合分段（不等收尾帧 drain），onReasoningEnd 据此不再补标记帧
     closeReasoningSegment(taskId);
     // 段文本与 streamingTextId 均在入队时捕获/pin —— drain 期间新快照或
@@ -339,8 +342,9 @@ export async function rotateStreamingTextForBodyStart(params: {
   // 显式 pin false —— 此处是思考→正文的类型切换，非 thinking_end 语义。
   if (session && isReasoningSegmentOpen(taskId)) {
     // 攒入思考块的 taskUniqIndexId（终态汇总卡统一携带），同步标记不受出站
-    // 队列时序影响；同时登记为本 turn 最近闭合思考块
-    markReasoningBlockEnd(taskId, getCurrentStatusCardSeq(taskId));
+    // 队列时序影响；同时登记为本 turn 最近闭合思考块。
+    // 取思考块开块时锁存的序号（见 utils/reasoning-segment）。
+    markReasoningBlockEnd(taskId, peekReasoningSegmentSeq(taskId));
     // 同步闭合分段（不等收尾帧 drain），onReasoningEnd 据此不再补标记帧
     closeReasoningSegment(taskId);
     // 段文本与 streamingTextId 均在入队时捕获/pin —— drain 期间新快照或

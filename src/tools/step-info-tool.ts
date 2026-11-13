@@ -391,14 +391,12 @@ export function registerStepInfoHook(api: OpenClawPluginApi): void {
             skillAction.action === "view"
               ? `查看技能 ${skillAction.skillName}`
               : `使用技能 ${skillAction.skillName}`;
+          // 发卡日志由 formatter 统一打印（[STEP-INFO] cardType=... 一行格式），此处不再重复
           await sendExecuteStatusCard({
             ...sendCtx,
             toolCallId: event.toolCallId,
             text: cardText,
           });
-          logger.log(
-            `${LOG_TAG} sent skill status card action=${skillAction.action} skill=${skillAction.skillName}`,
-          );
         }
       }
 
@@ -425,12 +423,12 @@ export function registerStepInfoHook(api: OpenClawPluginApi): void {
         if (event.toolName === "update_plan" && !bodyTextSent) {
           const planSteps = extractInProgressPlanSteps(event.params);
           for (const stepText of planSteps) {
+            // 发卡日志由 formatter 统一打印（[STEP-INFO] cardType=... 一行格式），此处不再重复
             await sendExecuteStatusCard({
               ...sendCtx,
               toolCallId: event.toolCallId,
               text: stepText,
             });
-            logger.log(`${LOG_TAG} sent plan step card step="${stepText}"`);
           }
         }
         return;

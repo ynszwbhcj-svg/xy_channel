@@ -37,6 +37,13 @@ function extractCommands(payload: Record<string, any>): A2ACommand[] {
     .flatMap((p: any) => p.data.commands);
 }
 
+/** MemoryFileRead 响应命令：文件正文必须原样传输，但绝不进入日志。 */
+function isMemoryFileReadCommand(command: A2ACommand): boolean {
+  return command?.header?.namespace === "AgentEvent"
+    && command?.header?.name === "MemoryQuery"
+    && command?.payload?.action === "MemoryFileRead";
+}
+
 /**
  * 将混合携带 reasoningText 与 text 的 artifact-update 帧拆分为两帧
  * （reasoning 帧在前、正文帧在后，保持原有相对时序）；非混合帧原样返回
@@ -139,19 +146,33 @@ export async function sendWsFrame(params: SendWsFrameParams): Promise<void> {
       taskId,
       msgDetail: JSON.stringify({ ...frame, hostname: os.hostname() }),
     };
-    // 出站 A2A 日志（受 XY_A2A_OUT_LOG 开关控制，关闭时整块跳过，
-    // 省掉 buildLoggableMsgDetail / extractCommands 的序列化开销）：
+    // 出站 A2A 日志（受 index.ts 的 A2A_OUT_LOG_ENABLED 常量开关控制，关闭时
+    // 整块跳过，省掉 buildLoggableMsgDetail / extractCommands 的序列化开销）：
     // 每一帧打印信封摘要 + msgDetail 精简版（text/reasoningText 内容只留
     // 首尾各 5 字符并标注长度）+ 内嵌 command 单独打印
-    // （内容字段已在组帧时脱敏，日志不会额外泄露敏感信息）
+    // （内容字段已在组帧时脱敏，日志不会额外泄露敏感信息）。
+    // MemoryFileRead 必须原样传输文件正文，因此仅记录响应元数据 ——
+    // 不打 msgDetail / commands 全量，避免文件正文进入日志。
     if (isA2AOutLogEnabled()) {
       log.log(
         `[A2A-OUT] msgType=${outboundMessage.msgType}, agentId=${outboundMessage.agentId}, sessionId=${sessionId}, taskId=${taskId}, size=${outboundMessage.msgDetail.length}`,
       );
-      log.log(`[A2A-OUT] msgDetail=${buildLoggableMsgDetail(frame)}`);
       const commands = extractCommands(frame);
-      if (commands.length > 0) {
-        log.log(`[A2A-OUT] commands=${JSON.stringify(commands)}`);
+      const memoryFileReadCommands = commands.filter(isMemoryFileReadCommand);
+      if (memoryFileReadCommands.length > 0) {
+        for (const command of memoryFileReadCommands) {
+          const ans = command.payload?.ans;
+          const contentBytes = Number.isSafeInteger(ans?.contentBytes) ? ans.contentBytes : "none";
+          const errorCode = typeof ans?.errorCode === "string" ? ans.errorCode : "none";
+          log.log(
+            `[A2A-OUT] command action=MemoryFileRead, ok=${ans?.ok === true}, contentBytes=${contentBytes}, errorCode=${errorCode}`,
+          );
+        }
+      } else {
+        log.log(`[A2A-OUT] msgDetail=${buildLoggableMsgDetail(frame)}`);
+        if (commands.length > 0) {
+          log.log(`[A2A-OUT] commands=${JSON.stringify(commands)}`);
+        }
       }
     }
     await wsManager.sendMessage(sessionId, outboundMessage);

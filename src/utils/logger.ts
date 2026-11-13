@@ -189,12 +189,19 @@ process.on("unhandledRejection", (reason) => {
 });
 
 // ── A2A-OUT 日志开关 ──
-// 默认开启；环境变量 XY_A2A_OUT_LOG=0/false/off 时全局关闭。
+// 开关值唯一来源：入口 index.ts 的常量 A2A_OUT_LOG_ENABLED，启动时经
+// setA2AOutLogEnabled 注入（不读环境变量；本模块是叶子模块，不能反向
+// import 入口文件，否则循环依赖）。
 // 所有 [A2A-OUT] 日志在 writeLog 统一拦截（兜底，含未来新增调用点）；
 // 调用方也可用 isA2AOutLogEnabled() 提前判断，跳过组日志字符串的开销。
+let a2aOutLogEnabled = true;
+
+export function setA2AOutLogEnabled(v: boolean): void {
+  a2aOutLogEnabled = v;
+}
+
 export function isA2AOutLogEnabled(): boolean {
-  const v = (process.env.XY_A2A_OUT_LOG ?? "").trim().toLowerCase();
-  return !(v === "0" || v === "false" || v === "off");
+  return a2aOutLogEnabled;
 }
 
 // ── Core write function with optional explicit context ──

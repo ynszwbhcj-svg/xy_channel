@@ -31,11 +31,17 @@ vi.mock("../src/utils/logger.js", () => ({
 import {
   noteReasoningSnapshot,
   peekReasoningSegmentText,
+  peekReasoningSegmentSeq,
   isReasoningSegmentOpen,
   closeReasoningSegment,
   cutReasoningSegment,
   releaseReasoningSegment,
 } from "../src/utils/reasoning-segment.js";
+import {
+  nextStatusCardSeq,
+  getCurrentStatusCardSeq,
+  releaseStatusCardSeq,
+} from "../src/utils/status-card-seq.js";
 import {
   getOrCreateSession,
   rotateStreamingTextSegment,
@@ -109,6 +115,65 @@ describe("reasoning-segment registry", () => {
     expect(isReasoningSegmentOpen(taskId)).toBe(true);
   });
 });
+
+describe("reasoning-segment seq pinning (taskUniqIndexId 锁存)", () => {
+  const taskId = "task-seg-seq";
+
+  afterEach(() => {
+    releaseReasoningSegment(taskId);
+    releaseStatusCardSeq(taskId);
+  });
+
+  it("pins the seq at block open and keeps it when commands bump the counter mid-stream", () => {
+    // 起始状态卡：seq=1（类比场景中的 21）
+    expect(nextStatusCardSeq(taskId)).toBe(1);
+    noteReasoningSnapshot(taskId, "思考中");
+    expect(peekReasoningSegmentSeq(taskId)).toBe(1);
+
+    // 思考流中途下发两个状态卡 command：计数推高到 3
+    expect(nextStatusCardSeq(taskId)).toBe(2);
+    expect(nextStatusCardSeq(taskId)).toBe(3);
+    expect(getCurrentStatusCardSeq(taskId)).toBe(3);
+
+    // 续流快照不重置锁存：过程帧/收尾帧仍应携带开块时的 1
+    noteReasoningSnapshot(taskId, "思考中继续思考");
+    expect(peekReasoningSegmentSeq(taskId)).toBe(1);
+
+    // 闭合后（收尾帧 drain 前）仍可读锁存值
+    closeReasoningSegment(taskId);
+    expect(peekReasoningSegmentSeq(taskId)).toBe(1);
+  });
+
+  it("re-pins the live seq when a new block opens after the previous one closed", () => {
+    expect(nextStatusCardSeq(taskId)).toBe(1);
+    noteReasoningSnapshot(taskId, "第一块思考");
+    expect(peekReasoningSegmentSeq(taskId)).toBe(1);
+    closeReasoningSegment(taskId);
+    cutReasoningSegment(taskId);
+
+    // 边界期间下发状态卡：新块锁存推高后的序号（新块显示在新卡下方）
+    expect(nextStatusCardSeq(taskId)).toBe(2);
+    noteReasoningSnapshot(taskId, "第一块思考第二块思考");
+    expect(peekReasoningSegmentSeq(taskId)).toBe(2);
+  });
+
+  it("falls back to the live seq when the task has no reasoning content", () => {
+    expect(nextStatusCardSeq(taskId)).toBe(1);
+    expect(peekReasoningSegmentSeq(taskId)).toBe(1);
+    expect(nextStatusCardSeq(taskId)).toBe(2);
+    expect(peekReasoningSegmentSeq(taskId)).toBe(2);
+  });
+
+  it("release clears the pinned seq", () => {
+    expect(nextStatusCardSeq(taskId)).toBe(1);
+    noteReasoningSnapshot(taskId, "思考中");
+    expect(peekReasoningSegmentSeq(taskId)).toBe(1);
+    releaseReasoningSegment(taskId);
+    expect(nextStatusCardSeq(taskId)).toBe(2);
+    expect(peekReasoningSegmentSeq(taskId)).toBe(2);
+  });
+});
+
 
 describe("think-index last reasoning block tracking", () => {
   const taskId = "task-thinkidx";

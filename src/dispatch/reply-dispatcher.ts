@@ -29,6 +29,7 @@ import { markReasoningFinished, markReasoningStreaming } from "../utils/reasonin
 import {
   noteReasoningSnapshot,
   peekReasoningSegmentText,
+  peekReasoningSegmentSeq,
   isReasoningSegmentOpen,
   closeReasoningSegment,
 } from "../utils/reasoning-segment.js";
@@ -1032,7 +1033,9 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
             // 处理已完成）携带，中间状态卡不携带。同步标记（而非等标记帧
             // drain），保证不受出站队列时序影响；同时登记为本 turn 最近闭合
             // 思考块，汇总卡组装时按登记值剔除最后一个思考块。
-            markReasoningBlockEnd(endTaskId, getCurrentStatusCardSeq(endTaskId));
+            // 取思考块开块时锁存的序号：块期间下发的状态卡 command 推高的
+            // 全局计数不属于本块（见 utils/reasoning-segment）。
+            markReasoningBlockEnd(endTaskId, peekReasoningSegmentSeq(endTaskId));
             // 同步闭合分段（不等标记帧 drain），分段边界据此判断本段已收尾
             closeReasoningSegment(endTaskId);
             // 结束标记帧携带本思考段的完整文本（append=false 快照语义），

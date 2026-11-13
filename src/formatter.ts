@@ -4,7 +4,7 @@ import { v4 as uuidv4 } from "uuid";
 import { sendWsFrame } from "./conversation/outbound-gateway.js";
 import { getOrCreateStreamingTextId, peekStreamingTextId, peekLastSentStreamingTextId, releaseStreamingTextId } from "./utils/streaming-text-id.js";
 import { isReasoningFinished as readReasoningFinished, releaseReasoningState } from "./utils/reasoning-state.js";
-import { releaseReasoningSegment } from "./utils/reasoning-segment.js";
+import { releaseReasoningSegment, peekReasoningSegmentSeq } from "./utils/reasoning-segment.js";
 import { releaseStatusCardSeq, getCurrentStatusCardSeq, nextStatusCardSeq } from "./utils/status-card-seq.js";
 import { releaseThinkIndex } from "./utils/think-index.js";
 import { isLegacyAppVersion, releaseAppVersion } from "./utils/app-version.js";
@@ -231,7 +231,6 @@ export interface SendReasoningTextUpdateParams {
  */
 export async function sendReasoningTextUpdate(params: SendReasoningTextUpdateParams): Promise<void> {
   const { config, sessionId, taskId, messageId, text, append = true } = params;
-  const log = logger.withContext(sessionId, taskId);
 
   // 审批桥接
   const bridgedText = rewriteOutboundApprovalText(sessionId, text);
@@ -239,7 +238,10 @@ export async function sendReasoningTextUpdate(params: SendReasoningTextUpdatePar
   const artifact: A2ATaskArtifactUpdateEvent = {
     taskId,
     taskUniqId: taskId,
-    taskUniqIndexId: getCurrentStatusCardSeq(taskId),
+    // taskUniqIndexId 取思考块开块时锁存的序号（utils/reasoning-segment）：
+    // 思考流中途下发的状态卡 command 会推高全局计数，块的过程帧/收尾帧
+    // 必须同序号，否则端侧把同一 streamingTextId 段映射到两张卡片
+    taskUniqIndexId: peekReasoningSegmentSeq(taskId),
     kind: "artifact-update",
     isNew: !isLegacyAppVersion(taskId),
     append,
@@ -268,13 +270,8 @@ export async function sendReasoningTextUpdate(params: SendReasoningTextUpdatePar
   };
 
   await sendWsFrame({ config, sessionId, taskId, payload: jsonRpcResponse });
-  // 思考块结束标记帧（lastChunk=true）打印完整帧日志，便于核查思考块结束链路
-  // （流式中间帧不打印，避免刷屏；parts 已在组帧时脱敏）
-  if (artifact.lastChunk) {
-    log.log(
-      `[A2A_REASONING] reasoning lastChunk frame sent, streamingTextId=${artifact.streamingTextId}, taskUniqIndexId=${artifact.taskUniqIndexId}, isReasoningFinished=${artifact.isReasoningFinished}, payload=${JSON.stringify(jsonRpcResponse)}`,
-    );
-  }
+  // 思考块结束标记帧不再单独打印完整帧日志（A2A-OUT 已覆盖精简版帧内容，
+  // 此处全量 payload 含完整思考文本，刷屏且冗余）
 }
 
 /**
@@ -540,6 +537,12 @@ export async function sendDisplayTaskCardData(params: SendDisplayTaskCardDataPar
     command,
     toolCallId: params.toolCallId,
   });
+  // 卡片日志统一一行格式（与 DisplayExecuteStatusCard 同款，便于按序号对齐配对卡）
+  logger
+    .withContext(params.sessionId, params.taskId)
+    .log(
+      `[STEP-INFO] cardType=DisplayTaskCardData, taskUniqId=${params.taskId}, taskUniqIndexId=${params.index}, stepName=${params.stepName}`,
+    );
 }
 
 /**
@@ -603,9 +606,6 @@ export async function sendExecuteStatusCard(params: SendExecuteStatusCardParams)
       ...(params.thinkIndex && params.thinkIndex.length > 0 ? { thinkIndex: params.thinkIndex } : {}),
     },
   };
-  if (params.thinkIndex && params.thinkIndex.length > 0) {
-    log.log(`[STATUS-CARD] status card carries thinkIndex=${JSON.stringify(params.thinkIndex)}, taskUniqIndexId=${seq}`);
-  }
 
   await sendCommand({
     config,
@@ -615,6 +615,11 @@ export async function sendExecuteStatusCard(params: SendExecuteStatusCardParams)
     command,
     toolCallId: params.toolCallId,
   });
+  // 卡片日志统一一行格式；thinkIndex（仅终态汇总卡携带）保留在此行末尾
+  log.log(
+    `[STEP-INFO] cardType=DisplayExecuteStatusCard, taskUniqId=${taskId}, taskUniqIndexId=${seq}, text=${params.text}` +
+      (params.thinkIndex && params.thinkIndex.length > 0 ? `, thinkIndex=${JSON.stringify(params.thinkIndex)}` : ""),
+  );
 }
 
 /**
