@@ -368,7 +368,7 @@ export function registerStepInfoHook(api: OpenClawPluginApi): void {
       const sendCtx = resolveSendContext(event, ctx);
       if (!sendCtx) return;
 
-      // 低版本链路（app_ver < 11.7.9.310）整体跳过：不下发状态卡/技能卡/
+      // 低版本链路（app_ver < 11.7.9.330）整体跳过：不下发状态卡/技能卡/
       // 步骤卡，也不做文本分段边界（旧客户端无此能力，按合并前逻辑下发）
       if (isLegacyAppVersion(sendCtx.taskId)) return;
 
@@ -476,7 +476,7 @@ export function registerStepInfoHook(api: OpenClawPluginApi): void {
         return;
       }
 
-      // 低版本链路（app_ver < 11.7.9.310）不做分段边界：旧客户端无
+      // 低版本链路（app_ver < 11.7.9.330）不做分段边界：旧客户端无
       // streamingTextId 分段能力，正文按合并前的单段流式下发
       if (isLegacyAppVersion(sendCtx.taskId)) return;
 

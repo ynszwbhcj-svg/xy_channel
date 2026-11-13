@@ -291,7 +291,7 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
     if (appVer) {
       log.log(`[BOT] Extracted app_ver: ${appVer}`);
     }
-    // 低版本判定（低于 11.7.9.310）：本 turn 所有出站帧 isNew 置 false
+    // 低版本判定（低于 11.7.9.330）：本 turn 所有出站帧 isNew 置 false
     markAppVersion(parsed.taskId, appVer);
     const sdkApiVersion = extractSdkApiVersion(parsed.parts);
     if (sdkApiVersion) {
@@ -309,7 +309,7 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
     const config = resolveXYConfig(cfg);
     cacheXYConfig(config);
 
-    // 低版本链路（app_ver < 11.7.9.310）：按合并前 0730 的下发逻辑 ——
+    // 低版本链路（app_ver < 11.7.9.330）：按合并前 0730 的下发逻辑 ——
     // 直发初始 status-update，不发 DisplayTaskCardData 起始卡。
     // 新版本链路：下发 DisplayTaskCardData 起始卡（index=1，任务正在处理中）。
     // 走会话出站队列而非直发，排在上一 turn 可能在途的终态帧之后（steer 场景）；
