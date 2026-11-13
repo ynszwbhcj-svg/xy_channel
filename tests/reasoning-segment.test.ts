@@ -59,6 +59,8 @@ import { markAppVersion, releaseAppVersion } from "../src/utils/app-version.js";
 import { releaseThinkIndex } from "../src/utils/think-index.js";
 import {
   markLastChunkBlock,
+  markReasoningBlockEnd,
+  peekLastBodyBlockSeq,
   getAccumulatedThinkIndex,
 } from "../src/utils/think-index.js";
 
@@ -181,22 +183,34 @@ describe("think-index accumulation（所有文本块含全部思考块）", () =
   });
 
   it("accumulates every closed text block in order", () => {
-    markLastChunkBlock(taskId, 1); // 思考块一
-    markLastChunkBlock(taskId, 2); // 思考块二
-    markLastChunkBlock(taskId, 3); // 中间正文段
+    markReasoningBlockEnd(taskId, 1); // 思考块一
+    markReasoningBlockEnd(taskId, 2); // 思考块二
+    markLastChunkBlock(taskId, 3); // 中间正文段冲刷
     expect(getAccumulatedThinkIndex(taskId)).toEqual(["1", "2", "3"]);
   });
 
   it("dedups blocks sharing the same seq (同 seq 即同一块)", () => {
-    markLastChunkBlock(taskId, 1);
-    markLastChunkBlock(taskId, 1);
+    markReasoningBlockEnd(taskId, 1);
+    markLastChunkBlock(taskId, 1); // 与思考块同 seq 的正文冲刷：仍是一条
     expect(getAccumulatedThinkIndex(taskId)).toEqual(["1"]);
   });
 
-  it("release clears the accumulated list", () => {
-    markLastChunkBlock(taskId, 1);
+  it("tracks the last flushed body block separately from reasoning blocks", () => {
+    markReasoningBlockEnd(taskId, 1);
+    expect(peekLastBodyBlockSeq(taskId)).toBeUndefined(); // 思考块不登记正文侧表
+    markLastChunkBlock(taskId, 1); // 正文冲刷段（与思考块同 seq）
+    markLastChunkBlock(taskId, 2);
+    expect(peekLastBodyBlockSeq(taskId)).toBe("2");
+    // 正文冲刷登记不影响思考块已在列表
+    expect(getAccumulatedThinkIndex(taskId)).toEqual(["1", "2"]);
+  });
+
+  it("release clears both the list and the last-body record", () => {
+    markReasoningBlockEnd(taskId, 1);
+    markLastChunkBlock(taskId, 2);
     releaseThinkIndex(taskId);
     expect(getAccumulatedThinkIndex(taskId)).toEqual([]);
+    expect(peekLastBodyBlockSeq(taskId)).toBeUndefined();
   });
 });
 

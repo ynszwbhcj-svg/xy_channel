@@ -336,6 +336,28 @@ describe("reply dispatcher turn ownership", () => {
     expect(closeFrames[0]).toMatchObject({ text: "思考内容", isReasoningFinished: false });
   });
 
+  it("keeps the reasoning block in thinkIndex when it shares the final card slot with the body (think+body, no tools)", async () => {
+    const sessionId = "sess-think-body-same-slot";
+    registerTask(sessionId, "task-tb", "msg-tb");
+    const turn = createDispatcher(sessionId, "task-tb", "msg-tb");
+
+    // 思考块（seq=1 起始卡槽位）→ thinking_end 收尾；正文同槽流出，
+    // 全程无状态卡推高计数 —— 思考块与最后一轮正文同 seq
+    await turn.replyOptions.onReasoningStream({ text: "思考内容" });
+    await turn.replyOptions.onReasoningEnd();
+    await turn.replyOptions.onPartialReply({ text: "正文" });
+    await turn.dispatcher.deliver({ text: "正文" }, { kind: "final" });
+    await turn.dispatcher.onIdle();
+    await getOrCreateSession(sessionId).outboundQueue.whenIdle();
+
+    const summaryCards = mocks.sendExecuteStatusCard.mock.calls
+      .map(([params]) => params)
+      .filter((params) => params.text === "任务处理已完成");
+    expect(summaryCards).toHaveLength(1);
+    // 思考块必须进 thinkIndex：终态段（正文）有文本，不做任何剔除
+    expect(summaryCards[0].thinkIndex).toEqual(["1"]);
+  });
+
   it("terminal summary card keeps all reasoning blocks and excludes only the last body segment", async () => {
     const sessionId = "sess-think-index";
     registerTask(sessionId, "task-t", "msg-t");

@@ -14,7 +14,7 @@ import { randomUUID } from "crypto";
 import { logger } from "../utils/logger.js";
 import { releaseStreamingTextId, releaseLastSentStreamingTextId, rotateStreamingTextId, peekStreamingTextId, getOrCreateStreamingTextId } from "../utils/streaming-text-id.js";
 import { releaseStatusCardSeq, getCurrentStatusCardSeq } from "../utils/status-card-seq.js";
-import { markLastChunkBlock, getAccumulatedThinkIndex, releaseThinkIndex } from "../utils/think-index.js";
+import { markLastChunkBlock, markReasoningBlockEnd, getAccumulatedThinkIndex, releaseThinkIndex } from "../utils/think-index.js";
 import { releaseAppVersion, isLegacyAppVersion } from "../utils/app-version.js";
 import { clearBodyTextState, isBodyTextSent } from "../utils/body-text-state.js";
 import {
@@ -242,7 +242,7 @@ export async function rotateStreamingTextSegment(params: {
     // 携带），同步标记不受出站队列时序影响。
     // 取思考块开块时锁存的序号：块期间下发的状态卡 command 推高的全局
     // 计数不属于本块（见 utils/reasoning-segment）。
-    markLastChunkBlock(taskId, peekReasoningSegmentSeq(taskId));
+    markReasoningBlockEnd(taskId, peekReasoningSegmentSeq(taskId));
     // 同步闭合分段（不等收尾帧 drain），onReasoningEnd 据此不再补标记帧
     closeReasoningSegment(taskId);
     // 段文本与 streamingTextId 均在入队时捕获/pin —— drain 期间新快照或
@@ -343,7 +343,7 @@ export async function rotateStreamingTextForBodyStart(params: {
     // 攒入思考块的 taskUniqIndexId（终态汇总卡统一携带），同步标记不受出站
     // 队列时序影响。
     // 取思考块开块时锁存的序号（见 utils/reasoning-segment）。
-    markLastChunkBlock(taskId, peekReasoningSegmentSeq(taskId));
+    markReasoningBlockEnd(taskId, peekReasoningSegmentSeq(taskId));
     // 同步闭合分段（不等收尾帧 drain），onReasoningEnd 据此不再补标记帧
     closeReasoningSegment(taskId);
     // 段文本与 streamingTextId 均在入队时捕获/pin —— drain 期间新快照或
@@ -854,9 +854,10 @@ export async function deliverSubagentFinalResult(params: {
       references: pendingReferences,
     });
   // 汇总状态卡：thinkIndex 攒批，text=任务处理已完成；排在 final 帧之前。
-  // 携带规则（与 reply-dispatcher 终态路径一致）：除最后一轮正文段外，其余
-  // 所有文本块都进 thinkIndex（全部思考块无一例外）—— 最后一轮正文 id =
-  // 当前卡序号（同 seq 即同一块，一并过滤）。
+  // 携带规则（与 reply-dispatcher 终态路径一致）：除最后一轮正文外，其余
+  // 所有文本块都进 thinkIndex（全部思考块无一例外）。本路径终态正文即
+  // finalText（必有内容，见上方兜底），最后一轮正文从不标记、天然不在
+  // 列表 —— 无需任何过滤。
   const sendSummaryCard = () =>
     sendExecuteStatusCard({
       config,
@@ -864,8 +865,7 @@ export async function deliverSubagentFinalResult(params: {
       taskId: effectiveTaskId,
       messageId: effectiveMessageId,
       text: "任务处理已完成",
-      thinkIndex: getAccumulatedThinkIndex(effectiveTaskId)
-        .filter((id) => id !== String(getCurrentStatusCardSeq(effectiveTaskId))),
+      thinkIndex: getAccumulatedThinkIndex(effectiveTaskId),
     });
   // DisplayTaskCardData final 帧收尾对话轮（起始卡在 bot.ts 下发）；
   // 排在汇总卡之后（index 惰性读取，落在汇总卡序号上），final 帧之前。

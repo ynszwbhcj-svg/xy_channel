@@ -37,7 +37,7 @@ import {
 import { getOrCreateStreamingTextId } from "../utils/streaming-text-id.js";
 import { drainPendingReferences } from "../utils/pending-references.js";
 import { getCurrentStatusCardSeq } from "../utils/status-card-seq.js";
-import { markLastChunkBlock, getAccumulatedThinkIndex } from "../utils/think-index.js";
+import { markReasoningBlockEnd, getAccumulatedThinkIndex, peekLastBodyBlockSeq } from "../utils/think-index.js";
 
 /** 延后收尾期间的上游 run 轮询间隔。 */
 const EMPTY_IDLE_POLL_MS = 1_000;
@@ -704,14 +704,18 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
               }
 
               // 🔑 汇总状态卡：thinkIndex 攒批（本 turn 内工具卡不逐张携带，
-              // 攒到这里统一下发）。携带规则：除最后一轮正文段外，其余所有
-              // 文本块都进 thinkIndex（全部思考块无一例外）—— 最后一轮正文的
-              // id = 当前卡序号（同 seq 即同一块，一并过滤）。
+              // 攒到这里统一下发）。携带规则：除最后一轮正文外，其余所有
+              // 文本块都进 thinkIndex（全部思考块无一例外，含与最后一轮正文
+              // 同 seq 的思考块 —— 不得按当前卡序号过滤误杀）。最后一轮正文
+              // 即终态正文段，从不标记、天然不在列表；唯一需要剔除的情形：
+              // 终态段为空（正文停在某个边界冲刷段、之后没有新内容），该
+              // 冲刷段即最后一轮正文，按登记值剔除。
               // 排在 final 帧之前：终态帧发出后服务端可能关闭本 turn。
               {
-                const currentSeq = getCurrentStatusCardSeq(terminalTaskId);
+                // 终态段无文本时，最后冲刷正文段承载最终展示，从 thinkIndex 剔除
+                const excludeSeq = fullFinalText ? undefined : peekLastBodyBlockSeq(terminalTaskId);
                 const summaryThinkIndex = getAccumulatedThinkIndex(terminalTaskId)
-                  .filter((id) => id !== String(currentSeq));
+                  .filter((id) => id !== excludeSeq);
                 outboundQueue.enqueue({
                   taskId: terminalTaskId,
                   label: "terminal-summary-card",
@@ -1026,7 +1030,7 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
             // drain），保证不受出站队列时序影响。
             // 取思考块开块时锁存的序号：块期间下发的状态卡 command 推高的
             // 全局计数不属于本块（见 utils/reasoning-segment）。
-            markLastChunkBlock(endTaskId, peekReasoningSegmentSeq(endTaskId));
+            markReasoningBlockEnd(endTaskId, peekReasoningSegmentSeq(endTaskId));
             // 同步闭合分段（不等标记帧 drain），分段边界据此判断本段已收尾
             closeReasoningSegment(endTaskId);
             // 结束标记帧携带本思考段的完整文本（append=false 快照语义），
