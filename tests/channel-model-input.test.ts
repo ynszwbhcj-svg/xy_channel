@@ -9,7 +9,7 @@ import { xyPlugin } from "../src/channel.js";
 import { resolveModelInput } from "../src/model-input.js";
 import { runWithSessionContext, type SessionContext } from "../src/tools/session-manager.js";
 
-function context(deviceType: string, modelInput: unknown, appVer = "11.7.9.310"): SessionContext {
+function context(deviceType: string, modelInput: unknown, appVer = "11.7.9.330"): SessionContext {
   return {
     config: {} as SessionContext["config"],
     sessionId: `model-input-${deviceType}`,
@@ -46,8 +46,8 @@ describe("request-scoped image tool visibility", () => {
   );
 
   it.each([
-    ["11.7.9.300", false], ["11.7.9.301", false], ["11.7.9.309", false],
-    ["11.7.9.310", true], ["11.7.9.311", true],
+    ["11.7.9.310", false], ["11.7.9.311", false], ["11.7.9.329", false],
+    ["11.7.9.330", true], ["11.7.9.331", true],
   ])("preserves upstream version-gated tools for %s independently of image capability", async (appVer, visible) => {
     const names = await runWithSessionContext(context("phone", ["image"], appVer), async () => toolNames());
     expect(names.includes("ask_user")).toBe(visible);

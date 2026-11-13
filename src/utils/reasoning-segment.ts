@@ -21,6 +21,8 @@
 // 叶子模块：不依赖 conversation/dispatch 层，formatter / conversation-manager /
 // reply-dispatcher 均可安全 import（避免循环依赖）。
 
+import { getCurrentStatusCardSeq } from "./status-card-seq.js";
+
 interface ReasoningSegmentState {
   /** SDK 思考块最近一次全量快照（原始文本，未剥离分段基线）。 */
   lastFull: string;
@@ -30,6 +32,14 @@ interface ReasoningSegmentState {
   lastSegment: string;
   /** 当前在役 id 下是否有未闭合的思考流块。 */
   open: boolean;
+  /**
+   * 开块时锁存的 taskUniqIndexId（状态卡序号）：思考块首帧到来时捕获，
+   * 块内所有帧（过程帧 / lastChunk 收尾帧）与 thinkIndex 记账统一使用该值。
+   * 思考流中途下发的状态卡 command 会推高全局计数（status-card-seq），
+   * 没有锁存时收尾帧会读到推高后的新值，与过程帧序号劈叉（端侧把同一
+   * streamingTextId 段映射到两张卡片）。段闭合后保留至下一段开块时重捕。
+   */
+  seq?: number;
 }
 
 /** taskId → 本 turn 的思考分段状态。 */
@@ -59,9 +69,23 @@ export function noteReasoningSnapshot(taskId: string, fullText: string): string 
   }
   if (segment.length > 0) {
     state.lastSegment = segment;
+    // 新思考块开块（open 由 false 转 true）：锁存当前状态卡序号。
+    // 已开块期间的续流快照保持原锁存值，不受中途 command 推高计数影响。
+    if (!state.open) {
+      state.seq = getCurrentStatusCardSeq(taskId);
+    }
     state.open = true;
   }
   return segment;
+}
+
+/**
+ * 读取本 turn 当前思考块锁存的 taskUniqIndexId；未登记（本 turn 尚无思考
+ * 内容）时回退实时状态卡序号。思考块的过程帧 / lastChunk 收尾帧 / thinkIndex
+ * 记账统一读该值，保证同一块序号一致（见 seq 字段说明）。
+ */
+export function peekReasoningSegmentSeq(taskId: string): number {
+  return reasoningSegmentByTask.get(taskId)?.seq ?? getCurrentStatusCardSeq(taskId);
 }
 
 /** 读取最近一次应下发的思考段文本（收尾帧 / 结束标记帧携带）；未登记返回 ""。 */

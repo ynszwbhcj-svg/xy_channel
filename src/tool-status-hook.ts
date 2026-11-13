@@ -96,7 +96,7 @@ export function registerToolStatusHook(api: OpenClawPluginApi): void {
       const taskId = getCurrentTaskId(binding.sessionId) ?? binding.taskId;
       const messageId = getCurrentMessageId(binding.sessionId) ?? binding.messageId;
 
-      // 低版本链路（app_ver < 11.7.9.310）不下发状态卡：旧客户端无此能力，
+      // 低版本链路（app_ver < 11.7.9.330）不下发状态卡：旧客户端无此能力，
       // 工具状态由 legacy dispatcher 的 onToolStart 状态帧承担（与合并前一致）
       if (isLegacyAppVersion(taskId)) return;
 

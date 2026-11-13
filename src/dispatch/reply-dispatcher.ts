@@ -26,16 +26,18 @@ import {
 } from "../conversation/conversation-manager.js";
 import { StreamAssembler } from "../conversation/stream-assembler.js";
 import { markReasoningFinished, markReasoningStreaming } from "../utils/reasoning-state.js";
+import { isBodyTextSent } from "../utils/body-text-state.js";
 import {
   noteReasoningSnapshot,
   peekReasoningSegmentText,
+  peekReasoningSegmentSeq,
   isReasoningSegmentOpen,
   closeReasoningSegment,
 } from "../utils/reasoning-segment.js";
 import { getOrCreateStreamingTextId } from "../utils/streaming-text-id.js";
 import { drainPendingReferences } from "../utils/pending-references.js";
 import { getCurrentStatusCardSeq } from "../utils/status-card-seq.js";
-import { markReasoningBlockEnd, getAccumulatedThinkIndex, peekLastReasoningBlockSeq } from "../utils/think-index.js";
+import { markReasoningBlockEnd, getAccumulatedThinkIndex, peekLastBodyBlockSeq } from "../utils/think-index.js";
 
 /** 延后收尾期间的上游 run 轮询间隔。 */
 const EMPTY_IDLE_POLL_MS = 1_000;
@@ -650,20 +652,10 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
               // 🔑 终态帧延迟：让已发出的长正文先穿过下游服务端慢速管道，
               // 保证终态帧最后到达（openclaw6.6 3e7b1aa/cdc4cdc 同款治理，
               // delayMs 在队列 drain 内 sleep，阻塞后续帧）。
-              outboundQueue.enqueue({
-                taskId: terminalTaskId,
-                label: "terminal-status",
-                delayMs: terminalFrameDelayMs,
-                send: () =>
-                  sendStatusUpdate({
-                    config,
-                    sessionId,
-                    taskId: terminalTaskId,
-                    messageId: terminalMessageId,
-                    text: "已完成深度思考",
-                    state: "completed",
-                  }),
-              });
+              // 注：终态不再下发 status-update（"已完成深度思考" state=completed）
+              // —— 该文案是思考期状态，正文完成帧下发时不应再出现；turn 的
+              // 完结由下方正文完成帧（lastChunk=true）、汇总卡/收尾卡与
+              // final=true 空载终帧表达。
 
               // 🔑 正文文本完成帧（lastChunk=true, final=false）：权威全文本在此
               // 补齐（原终帧携带全文本的语义前移到本帧），把 final=true 留给
@@ -712,17 +704,18 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
               }
 
               // 🔑 汇总状态卡：thinkIndex 攒批（本 turn 内工具卡不逐张携带，
-              // 攒到这里统一下发）。携带规则：除最后一个思考块和最后一个
-              // 正文段外，其余块都进 thinkIndex —— 最后一轮正文的 id = 当前
-              // 卡序号（同 seq 即同一块，一并过滤）；最后一个思考块按最近
-              // 闭合登记值剔除（结束时无法预知是否最后，终态时登记值即最后）。
+              // 攒到这里统一下发）。携带规则：除最后一轮正文外，其余所有
+              // 文本块都进 thinkIndex（全部思考块无一例外，含与最后一轮正文
+              // 同 seq 的思考块 —— 不得按当前卡序号过滤误杀）。最后一轮正文
+              // 即终态正文段，从不标记、天然不在列表；唯一需要剔除的情形：
+              // 终态段为空（正文停在某个边界冲刷段、之后没有新内容），该
+              // 冲刷段即最后一轮正文，按登记值剔除。
               // 排在 final 帧之前：终态帧发出后服务端可能关闭本 turn。
               {
-                const currentSeq = getCurrentStatusCardSeq(terminalTaskId);
-                const lastReasoningSeq = peekLastReasoningBlockSeq(terminalTaskId);
+                // 终态段无文本时，最后冲刷正文段承载最终展示，从 thinkIndex 剔除
+                const excludeSeq = fullFinalText ? undefined : peekLastBodyBlockSeq(terminalTaskId);
                 const summaryThinkIndex = getAccumulatedThinkIndex(terminalTaskId)
-                  .filter((id) => id !== String(currentSeq))
-                  .filter((id) => id !== lastReasoningSeq);
+                  .filter((id) => id !== excludeSeq);
                 outboundQueue.enqueue({
                   taskId: terminalTaskId,
                   label: "terminal-summary-card",
@@ -1007,32 +1000,37 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
 
         try {
           // 思考内容发完、lastChunk=true 标记帧之前补一帧 status-update
-          // （"已完成深度思考"），每个思考块结束时都发；正文完成后不再发
-          // （终态帧文案另见 terminal-status）。state=working：turn 仍在进行。
+          // （"已完成深度思考"），每个思考块结束时都发；本段正文已开始（正文
+          // 首帧已发出）后不再发 —— 该文案是思考期状态，发正文期间下发会打断
+          // 正文展示（正文之后也无 terminal-status 终态状态帧，已于终态序列移除）。
+          // state=working：turn 仍在进行。
           // streamingTextId 在入队时捕获并 pin —— 与思考段帧同属一个文本段，
           // 不受 drain 期间分段轮换影响（分段边界/思考→正文切换的收尾帧同理）。
           const reasoningStreamingTextId = getOrCreateStreamingTextId(endTaskId);
-          outboundQueue.enqueue({
-            taskId: endTaskId,
-            label: "reasoning-end-status",
-            send: () =>
-              sendStatusUpdate({
-                config,
-                sessionId,
-                taskId: endTaskId,
-                messageId: getActiveMessageId(),
-                text: "已完成深度思考",
-                state: "working",
-                streamingTextId: reasoningStreamingTextId,
-              }),
-          });
+          if (!isBodyTextSent(endTaskId)) {
+            outboundQueue.enqueue({
+              taskId: endTaskId,
+              label: "reasoning-end-status",
+              send: () =>
+                sendStatusUpdate({
+                  config,
+                  sessionId,
+                  taskId: endTaskId,
+                  messageId: getActiveMessageId(),
+                  text: "已完成深度思考",
+                  state: "working",
+                  streamingTextId: reasoningStreamingTextId,
+                }),
+            });
+          }
 
           if (isReasoningSegmentOpen(endTaskId)) {
             // 攒入思考文本块的 taskUniqIndexId：统一在终态汇总卡（text=任务
             // 处理已完成）携带，中间状态卡不携带。同步标记（而非等标记帧
-            // drain），保证不受出站队列时序影响；同时登记为本 turn 最近闭合
-            // 思考块，汇总卡组装时按登记值剔除最后一个思考块。
-            markReasoningBlockEnd(endTaskId, getCurrentStatusCardSeq(endTaskId));
+            // drain），保证不受出站队列时序影响。
+            // 取思考块开块时锁存的序号：块期间下发的状态卡 command 推高的
+            // 全局计数不属于本块（见 utils/reasoning-segment）。
+            markReasoningBlockEnd(endTaskId, peekReasoningSegmentSeq(endTaskId));
             // 同步闭合分段（不等标记帧 drain），分段边界据此判断本段已收尾
             closeReasoningSegment(endTaskId);
             // 结束标记帧携带本思考段的完整文本（append=false 快照语义），

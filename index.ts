@@ -36,7 +36,13 @@ import {
   deliverSubagentFinalResult,
 } from "./src/conversation/conversation-manager.js";
 import { captureCronAssistantText, notifyCronAgentEnd } from "./src/conversation/cron-buffer.js";
-import { logger } from "./src/utils/logger.js";
+import { logger, setA2AOutLogEnabled } from "./src/utils/logger.js";
+
+/** A2A-OUT 出站帧日志开关：true 打印 / false 关闭（唯一开关位置，改这里）。
+ *  关闭后所有 [A2A-OUT] 日志被 writeLog 统一拦截丢弃，调用点同步跳过
+ *  组日志字符串的开销（见 src/utils/logger.ts、conversation/outbound-gateway.ts）。 */
+const A2A_OUT_LOG_ENABLED = true;
+setA2AOutLogEnabled(A2A_OUT_LOG_ENABLED);
 
 /** 从路径/文本中提取技能名：.../skills/<name> 或 .../core_skills/<name>。
  *  与 pc 链路 stepinfo 的提取逻辑一致（dm 仓库 step-info-tool.ts 同款正则）。 */

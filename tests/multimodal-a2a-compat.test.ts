@@ -29,7 +29,7 @@ vi.mock("../src/utils/self-evolution-manager.js", () => ({ selfEvolutionManager:
 vi.mock("../src/sensitive-redactor.js", () => ({ redactSensitiveText: (text: string) => text, containsSensitiveInfo: () => false }));
 vi.mock("../src/utils/logger.js", () => {
   const logger = { log: vi.fn(), warn: vi.fn(), error: vi.fn() };
-  return { logger: { ...logger, withContext: () => logger } };
+  return { logger: { ...logger, withContext: () => logger }, isA2AOutLogEnabled: () => true };
 });
 
 // Deliberately use the real current formatter, legacy formatter, outbound
@@ -49,7 +49,7 @@ afterEach(() => {
 
 describe("native image failures through upstream A2A formatters", () => {
   it.each([
-    ["11.7.9.301", false], ["11.7.9.309", false], ["11.7.9.310", true],
+    ["11.7.9.310", false], ["11.7.9.329", false], ["11.7.9.330", true],
   ])("preserves %s framing and the older active task", async (appVer, modern) => {
     const sessionId = `native-failure-${appVer}`;
     const taskId = `incoming-${appVer}`;

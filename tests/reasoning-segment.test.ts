@@ -31,11 +31,17 @@ vi.mock("../src/utils/logger.js", () => ({
 import {
   noteReasoningSnapshot,
   peekReasoningSegmentText,
+  peekReasoningSegmentSeq,
   isReasoningSegmentOpen,
   closeReasoningSegment,
   cutReasoningSegment,
   releaseReasoningSegment,
 } from "../src/utils/reasoning-segment.js";
+import {
+  nextStatusCardSeq,
+  getCurrentStatusCardSeq,
+  releaseStatusCardSeq,
+} from "../src/utils/status-card-seq.js";
 import {
   getOrCreateSession,
   rotateStreamingTextSegment,
@@ -54,7 +60,7 @@ import { releaseThinkIndex } from "../src/utils/think-index.js";
 import {
   markLastChunkBlock,
   markReasoningBlockEnd,
-  peekLastReasoningBlockSeq,
+  peekLastBodyBlockSeq,
   getAccumulatedThinkIndex,
 } from "../src/utils/think-index.js";
 
@@ -110,38 +116,101 @@ describe("reasoning-segment registry", () => {
   });
 });
 
-describe("think-index last reasoning block tracking", () => {
+describe("reasoning-segment seq pinning (taskUniqIndexId 锁存)", () => {
+  const taskId = "task-seg-seq";
+
+  afterEach(() => {
+    releaseReasoningSegment(taskId);
+    releaseStatusCardSeq(taskId);
+  });
+
+  it("pins the seq at block open and keeps it when commands bump the counter mid-stream", () => {
+    // 起始状态卡：seq=1（类比场景中的 21）
+    expect(nextStatusCardSeq(taskId)).toBe(1);
+    noteReasoningSnapshot(taskId, "思考中");
+    expect(peekReasoningSegmentSeq(taskId)).toBe(1);
+
+    // 思考流中途下发两个状态卡 command：计数推高到 3
+    expect(nextStatusCardSeq(taskId)).toBe(2);
+    expect(nextStatusCardSeq(taskId)).toBe(3);
+    expect(getCurrentStatusCardSeq(taskId)).toBe(3);
+
+    // 续流快照不重置锁存：过程帧/收尾帧仍应携带开块时的 1
+    noteReasoningSnapshot(taskId, "思考中继续思考");
+    expect(peekReasoningSegmentSeq(taskId)).toBe(1);
+
+    // 闭合后（收尾帧 drain 前）仍可读锁存值
+    closeReasoningSegment(taskId);
+    expect(peekReasoningSegmentSeq(taskId)).toBe(1);
+  });
+
+  it("re-pins the live seq when a new block opens after the previous one closed", () => {
+    expect(nextStatusCardSeq(taskId)).toBe(1);
+    noteReasoningSnapshot(taskId, "第一块思考");
+    expect(peekReasoningSegmentSeq(taskId)).toBe(1);
+    closeReasoningSegment(taskId);
+    cutReasoningSegment(taskId);
+
+    // 边界期间下发状态卡：新块锁存推高后的序号（新块显示在新卡下方）
+    expect(nextStatusCardSeq(taskId)).toBe(2);
+    noteReasoningSnapshot(taskId, "第一块思考第二块思考");
+    expect(peekReasoningSegmentSeq(taskId)).toBe(2);
+  });
+
+  it("falls back to the live seq when the task has no reasoning content", () => {
+    expect(nextStatusCardSeq(taskId)).toBe(1);
+    expect(peekReasoningSegmentSeq(taskId)).toBe(1);
+    expect(nextStatusCardSeq(taskId)).toBe(2);
+    expect(peekReasoningSegmentSeq(taskId)).toBe(2);
+  });
+
+  it("release clears the pinned seq", () => {
+    expect(nextStatusCardSeq(taskId)).toBe(1);
+    noteReasoningSnapshot(taskId, "思考中");
+    expect(peekReasoningSegmentSeq(taskId)).toBe(1);
+    releaseReasoningSegment(taskId);
+    expect(nextStatusCardSeq(taskId)).toBe(2);
+    expect(peekReasoningSegmentSeq(taskId)).toBe(2);
+  });
+});
+
+
+describe("think-index accumulation（所有文本块含全部思考块）", () => {
   const taskId = "task-thinkidx";
 
   afterEach(() => {
     releaseThinkIndex(taskId);
   });
 
-  it("records the latest closed reasoning block while keeping all blocks in the list", () => {
-    markReasoningBlockEnd(taskId, 1);
-    markReasoningBlockEnd(taskId, 2);
-    markLastChunkBlock(taskId, 3); // 中间正文段只入列表，不覆盖最近思考块
+  it("accumulates every closed text block in order", () => {
+    markReasoningBlockEnd(taskId, 1); // 思考块一
+    markReasoningBlockEnd(taskId, 2); // 思考块二
+    markLastChunkBlock(taskId, 3); // 中间正文段冲刷
     expect(getAccumulatedThinkIndex(taskId)).toEqual(["1", "2", "3"]);
-    expect(peekLastReasoningBlockSeq(taskId)).toBe("2");
   });
 
   it("dedups blocks sharing the same seq (同 seq 即同一块)", () => {
     markReasoningBlockEnd(taskId, 1);
-    markReasoningBlockEnd(taskId, 1);
+    markLastChunkBlock(taskId, 1); // 与思考块同 seq 的正文冲刷：仍是一条
     expect(getAccumulatedThinkIndex(taskId)).toEqual(["1"]);
-    expect(peekLastReasoningBlockSeq(taskId)).toBe("1");
   });
 
-  it("returns undefined when no reasoning block has closed", () => {
-    markLastChunkBlock(taskId, 1);
-    expect(peekLastReasoningBlockSeq(taskId)).toBeUndefined();
-  });
-
-  it("release clears both the list and the last-reasoning record", () => {
+  it("tracks the last flushed body block separately from reasoning blocks", () => {
     markReasoningBlockEnd(taskId, 1);
+    expect(peekLastBodyBlockSeq(taskId)).toBeUndefined(); // 思考块不登记正文侧表
+    markLastChunkBlock(taskId, 1); // 正文冲刷段（与思考块同 seq）
+    markLastChunkBlock(taskId, 2);
+    expect(peekLastBodyBlockSeq(taskId)).toBe("2");
+    // 正文冲刷登记不影响思考块已在列表
+    expect(getAccumulatedThinkIndex(taskId)).toEqual(["1", "2"]);
+  });
+
+  it("release clears both the list and the last-body record", () => {
+    markReasoningBlockEnd(taskId, 1);
+    markLastChunkBlock(taskId, 2);
     releaseThinkIndex(taskId);
     expect(getAccumulatedThinkIndex(taskId)).toEqual([]);
-    expect(peekLastReasoningBlockSeq(taskId)).toBeUndefined();
+    expect(peekLastBodyBlockSeq(taskId)).toBeUndefined();
   });
 });
 
@@ -390,7 +459,7 @@ describe("rotateStreamingTextForBodyStart reasoning→body switch", () => {
 
   it("keeps the id on the legacy app version link", async () => {
     getOrCreateSession(sessionId);
-    markAppVersion(taskId, "11.7.8.100"); // 低版本链路（< 11.7.9.310）
+    markAppVersion(taskId, "11.7.8.100"); // 低版本链路（< 11.7.9.330）
     const id = getOrCreateStreamingTextId(taskId);
     noteReasoningSnapshot(taskId, "思考内容");
 

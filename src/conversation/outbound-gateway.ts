@@ -11,7 +11,7 @@ import { XYPushService } from "../transport/push.js";
 import { getAllPushIds } from "../utils/pushid-manager.js";
 import { getOrCreateConvId } from "../utils/cron-conv-map.js";
 import { recordSentStreamingTextId } from "../utils/streaming-text-id.js";
-import { logger } from "../utils/logger.js";
+import { logger, isA2AOutLogEnabled } from "../utils/logger.js";
 import type {
   XYChannelConfig,
   OutboundWebSocketMessage,
@@ -37,6 +37,7 @@ function extractCommands(payload: Record<string, any>): A2ACommand[] {
     .flatMap((p: any) => p.data.commands);
 }
 
+/** MemoryFileRead 响应命令：文件正文必须原样传输，但绝不进入日志。 */
 function isMemoryFileReadCommand(command: A2ACommand): boolean {
   return command?.header?.namespace === "AgentEvent"
     && command?.header?.name === "MemoryQuery"
@@ -60,7 +61,9 @@ function splitMixedReasoningFrames(payload: Record<string, any>): Array<Record<s
   const hasText = parts.some((p: any) => p?.kind === "text");
   if (!hasReasoning || !hasText) return [payload];
 
-  logger.warn(`[A2A-OUT] Mixed reasoningText+text frame detected, splitting into separate frames`);
+  if (isA2AOutLogEnabled()) {
+    logger.warn(`[A2A-OUT] Mixed reasoningText+text frame detected, splitting into separate frames`);
+  }
   const reasoningParts = parts.filter((p: any) => p?.kind === "reasoningText");
   const otherParts = parts.filter((p: any) => p?.kind !== "reasoningText");
   const reasoningFrame = {
@@ -81,6 +84,52 @@ function splitMixedReasoningFrames(payload: Record<string, any>): Array<Record<s
 }
 
 /**
+ * 日志内容预览：首尾各保留 5 个字符，中间折叠为 ***(len=N)；
+ * ≤10 字符的短串原样输出（无需折叠）。
+ */
+function previewContent(s: string): string {
+  if (s.length <= 10) return s;
+  return `${s.slice(0, 5)}***(len=${s.length})${s.slice(-5)}`;
+}
+
+/**
+ * 生成日志用的 msgDetail 精简版：text / reasoningText / reference 的内容
+ * 只保留首尾各 5 个字符、中间替换为 ***(len=N)，避免全量打印刷屏；
+ * 其余字段原样保留。沿路径构造新对象，不修改实际发送的 frame。
+ */
+function buildLoggableMsgDetail(frame: Record<string, any>): string {
+  const parts = frame?.result?.artifact?.parts;
+  let logFrame = frame;
+  if (Array.isArray(parts)) {
+    logFrame = {
+      ...frame,
+      result: {
+        ...frame.result,
+        artifact: {
+          ...frame.result.artifact,
+          parts: parts.map((p: any) => {
+            if (p?.kind === "text" && typeof p.text === "string") {
+              return { ...p, text: previewContent(p.text) };
+            }
+            if (p?.kind === "reasoningText" && typeof p.reasoningText === "string") {
+              return { ...p, reasoningText: previewContent(p.reasoningText) };
+            }
+            // reference 引用数据（kind:"data" 且带 data.reference）：
+            // 序列化后按同样规则折叠
+            if (p?.kind === "data" && p.data?.reference !== undefined) {
+              const refJson = JSON.stringify(p.data.reference);
+              return { ...p, data: { ...p.data, reference: previewContent(refJson) } };
+            }
+            return p;
+          }),
+        },
+      },
+    };
+  }
+  return JSON.stringify({ ...logFrame, hostname: os.hostname() });
+}
+
+/**
  * 发送一帧 A2A agent_response 到 xy server。
  * 统一封装 OutboundWebSocketMessage 信封（msgType/agentId/hostname）。
  */
@@ -97,29 +146,36 @@ export async function sendWsFrame(params: SendWsFrameParams): Promise<void> {
       taskId,
       msgDetail: JSON.stringify({ ...frame, hostname: os.hostname() }),
     };
-    // MemoryFileRead 为保证端侧文件完整性会保留原文，只能记录元数据。
-    // 其他出站帧沿用完整日志，日志策略不改变实际发送内容。
-    log.log(
-      `[A2A-OUT] msgType=${outboundMessage.msgType}, agentId=${outboundMessage.agentId}, sessionId=${sessionId}, taskId=${taskId}, size=${outboundMessage.msgDetail.length}`,
-    );
-    const commands = extractCommands(frame);
-    if (commands.some(isMemoryFileReadCommand)) {
-      log.log(`[A2A-OUT] msgDetail omitted for MemoryFileRead response`);
-      for (const command of commands) {
-        if (isMemoryFileReadCommand(command)) {
-          const answer = command.payload?.ans;
-          const contentBytes = typeof answer?.contentBytes === "number" && Number.isFinite(answer.contentBytes)
-            ? answer.contentBytes
-            : typeof answer?.content === "string" ? Buffer.byteLength(answer.content, "utf8") : 0;
-          log.log(`[A2A-OUT] action=MemoryFileRead, ok=${answer?.ok === true}, contentBytes=${contentBytes}`);
-        } else {
-          log.log(`[A2A-OUT] command=${JSON.stringify(command)}`);
+    // 出站 A2A 日志（受 index.ts 的 A2A_OUT_LOG_ENABLED 常量开关控制，关闭时
+    // 整块跳过，省掉 buildLoggableMsgDetail / extractCommands 的序列化开销）：
+    // 每一帧打印信封摘要 + msgDetail 精简版（text/reasoningText/reference
+    // 内容只留首尾各 5 字符并标注长度）+ 内嵌 command 单独打印。
+    // MemoryFileRead 为保证端侧文件完整性会保留原文，日志只能记录元数据：
+    // 含 MemoryFileRead 的帧省略 msgDetail 全量；MemoryFileRead 命令只打
+    // action/ok/contentBytes，同帧其它命令照常全量打印。
+    if (isA2AOutLogEnabled()) {
+      log.log(
+        `[A2A-OUT] msgType=${outboundMessage.msgType}, agentId=${outboundMessage.agentId}, sessionId=${sessionId}, taskId=${taskId}, size=${outboundMessage.msgDetail.length}`,
+      );
+      const commands = extractCommands(frame);
+      if (commands.some(isMemoryFileReadCommand)) {
+        log.log(`[A2A-OUT] msgDetail omitted for MemoryFileRead response`);
+        for (const command of commands) {
+          if (isMemoryFileReadCommand(command)) {
+            const answer = command.payload?.ans;
+            const contentBytes = typeof answer?.contentBytes === "number" && Number.isFinite(answer.contentBytes)
+              ? answer.contentBytes
+              : typeof answer?.content === "string" ? Buffer.byteLength(answer.content, "utf8") : 0;
+            log.log(`[A2A-OUT] action=MemoryFileRead, ok=${answer?.ok === true}, contentBytes=${contentBytes}`);
+          } else {
+            log.log(`[A2A-OUT] command=${JSON.stringify(command)}`);
+          }
         }
-      }
-    } else {
-      log.log(`[A2A-OUT] msgDetail=${outboundMessage.msgDetail}`);
-      if (commands.length > 0) {
-        log.log(`[A2A-OUT] commands=${JSON.stringify(commands)}`);
+      } else {
+        log.log(`[A2A-OUT] msgDetail=${buildLoggableMsgDetail(frame)}`);
+        if (commands.length > 0) {
+          log.log(`[A2A-OUT] commands=${JSON.stringify(commands)}`);
+        }
       }
     }
     await wsManager.sendMessage(sessionId, outboundMessage);
@@ -245,6 +301,8 @@ export async function pushCommand(params: PushCommandParams): Promise<void> {
   }
 
   const pushService = new XYPushService(config);
-  logger.log(`[A2A-OUT] push command, pushId=${pushId.substring(0, 20)}..., command=${JSON.stringify(command)}`);
+  if (isA2AOutLogEnabled()) {
+    logger.log(`[A2A-OUT] push command, pushId=${pushId.substring(0, 20)}..., command=${JSON.stringify(command)}`);
+  }
   await pushService.sendPushWithDirectives(pushId, randomUUID(), [command]);
 }
