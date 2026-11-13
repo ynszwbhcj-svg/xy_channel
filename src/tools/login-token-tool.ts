@@ -1,13 +1,15 @@
 // Login Token tool - 自动获取用户授权信息
 import { v4 as uuidv4 } from "uuid";
-import { getCachedXYWebSocketManager } from "../transport/client.js";
 import type { SessionContext } from "./session-manager.js";
 import { getCurrentSessionContext } from './session-manager.js';
 
-import os from "os";
 import { readFileSync, writeFileSync, existsSync } from "fs";
 import { logger } from "../utils/logger.js";
-import type { OutboundWebSocketMessage } from "../types.js";
+import { sendWsFrame } from "../conversation/outbound-gateway.js";
+import { getCurrentStatusCardSeq } from "../utils/status-card-seq.js";
+import { peekLastSentStreamingTextId, getOrCreateStreamingTextId } from "../utils/streaming-text-id.js";
+import { isReasoningFinished as readReasoningFinished } from "../utils/reasoning-state.js";
+import { isLegacyAppVersion } from "../utils/app-version.js";
 
 const TOKEN_FILE_PATH = "/home/sandbox/.openclaw/.xiaoyitoken.json";
 const POLL_INTERVAL_MS = 5000; // 5 seconds
@@ -51,44 +53,41 @@ const { clientId, skillName } = params;
 
 
     // (1) Build and send getLoginToken artifact
-    // lastChunk=false：本帧是 getLoginToken 请求（非文本块终点）
+    // lastChunk=false：本帧是 getLoginToken 请求（非文本块终点）。
+    // 经 outbound-gateway 收口发送（统一信封 + A2A-OUT 日志覆盖、受开关控制）；
+    // 信封字段与其它出站帧对齐：taskUniqId/taskUniqIndexId 取当前状态卡序号，
+    // streamingTextId 跟随最后已发帧（命令类帧不引入端侧未见的新 id），
+    // isNew 按版本链路判定（原先硬编码 true，低版本链路会误标）。
     const artifactId = uuidv4();
-    const artifact = {
-      taskId,
-      kind: "artifact-update",
-      isNew: true,
-      append: false,
-      lastChunk: false,
-      final: false,
-      artifact: {
-        artifactId,
-        parts: [
-          {
-            kind: "getLoginToken",
-            clientId: clientId.trim(),
-            skillName: skillName.trim(),
-          },
-        ],
+    const payload = {
+      jsonrpc: "2.0",
+      id: messageId,
+      result: {
+        taskId,
+        taskUniqId: taskId,
+        taskUniqIndexId: getCurrentStatusCardSeq(taskId),
+        kind: "artifact-update",
+        isNew: !isLegacyAppVersion(taskId),
+        append: false,
+        lastChunk: false,
+        final: false,
+        streamingTextId: peekLastSentStreamingTextId(taskId) ?? getOrCreateStreamingTextId(taskId),
+        isReasoningFinished: readReasoningFinished(taskId),
+        artifact: {
+          artifactId,
+          parts: [
+            {
+              kind: "getLoginToken",
+              clientId: clientId.trim(),
+              skillName: skillName.trim(),
+            },
+          ],
+        },
       },
     };
 
-    const jsonRpcResponse = {
-      jsonrpc: "2.0",
-      id: messageId,
-      result: artifact,
-    };
-
-    const wsManager = getCachedXYWebSocketManager();
-    const outboundMessage: OutboundWebSocketMessage = {
-      msgType: "agent_response",
-      agentId: config.agentId,
-      sessionId,
-      taskId,
-      msgDetail: JSON.stringify({ ...jsonRpcResponse, hostname: os.hostname() }),
-    };
-
     logger.log(`[LOGIN_TOKEN] Sending getLoginToken artifact for clientId=${clientId}, skillName=${skillName}`);
-    await wsManager.sendMessage(sessionId, outboundMessage);
+    await sendWsFrame({ config, sessionId, taskId, payload });
     logger.log(`[LOGIN_TOKEN] Artifact sent successfully`);
 
     // (2) Poll .xiaoyitoken.json every 5 seconds
