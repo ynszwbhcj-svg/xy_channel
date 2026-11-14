@@ -62,6 +62,8 @@ import {
   markReasoningBlockEnd,
   peekLastBodyBlockSeq,
   getAccumulatedThinkIndex,
+  notifyTextBlockStarted,
+  takeFirstCardThinkIndex,
 } from "../src/utils/think-index.js";
 
 describe("reasoning-segment registry", () => {
@@ -211,6 +213,63 @@ describe("think-index accumulation（所有文本块含全部思考块）", () =
     releaseThinkIndex(taskId);
     expect(getAccumulatedThinkIndex(taskId)).toEqual([]);
     expect(peekLastBodyBlockSeq(taskId)).toBeUndefined();
+  });
+});
+
+describe("first-card thinkIndex latch（中途首张状态卡携带前一轮块）", () => {
+  const taskId = "task-firstcard";
+
+  afterEach(() => {
+    releaseThinkIndex(taskId);
+    releaseReasoningSegment(taskId);
+    releaseStatusCardSeq(taskId);
+  });
+
+  it("does not release the thinkIndex before the next text block starts", () => {
+    markReasoningBlockEnd(taskId, 1); // 前一轮思考块闭合
+    expect(takeFirstCardThinkIndex(taskId)).toBeUndefined(); // 下一块未开始：不携带
+  });
+
+  it("releases the closed block seq on the first card after the next block started, only once", () => {
+    markReasoningBlockEnd(taskId, 1);
+    // 下一个文本块开始（新思考块 open 转换，经由 noteReasoningSnapshot）
+    noteReasoningSnapshot(taskId, "新思考内容");
+    expect(takeFirstCardThinkIndex(taskId)).toEqual(["1"]); // 首张卡携带
+    expect(takeFirstCardThinkIndex(taskId)).toBeUndefined(); // 第二张起不再重复
+  });
+
+  it("accumulates multiple closed blocks pending the first card", () => {
+    // 思考块一：开块 → 闭合（模拟 thinking_end 决策点：mark + close + cut）
+    noteReasoningSnapshot(taskId, "思考一");
+    markReasoningBlockEnd(taskId, 1);
+    closeReasoningSegment(taskId);
+    cutReasoningSegment(taskId);
+    // 思考块二开块（open 转换 → 锁存可下发）
+    noteReasoningSnapshot(taskId, "思考一思考二");
+    markReasoningBlockEnd(taskId, 2);
+    closeReasoningSegment(taskId);
+    cutReasoningSegment(taskId);
+    // 思考块三开块 → 再次锁存
+    noteReasoningSnapshot(taskId, "思考一思考二思考三");
+    expect(takeFirstCardThinkIndex(taskId)).toEqual(["1", "2"]);
+  });
+
+  it("re-arms for the next cycle after consumption", () => {
+    markReasoningBlockEnd(taskId, 1);
+    notifyTextBlockStarted(taskId);
+    expect(takeFirstCardThinkIndex(taskId)).toEqual(["1"]);
+    // 新周期：再闭合 + 再开始 → 首张卡再次携带
+    markLastChunkBlock(taskId, 2);
+    expect(takeFirstCardThinkIndex(taskId)).toBeUndefined();
+    notifyTextBlockStarted(taskId);
+    expect(takeFirstCardThinkIndex(taskId)).toEqual(["2"]);
+  });
+
+  it("release clears the pending latch", () => {
+    markReasoningBlockEnd(taskId, 1);
+    notifyTextBlockStarted(taskId);
+    releaseThinkIndex(taskId);
+    expect(takeFirstCardThinkIndex(taskId)).toBeUndefined();
   });
 });
 
