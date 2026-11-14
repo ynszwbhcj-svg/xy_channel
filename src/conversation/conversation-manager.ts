@@ -13,8 +13,8 @@
 import { randomUUID } from "crypto";
 import { logger } from "../utils/logger.js";
 import { releaseStreamingTextId, releaseLastSentStreamingTextId, rotateStreamingTextId, peekStreamingTextId, getOrCreateStreamingTextId } from "../utils/streaming-text-id.js";
-import { releaseStatusCardSeq, getCurrentStatusCardSeq } from "../utils/status-card-seq.js";
-import { markLastChunkBlock, markReasoningBlockEnd, getAccumulatedThinkIndex, releaseThinkIndex } from "../utils/think-index.js";
+import { releaseStatusCardSeq, getCurrentStatusCardSeq, nextStatusCardSeq, advanceStatusCardSeqForSegment } from "../utils/status-card-seq.js";
+import { markLastChunkBlock, markReasoningBlockEnd, getAccumulatedThinkIndex, notifyTextBlockStarted, releaseThinkIndex } from "../utils/think-index.js";
 import { releaseAppVersion, isLegacyAppVersion } from "../utils/app-version.js";
 import { clearBodyTextState, isBodyTextSent } from "../utils/body-text-state.js";
 import {
@@ -289,6 +289,12 @@ export async function rotateStreamingTextSegment(params: {
   cutReasoningSegment(taskId);
 
   const newId = rotateStreamingTextId(taskId);
+  // taskUniqIndexId 与 streamingTextId 同步切换：分段轮换同时推进展示槽位
+  // 序号到当前值 +1（旧段的收尾帧已在上方 drain 完毕、以旧序号发出），
+  // 保证相邻文本段（尤其最后一轮思考与正文）序号不同（见 utils/status-card-seq）。
+  advanceStatusCardSeqForSegment(taskId);
+  // 新文本段开始：边界处闭合块的 thinkIndex 可随下一张状态卡下发
+  notifyTextBlockStarted(taskId);
   assembler?.cutSegment();
   // 新文本段 = 新一轮模型回复：复位"正文首帧已发出"标记，工具 command
   // 重新获得先于正文下发的窗口（见 utils/body-text-state.ts）。
@@ -384,6 +390,12 @@ export async function rotateStreamingTextForBodyStart(params: {
   }
 
   const newId = rotateStreamingTextId(taskId);
+  // taskUniqIndexId 与 streamingTextId 同步切换：正文段使用新的展示槽位
+  // 序号（当前值 +1），保证最后一轮思考与正文的 taskUniqIndexId 不同
+  // （见 utils/status-card-seq）。
+  advanceStatusCardSeqForSegment(taskId);
+  // 正文段开始：此前闭合思考块的 thinkIndex 可随下一张状态卡下发
+  notifyTextBlockStarted(taskId);
   logger.withContext(sessionId, taskId).log(
     `[SEGMENT] reasoning→body switch, rotated streamingTextId=${newId}`,
   );

@@ -25,6 +25,12 @@ const thinkIndexListByTask = new Map<string, string[]>();
 /** taskId → 本 turn 最后一次边界冲刷正文段的 taskUniqIndexId（字符串化）。 */
 const lastBodyBlockSeqByTask = new Map<string, string>();
 
+/** taskId → 已闭合、但尚未经中途状态卡 thinkIndex 下发的文本块序号（保序去重）。 */
+const pendingFirstCardThinkIndexByTask = new Map<string, string[]>();
+
+/** taskId → 自最近一次文本块闭合以来，下一个文本块是否已开始（新块首帧语义）。 */
+const nextBlockStartedByTask = new Map<string, boolean>();
+
 /**
  * 记录一帧 lastChunk=true 正文分段冲刷块的 taskUniqIndexId：攒入累计列表，
  * 并登记为本 turn 最近冲刷的正文段。在正文分段收尾的决策点同步调用
@@ -32,11 +38,8 @@ const lastBodyBlockSeqByTask = new Map<string, string>();
  * 重复出现时只保留一个（同 seq 即同一块）。
  */
 export function markLastChunkBlock(taskId: string, taskUniqIndexId: number): void {
-  const list = thinkIndexListByTask.get(taskId) ?? [];
-  const value = String(taskUniqIndexId);
-  if (!list.includes(value)) list.push(value);
-  thinkIndexListByTask.set(taskId, list);
-  lastBodyBlockSeqByTask.set(taskId, value);
+  markClosedBlock(taskId, taskUniqIndexId);
+  lastBodyBlockSeqByTask.set(taskId, String(taskUniqIndexId));
 }
 
 /**
@@ -45,10 +48,44 @@ export function markLastChunkBlock(taskId: string, taskUniqIndexId: number): voi
  * 思考块全部进 thinkIndex，不登记任何"剔除用"侧表。
  */
 export function markReasoningBlockEnd(taskId: string, taskUniqIndexId: number): void {
-  const list = thinkIndexListByTask.get(taskId) ?? [];
+  markClosedBlock(taskId, taskUniqIndexId);
+}
+
+/** 闭合块入累计列表 + 入中途卡待下发队列（复位"下一块已开始"锁存）。 */
+function markClosedBlock(taskId: string, taskUniqIndexId: number): void {
   const value = String(taskUniqIndexId);
+  const list = thinkIndexListByTask.get(taskId) ?? [];
   if (!list.includes(value)) list.push(value);
   thinkIndexListByTask.set(taskId, list);
+  const pending = pendingFirstCardThinkIndexByTask.get(taskId) ?? [];
+  if (!pending.includes(value)) pending.push(value);
+  pendingFirstCardThinkIndexByTask.set(taskId, pending);
+  // 新闭合后重新等待"下一个文本块开始"，其后第一张状态卡才携带 thinkIndex
+  nextBlockStartedByTask.set(taskId, false);
+}
+
+/**
+ * 下一个文本块已开始（思考块 open 转换 / 文本分段轮换）：若存在已闭合未
+ * 下发的块，锁存"可下发"——其后第一张工具状态卡（sendExecuteStatusCard）
+ * 携带这些块的 taskUniqIndexId 作为 thinkIndex。无待下发块时 no-op。
+ */
+export function notifyTextBlockStarted(taskId: string): void {
+  if ((pendingFirstCardThinkIndexByTask.get(taskId) ?? []).length > 0) {
+    nextBlockStartedByTask.set(taskId, true);
+  }
+}
+
+/**
+ * 读取并消费"中途首张状态卡待携带的 thinkIndex"：仅当存在已闭合块且下一个
+ * 文本块已开始时返回（否则 undefined）；返回后即消费，后续状态卡不再重复
+ * 携带（直到再有块闭合 + 下一块开始）。
+ */
+export function takeFirstCardThinkIndex(taskId: string): string[] | undefined {
+  const pending = pendingFirstCardThinkIndexByTask.get(taskId) ?? [];
+  if (pending.length === 0 || nextBlockStartedByTask.get(taskId) !== true) return undefined;
+  pendingFirstCardThinkIndexByTask.delete(taskId);
+  nextBlockStartedByTask.set(taskId, false);
+  return pending;
 }
 
 /**
@@ -64,8 +101,10 @@ export function getAccumulatedThinkIndex(taskId: string): string[] {
   return [...(thinkIndexListByTask.get(taskId) ?? [])];
 }
 
-/** 释放指定 taskId 的攒批列表与最近冲刷正文段登记（turn 结束 / 会话销毁时调用）。幂等。 */
+/** 释放指定 taskId 的攒批列表、最近冲刷正文段登记与中途卡待下发状态（turn 结束 / 会话销毁时调用）。幂等。 */
 export function releaseThinkIndex(taskId: string): void {
   thinkIndexListByTask.delete(taskId);
   lastBodyBlockSeqByTask.delete(taskId);
+  pendingFirstCardThinkIndexByTask.delete(taskId);
+  nextBlockStartedByTask.delete(taskId);
 }

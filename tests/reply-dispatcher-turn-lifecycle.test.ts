@@ -63,7 +63,8 @@ import {
   setSessionState,
 } from "../src/conversation/conversation-manager.js";
 import { peekStreamingTextId } from "../src/utils/streaming-text-id.js";
-import { nextStatusCardSeq } from "../src/utils/status-card-seq.js";
+import { nextStatusCardSeq, getCurrentStatusCardSeq } from "../src/utils/status-card-seq.js";
+import { peekReasoningSegmentSeq } from "../src/utils/reasoning-segment.js";
 
 function mockDispatcherFactory() {
   mocks.createDispatcher.mockImplementation((options) => ({
@@ -336,16 +337,19 @@ describe("reply dispatcher turn ownership", () => {
     expect(closeFrames[0]).toMatchObject({ text: "思考内容", isReasoningFinished: false });
   });
 
-  it("keeps the reasoning block in thinkIndex when it shares the final card slot with the body (think+body, no tools)", async () => {
+  it("keeps the reasoning block in thinkIndex and gives the body a different taskUniqIndexId (think+body, no tools)", async () => {
     const sessionId = "sess-think-body-same-slot";
     registerTask(sessionId, "task-tb", "msg-tb");
     const turn = createDispatcher(sessionId, "task-tb", "msg-tb");
 
-    // 思考块（seq=1 起始卡槽位）→ thinking_end 收尾；正文同槽流出，
-    // 全程无状态卡推高计数 —— 思考块与最后一轮正文同 seq
+    // 思考块 pin 在 seq=1（起始卡槽位）→ thinking_end 收尾；正文经
+    // 思考→正文切换轮换 streamingTextId，taskUniqIndexId 同步推进到 seq=2
     await turn.replyOptions.onReasoningStream({ text: "思考内容" });
     await turn.replyOptions.onReasoningEnd();
+    expect(peekReasoningSegmentSeq("task-tb")).toBe(1);
     await turn.replyOptions.onPartialReply({ text: "正文" });
+    // 核心断言：最后一轮思考与正文的 taskUniqIndexId 不同
+    expect(getCurrentStatusCardSeq("task-tb")).toBe(2);
     await turn.dispatcher.deliver({ text: "正文" }, { kind: "final" });
     await turn.dispatcher.onIdle();
     await getOrCreateSession(sessionId).outboundQueue.whenIdle();
@@ -363,30 +367,27 @@ describe("reply dispatcher turn ownership", () => {
     registerTask(sessionId, "task-t", "msg-t");
     const turn = createDispatcher(sessionId, "task-t", "msg-t");
 
-    // 思考块一（id A，seq=1 —— 起始卡槽位）→ thinking_end 收尾
+    // 思考块一（seq=1 —— 起始卡槽位）→ thinking_end 收尾 → thinkIndex=["1"]
     await turn.replyOptions.onReasoningStream({ text: "思考块一" });
     await turn.replyOptions.onReasoningEnd();
-    // 正文段一出现（seq=1 卡槽）：其后的工具边界轮换 id（边界无条件拆分，
-    // 每个独立思考段都是独立 id，见上方用例）
+    // 正文段一出现：思考→正文切换轮换 id 并推进展示槽位序号 → seq=2
     await turn.replyOptions.onPartialReply({ text: "正文段一" });
     await getOrCreateSession(sessionId).outboundQueue.whenIdle();
+    // 工具边界：正文段一冲刷（以 seq=2 入 thinkIndex），轮换后再推进 → seq=3
     await rotateStreamingTextSegment({ config: {} as never, sessionId, taskId: "task-t", messageId: "msg-t" });
 
-    // 两张工具状态卡推进 seq：首张消费序号后 currentSeq 仍为 1（起始卡
-    // index=1 不占计数，首张状态卡同槽，见 status-card-seq），第二张推进
-    // 到 2 —— 思考块二落到 seq=2，与思考块一分属不同卡槽
+    // 两张工具状态卡推进 seq 到 4、5 —— 思考块二落到 seq=5
     nextStatusCardSeq("task-t");
     nextStatusCardSeq("task-t");
 
-    // 思考块二（id B，seq=2，本 turn 最后一个思考块）→ thinking_end
+    // 思考块二（seq=5）→ thinking_end → thinkIndex=["1","2","5"]
     await turn.replyOptions.onReasoningStream({ text: "思考块一思考块二" });
     await turn.replyOptions.onReasoningEnd();
 
-    // 再一张状态卡推进到 3：终态 currentSeq=3（最后正文段所在卡槽），
-    // 与两个思考块的 seq（1、2）都不同 —— 验证过滤只剔除最后正文段
+    // 再一张状态卡推进到 6
     nextStatusCardSeq("task-t");
 
-    // 正文 + 终态序列
+    // 正文段二 + 终态序列：思考→正文切换再推进 → 正文段二在 seq=7
     await turn.replyOptions.onPartialReply({ text: "正文" });
     await turn.dispatcher.deliver({ text: "正文" }, { kind: "final" });
     await turn.dispatcher.onIdle();
@@ -396,9 +397,9 @@ describe("reply dispatcher turn ownership", () => {
       .map(([params]) => params)
       .filter((params) => params.text === "任务处理已完成");
     expect(summaryCards).toHaveLength(1);
-    // 全部思考块（seq=1、2）都进 thinkIndex；最后正文段（seq=3）按当前
-    // 卡序号剔除（正文段本身也从不标记）
-    expect(summaryCards[0].thinkIndex).toEqual(["1", "2"]);
+    // 全部思考块（1、5）与中间正文段（2）都进 thinkIndex；最后正文段
+    // （seq=7 终态段）从不标记，天然不在列表（终态段有文本，无剔除）
+    expect(summaryCards[0].thinkIndex).toEqual(["1", "2", "5"]);
   });
 });
 
