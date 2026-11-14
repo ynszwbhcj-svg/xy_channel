@@ -6,7 +6,7 @@ import { getOrCreateStreamingTextId, peekStreamingTextId, peekLastSentStreamingT
 import { isReasoningFinished as readReasoningFinished, releaseReasoningState } from "./utils/reasoning-state.js";
 import { releaseReasoningSegment, peekReasoningSegmentSeq } from "./utils/reasoning-segment.js";
 import { releaseStatusCardSeq, getCurrentStatusCardSeq, nextStatusCardSeq } from "./utils/status-card-seq.js";
-import { releaseThinkIndex } from "./utils/think-index.js";
+import { releaseThinkIndex, takeFirstCardThinkIndex } from "./utils/think-index.js";
 import { isLegacyAppVersion, releaseAppVersion } from "./utils/app-version.js";
 import { markBodyTextSent, clearBodyTextState } from "./utils/body-text-state.js";
 import { logger } from "./utils/logger.js";
@@ -583,6 +583,11 @@ export async function sendExecuteStatusCard(params: SendExecuteStatusCardParams)
   const log = logger.withContext(sessionId, taskId);
   const seq = nextStatusCardSeq(taskId);
 
+  // thinkIndex 来源：调用方显式传入（终态汇总卡）优先；否则取"已闭合且下
+  // 一个文本块已开始"的待下发块 —— 中途第一张状态卡携带前一轮文本块的
+  // taskUniqIndexId（取出即消费，后续卡不再重复携带，见 utils/think-index）。
+  const thinkIndex = params.thinkIndex ?? takeFirstCardThinkIndex(taskId);
+
   // 配对卡先行：DisplayTaskCardData 的顺序必须在 statusCard 之前
   await sendDisplayTaskCardData({
     config,
@@ -603,7 +608,7 @@ export async function sendExecuteStatusCard(params: SendExecuteStatusCardParams)
       taskUniqId: taskId,
       taskUniqIndexId: seq,
       ...(params.symbolName ? { symbolName: params.symbolName } : {}),
-      ...(params.thinkIndex && params.thinkIndex.length > 0 ? { thinkIndex: params.thinkIndex } : {}),
+      ...(thinkIndex && thinkIndex.length > 0 ? { thinkIndex } : {}),
     },
   };
 
@@ -615,10 +620,10 @@ export async function sendExecuteStatusCard(params: SendExecuteStatusCardParams)
     command,
     toolCallId: params.toolCallId,
   });
-  // 卡片日志统一一行格式；thinkIndex（仅终态汇总卡携带）保留在此行末尾
+  // 卡片日志统一一行格式；thinkIndex（终态汇总卡 / 中途首卡）保留在此行末尾
   log.log(
     `[STEP-INFO] cardType=DisplayExecuteStatusCard, taskUniqId=${taskId}, taskUniqIndexId=${seq}, text=${params.text}` +
-      (params.thinkIndex && params.thinkIndex.length > 0 ? `, thinkIndex=${JSON.stringify(params.thinkIndex)}` : ""),
+      (thinkIndex && thinkIndex.length > 0 ? `, thinkIndex=${JSON.stringify(thinkIndex)}` : ""),
   );
 }
 

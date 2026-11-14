@@ -22,6 +22,7 @@
 // reply-dispatcher 均可安全 import（避免循环依赖）。
 
 import { getCurrentStatusCardSeq } from "./status-card-seq.js";
+import { notifyTextBlockStarted } from "./think-index.js";
 
 interface ReasoningSegmentState {
   /** SDK 思考块最近一次全量快照（原始文本，未剥离分段基线）。 */
@@ -73,6 +74,8 @@ export function noteReasoningSnapshot(taskId: string, fullText: string): string 
     // 已开块期间的续流快照保持原锁存值，不受中途 command 推高计数影响。
     if (!state.open) {
       state.seq = getCurrentStatusCardSeq(taskId);
+      // 新文本块开始：此前闭合块的 thinkIndex 可随下一张状态卡下发
+      notifyTextBlockStarted(taskId);
     }
     state.open = true;
   }
