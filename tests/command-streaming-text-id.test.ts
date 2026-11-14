@@ -19,6 +19,7 @@ vi.mock("../src/utils/logger.js", () => ({
     warn: mocks.warn,
     error: mocks.error,
   },
+  isA2AOutLogEnabled: () => true,
 }));
 
 import { sendA2AResponse, sendCommand, sendReference, sendStatusUpdate } from "../src/formatter.js";

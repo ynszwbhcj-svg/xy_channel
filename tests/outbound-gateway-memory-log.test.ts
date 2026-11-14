@@ -21,6 +21,7 @@ vi.mock("../src/utils/logger.js", () => ({
   logger: {
     withContext: () => ({ log: mocks.log }),
   },
+  isA2AOutLogEnabled: () => true,
 }));
 
 import { sendWsFrame } from "../src/conversation/outbound-gateway.js";

@@ -1,7 +1,7 @@
 // 低版本 App 判定注册表。
 //
 // 上行消息的 variables.systemVariables.app_ver 携带小艺 App 版本号；
-// 低于 LEGACY_APP_VERSION（11.7.9.310）的版本不支持 A2A 链路下发的
+// 低于 LEGACY_APP_VERSION（11.7.9.330）的版本不支持 A2A 链路下发的
 // isNew 标识 —— 这些版本的会话，所有出站帧的 isNew 置为 false。
 //   - 按 taskId 记录：消息入口（bot.ts）抽取 app_ver 时标记；
 //   - 未携带 app_ver 的消息不标记（默认非低版本，isNew 保持 true）；
@@ -9,8 +9,8 @@
 //
 // 叶子模块：不依赖 conversation/dispatch 层。
 
-/** 低版本阈值：低于 11.7.9.310 视为低版本。 */
-const LEGACY_APP_VERSION = [11, 7, 9, 310] as const;
+/** 低版本阈值：低于 11.7.9.330 视为低版本。 */
+const LEGACY_APP_VERSION = [11, 7, 9, 330] as const;
 
 /** taskId → 是否低版本。 */
 const legacyAppVersionByTask = new Map<string, boolean>();

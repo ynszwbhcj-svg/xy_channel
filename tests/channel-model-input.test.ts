@@ -9,7 +9,7 @@ import { xyPlugin } from "../src/channel.js";
 import { resolveModelInput } from "../src/model-input.js";
 import { runWithSessionContext, type SessionContext } from "../src/tools/session-manager.js";
 
-function context(deviceType: string, modelInput: unknown, appVer = "11.7.9.310"): SessionContext {
+function context(deviceType: string, modelInput: unknown, appVer = "11.7.9.330"): SessionContext {
   return {
     config: {} as SessionContext["config"],
     sessionId: `model-input-${deviceType}`,

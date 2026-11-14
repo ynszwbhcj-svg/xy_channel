@@ -368,7 +368,7 @@ export function registerStepInfoHook(api: OpenClawPluginApi): void {
       const sendCtx = resolveSendContext(event, ctx);
       if (!sendCtx) return;
 
-      // 低版本链路（app_ver < 11.7.9.310）整体跳过：不下发状态卡/技能卡/
+      // 低版本链路（app_ver < 11.7.9.330）整体跳过：不下发状态卡/技能卡/
       // 步骤卡，也不做文本分段边界（旧客户端无此能力，按合并前逻辑下发）
       if (isLegacyAppVersion(sendCtx.taskId)) return;
 
@@ -391,14 +391,12 @@ export function registerStepInfoHook(api: OpenClawPluginApi): void {
             skillAction.action === "view"
               ? `查看技能 ${skillAction.skillName}`
               : `使用技能 ${skillAction.skillName}`;
+          // 发卡日志由 formatter 统一打印（[STEP-INFO] cardType=... 一行格式），此处不再重复
           await sendExecuteStatusCard({
             ...sendCtx,
             toolCallId: event.toolCallId,
             text: cardText,
           });
-          logger.log(
-            `${LOG_TAG} sent skill status card action=${skillAction.action} skill=${skillAction.skillName}`,
-          );
         }
       }
 
@@ -425,12 +423,12 @@ export function registerStepInfoHook(api: OpenClawPluginApi): void {
         if (event.toolName === "update_plan" && !bodyTextSent) {
           const planSteps = extractInProgressPlanSteps(event.params);
           for (const stepText of planSteps) {
+            // 发卡日志由 formatter 统一打印（[STEP-INFO] cardType=... 一行格式），此处不再重复
             await sendExecuteStatusCard({
               ...sendCtx,
               toolCallId: event.toolCallId,
               text: stepText,
             });
-            logger.log(`${LOG_TAG} sent plan step card step="${stepText}"`);
           }
         }
         return;
@@ -478,7 +476,7 @@ export function registerStepInfoHook(api: OpenClawPluginApi): void {
         return;
       }
 
-      // 低版本链路（app_ver < 11.7.9.310）不做分段边界：旧客户端无
+      // 低版本链路（app_ver < 11.7.9.330）不做分段边界：旧客户端无
       // streamingTextId 分段能力，正文按合并前的单段流式下发
       if (isLegacyAppVersion(sendCtx.taskId)) return;
 

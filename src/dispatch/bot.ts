@@ -300,7 +300,7 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
     if (appVer) {
       log.log(`[BOT] Extracted app_ver: ${appVer}`);
     }
-    // 低版本判定（低于 11.7.9.310）：本 turn 所有出站帧 isNew 置 false
+    // 低版本判定（低于 11.7.9.330）：本 turn 所有出站帧 isNew 置 false
     markAppVersion(parsed.taskId, appVer);
     const sdkApiVersion = extractSdkApiVersion(parsed.parts);
     if (sdkApiVersion) {

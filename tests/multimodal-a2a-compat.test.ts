@@ -29,13 +29,14 @@ vi.mock("../src/utils/self-evolution-manager.js", () => ({ selfEvolutionManager:
 vi.mock("../src/sensitive-redactor.js", () => ({ redactSensitiveText: (text: string) => text, containsSensitiveInfo: () => false }));
 vi.mock("../src/utils/logger.js", () => {
   const logger = { log: vi.fn(), warn: vi.fn(), error: vi.fn() };
-  return { logger: { ...logger, withContext: () => logger } };
+  return { logger: { ...logger, withContext: () => logger }, isA2AOutLogEnabled: () => true };
 });
 
-// Deliberately use the real current formatter, outbound gateway and
-// per-session queue; only the WebSocket transport is intercepted.
+// Deliberately use the real current formatter, legacy formatter, outbound
+// gateway and per-session queue; only the WebSocket transport is intercepted.
 import { handleXYMessage } from "../src/dispatch/bot.js";
 import { bindSessionKey, deleteSession, getCurrentTaskId, getOrCreateSession, listSessions, registerTask } from "../src/conversation/conversation-manager.js";
+import { releaseAppVersion } from "../src/utils/app-version.js";
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -47,8 +48,9 @@ afterEach(() => {
 });
 
 describe("native image failures through upstream A2A formatters", () => {
-  it("preserves current A2A framing and the older active task", async () => {
-    const appVer = "11.7.9.310";
+  it.each([
+    ["11.7.9.310", false], ["11.7.9.329", false], ["11.7.9.330", true],
+  ])("preserves %s framing and the older active task", async (appVer, modern) => {
     const sessionId = `native-failure-${appVer}`;
     const taskId = `incoming-${appVer}`;
     registerTask(sessionId, "old-task", "old-message");
@@ -84,5 +86,11 @@ describe("native image failures through upstream A2A formatters", () => {
       .flatMap((part: any) => part.data?.commands ?? [])
       .filter((command: any) => command.header?.name === "DisplayTaskCardData");
     expect(cards).toHaveLength(0);
+    if (modern) {
+      expect(results.every((result) => result.isNew === true)).toBe(true);
+    } else {
+      expect(results.some((result) => result.isNew === true)).toBe(false);
+    }
+    releaseAppVersion(taskId);
   });
 });

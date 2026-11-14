@@ -326,7 +326,29 @@ describe("reply dispatcher turn ownership", () => {
     expect(closeFrames[0]).toMatchObject({ text: "思考内容", isReasoningFinished: false });
   });
 
-  it("terminal summary card excludes the last reasoning block but keeps earlier blocks", async () => {
+  it("keeps the reasoning block in thinkIndex when it shares the final card slot with the body (think+body, no tools)", async () => {
+    const sessionId = "sess-think-body-same-slot";
+    registerTask(sessionId, "task-tb", "msg-tb");
+    const turn = createDispatcher(sessionId, "task-tb", "msg-tb");
+
+    // 思考块（seq=1 起始卡槽位）→ thinking_end 收尾；正文同槽流出，
+    // 全程无状态卡推高计数 —— 思考块与最后一轮正文同 seq
+    await turn.replyOptions.onReasoningStream({ text: "思考内容" });
+    await turn.replyOptions.onReasoningEnd();
+    await turn.replyOptions.onPartialReply({ text: "正文" });
+    await turn.dispatcher.deliver({ text: "正文" }, { kind: "final" });
+    await turn.dispatcher.onIdle();
+    await getOrCreateSession(sessionId).outboundQueue.whenIdle();
+
+    const summaryCards = mocks.sendExecuteStatusCard.mock.calls
+      .map(([params]) => params)
+      .filter((params) => params.text === "任务处理已完成");
+    expect(summaryCards).toHaveLength(1);
+    // 思考块必须进 thinkIndex：终态段（正文）有文本，不做任何剔除
+    expect(summaryCards[0].thinkIndex).toEqual(["1"]);
+  });
+
+  it("terminal summary card keeps all reasoning blocks and excludes only the last body segment", async () => {
     const sessionId = "sess-think-index";
     registerTask(sessionId, "task-t", "msg-t");
     const turn = createDispatcher(sessionId, "task-t", "msg-t");
@@ -350,8 +372,8 @@ describe("reply dispatcher turn ownership", () => {
     await turn.replyOptions.onReasoningStream({ text: "思考块一思考块二" });
     await turn.replyOptions.onReasoningEnd();
 
-    // 再一张状态卡推进到 3：终态 currentSeq=3 ≠ 最后思考块的 seq=2，
-    // 保证旧的"按当前卡序号过滤"无法偶然覆盖，只有确定性排除能剔除它
+    // 再一张状态卡推进到 3：终态 currentSeq=3（最后正文段所在卡槽），
+    // 与两个思考块的 seq（1、2）都不同 —— 验证过滤只剔除最后正文段
     nextStatusCardSeq("task-t");
 
     // 正文 + 终态序列
@@ -364,8 +386,8 @@ describe("reply dispatcher turn ownership", () => {
       .map(([params]) => params)
       .filter((params) => params.text === "任务处理已完成");
     expect(summaryCards).toHaveLength(1);
-    // 最后思考块（seq=2）被剔除；中间思考块（seq=1）保留；
-    // 最后正文段（seq=3）从不标记，天然不在列表
-    expect(summaryCards[0].thinkIndex).toEqual(["1"]);
+    // 全部思考块（seq=1、2）都进 thinkIndex；最后正文段（seq=3）按当前
+    // 卡序号剔除（正文段本身也从不标记）
+    expect(summaryCards[0].thinkIndex).toEqual(["1", "2"]);
   });
 });
