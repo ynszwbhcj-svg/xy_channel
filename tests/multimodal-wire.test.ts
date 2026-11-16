@@ -15,7 +15,7 @@ vi.mock("../src/utils/logger.js", () => ({
 vi.mock("../src/utils/self-evolution-manager.js", () => ({
   selfEvolutionManager: { isEnabled: async () => false },
 }));
-vi.mock("../src/formatter.js", () => ({ sendStatusUpdate: vi.fn() }));
+vi.mock("../src/formatter.js", () => ({ sendStatusUpdate: vi.fn(), sendFileArtifacts: vi.fn() }));
 
 const PNG_BUFFER = encodePngRgba(Buffer.from([255, 0, 0, 255]), 1, 1);
 const PNG = PNG_BUFFER.toString("base64");

@@ -15,7 +15,7 @@ vi.mock("../src/dispatch/bot.js", () => ({ handleXYMessage: mocks.handle }));
 vi.mock("../src/conversation/conversation-manager.js", () => ({
   hasActiveTask: (sessionId: string) => mocks.active.has(sessionId), listActiveTaskBindings: () => [],
 }));
-vi.mock("../src/formatter.js", () => ({ sendA2AResponse: vi.fn() }));
+vi.mock("../src/formatter.js", () => ({ sendA2AResponse: vi.fn(), sendFileArtifacts: vi.fn() }));
 vi.mock("../src/trigger-handler.js", () => ({ handleTriggerEvent: vi.fn() }));
 vi.mock("../src/self-evolution-handler.js", () => ({ handleSelfEvolutionEvent: vi.fn(), handleSelfEvolutionStateGetEvent: vi.fn() }));
 vi.mock("../src/login-token-handler.js", () => ({ handleLoginTokenEvent: vi.fn() }));

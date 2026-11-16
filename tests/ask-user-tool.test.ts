@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../src/formatter.js", () => ({
   sendCommand: mocks.sendCommand,
+  sendFileArtifacts: vi.fn(),
 }));
 vi.mock("../src/transport/client.js", () => ({
   getCachedXYWebSocketManager: mocks.getCachedXYWebSocketManager,

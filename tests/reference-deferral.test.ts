@@ -40,6 +40,7 @@ vi.mock("../src/formatter.js", () => ({
   sendExecuteStatusCard: mocks.sendExecuteStatusCard,
   sendDisplayTaskCardData: mocks.sendDisplayTaskCardData,
   sendReference: mocks.sendReference,
+  sendFileArtifacts: vi.fn(),
 }));
 
 vi.mock("../src/tools/session-manager.js", () => ({

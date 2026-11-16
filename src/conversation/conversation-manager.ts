@@ -25,8 +25,9 @@ import {
   peekReasoningSegmentSeq,
   releaseReasoningSegment,
 } from "../utils/reasoning-segment.js";
-import { sendStatusUpdate, sendA2AResponse, sendDisplayTaskCardData, sendExecuteStatusCard, sendReasoningTextUpdate, sendReference } from "../formatter.js";
+import { sendStatusUpdate, sendA2AResponse, sendDisplayTaskCardData, sendExecuteStatusCard, sendReasoningTextUpdate, sendReference, sendFileArtifacts } from "../formatter.js";
 import { drainPendingReferences, releasePendingReferences } from "../utils/pending-references.js";
+import { drainPendingFiles, releasePendingFiles } from "../utils/pending-files.js";
 import type { XYChannelConfig } from "../types.js";
 import {
   ConversationSession,
@@ -75,7 +76,7 @@ export function deleteSession(sessionId: string): void {
   const session = sessions.get(sessionId);
   session?.outboundQueue.destroy();
   // 会话销毁：释放其任务链上所有 turn 的 streamingTextId、状态卡序号、
-  // thinkIndex 标记、App 版本标记、正文首帧标记、思考分段状态与待下发引用
+  // thinkIndex 标记、App 版本标记、正文首帧标记、思考分段状态、待下发引用与待下发文件
   for (const entry of session?.tasks ?? []) {
     releaseStreamingTextId(entry.taskId);
     releaseLastSentStreamingTextId(entry.taskId);
@@ -85,6 +86,7 @@ export function deleteSession(sessionId: string): void {
     clearBodyTextState(entry.taskId);
     releaseReasoningSegment(entry.taskId);
     releasePendingReferences(entry.taskId);
+    releasePendingFiles(entry.taskId);
   }
   sessions.delete(sessionId);
 }
@@ -141,6 +143,7 @@ export function completeTask(sessionId: string, expectedTaskId?: string): void {
       releaseLastSentStreamingTextId(entry.taskId);
       releaseReasoningSegment(entry.taskId);
       releasePendingReferences(entry.taskId);
+      releasePendingFiles(entry.taskId);
     }
     session.tasks = [];
     return;
@@ -157,6 +160,7 @@ export function completeTask(sessionId: string, expectedTaskId?: string): void {
   releaseLastSentStreamingTextId(expectedTaskId);
   releaseReasoningSegment(expectedTaskId);
   releasePendingReferences(expectedTaskId);
+  releasePendingFiles(expectedTaskId);
   if (nextTasks.length > 0) {
     logger.log(`[TASK_MANAGER] Removed taskId ${expectedTaskId}, restored current taskId ${nextTasks[nextTasks.length - 1].taskId}`);
   } else {
@@ -865,6 +869,17 @@ export async function deliverSubagentFinalResult(params: {
       messageId: effectiveMessageId,
       references: pendingReferences,
     });
+  // 文件帧：工具攒批的文件在最后一个正文帧之后、引用帧之前下发
+  // （协议时序要求），与 reply-dispatcher 终态序列的落点一致。
+  const pendingFiles = drainPendingFiles(effectiveTaskId);
+  const sendPendingFiles = () =>
+    sendFileArtifacts({
+      config,
+      sessionId: state.sessionId,
+      taskId: effectiveTaskId,
+      messageId: effectiveMessageId,
+      files: pendingFiles,
+    });
   // 汇总状态卡：thinkIndex 攒批，text=任务处理已完成；排在 final 帧之前。
   // 携带规则（与 reply-dispatcher 终态路径一致）：除最后一轮正文外，其余
   // 所有文本块都进 thinkIndex（全部思考块无一例外）。本路径终态正文即
@@ -909,6 +924,13 @@ export async function deliverSubagentFinalResult(params: {
       delayMs: terminalFrameDelayMs,
       send: sendTextComplete,
     });
+    if (pendingFiles.length > 0) {
+      session.outboundQueue.enqueue({
+        taskId: effectiveTaskId,
+        label: "subagent-files",
+        send: sendPendingFiles,
+      });
+    }
     if (pendingReferences.length > 0) {
       session.outboundQueue.enqueue({
         taskId: effectiveTaskId,
@@ -935,6 +957,9 @@ export async function deliverSubagentFinalResult(params: {
     await session.outboundQueue.whenIdle();
   } else {
     await sendTextComplete();
+    if (pendingFiles.length > 0) {
+      await sendPendingFiles();
+    }
     if (pendingReferences.length > 0) {
       await sendPendingReferences();
     }
