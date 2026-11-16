@@ -13,6 +13,7 @@ import { logger } from "./utils/logger.js";
 import { redactSensitiveText, containsSensitiveInfo } from "./sensitive-redactor.js";
 import { rewriteOutboundApprovalText } from "./approval-bridge.js";
 import { isCronToolCall, getCurrentCronJobId } from "./tools/session-manager.js";
+import type { PendingFileItem } from "./utils/pending-files.js";
 import { configManager } from "./utils/config-manager.js";
 import { getPushIdByJobId } from "./utils/cron-push-map.js";
 import { getAllPushIds } from "./utils/pushid-manager.js";
@@ -822,6 +823,65 @@ export async function sendReference(params: SendReferenceParams): Promise<void> 
   log.log(`[A2A_REFERENCE] Sending reference, items=${referenceItems.length}`);
   await sendWsFrame({ config, sessionId, taskId, payload: jsonRpcResponse });
   log.log(`[A2A_REFERENCE] Reference sent successfully`);
+}
+
+/**
+ * Parameters for sending deferred file artifacts (see utils/pending-files).
+ */
+export interface SendFileArtifactsParams {
+  config: XYChannelConfig;
+  sessionId: string;
+  taskId: string;
+  messageId: string;
+  files: PendingFileItem[];
+}
+
+/**
+ * Send queued file artifacts, one artifact-update frame per file.
+ *
+ * 帧结构与 send_file_to_user 工具直发帧保持一致（kind:"file" part、
+ * artifactId=taskId、append:true、不携带 streamingTextId），仅下发时机不同：
+ * 由 turn 收尾序列在【最后一个正文帧之后、引用帧之前】统一调用
+ * （utils/pending-files 攒批）。
+ */
+export async function sendFileArtifacts(params: SendFileArtifactsParams): Promise<void> {
+  const { config, sessionId, taskId, messageId, files } = params;
+  const log = logger.withContext(sessionId, taskId);
+
+  for (const file of files) {
+    const jsonRpcResponse = {
+      jsonrpc: "2.0",
+      id: messageId,
+      result: {
+        kind: "artifact-update",
+        isNew: true,
+        append: true,
+        lastChunk: false,
+        final: false,
+        artifact: {
+          artifactId: taskId,
+          parts: [
+            {
+              kind: "file",
+              file: {
+                name: file.fileName,
+                ...(file.mimeType ? { mimeType: file.mimeType } : {}),
+                fileId: file.fileId,
+                ...(file.fileUrl ? { fileUrl: file.fileUrl } : {}),
+              },
+            },
+          ],
+        },
+      },
+      error: { code: 0 },
+    };
+
+    log.log(`[A2A_FILE] Sending deferred file artifact, fileName=${file.fileName}`);
+    await sendWsFrame({ config, sessionId, taskId, payload: jsonRpcResponse });
+  }
+  if (files.length > 0) {
+    log.log(`[A2A_FILE] Deferred file artifacts sent, count=${files.length}`);
+  }
 }
 
 /**

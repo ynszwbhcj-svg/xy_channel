@@ -1,10 +1,18 @@
 // Send File to User tool implementation
+//
+// 下发时机（高版本链路）：上传在调用点完成（拿到 fileId/fileUrl），但文件帧
+// 不立即下发 —— 攒入 utils/pending-files 注册表，由 turn 收尾序列在【最后一个
+// 正文帧之后、引用帧之前】统一 flush（协议时序要求）。低版本链路（终帧即正文，
+// 其后帧可能因服务端关闭本 turn 而丢失）与 cron 上下文（无 turn 收尾序列）
+// 保持调用点直发。
 import type { ChannelAgentTool } from "openclaw/plugin-sdk";
 import { getCachedXYWebSocketManager } from "../transport/client.js";
 import { XYFileUploadService } from "../file-upload.js";
 import os from "os";
-import { appendRunCrossTaskSentFiles, type SessionContext, getCurrentSessionContext } from './session-manager.js';
+import { appendRunCrossTaskSentFiles, isCronToolCall, type SessionContext, getCurrentSessionContext } from './session-manager.js';
 import { logger } from "../utils/logger.js";
+import { isLegacyAppVersion } from "../utils/app-version.js";
+import { appendPendingFiles, type PendingFileItem } from "../utils/pending-files.js";
 import type { OutboundWebSocketMessage, SentFileCard } from "../types.js";
 
 import fetch from "node-fetch";
@@ -267,62 +275,87 @@ b. 操作超时时间为2分钟（120秒），请勿重复调用此工具，如�
     }
 
     // Build and send agent_response messages for each file
-    const sentFiles: Array<{ fileName: string; fileId: string }> = [];
+    const fileItems: PendingFileItem[] = uploadedFiles.map((u) => ({
+      fileName: u.fileName,
+      mimeType: u.mimeType,
+      fileId: u.fileId,
+      fileUrl: u.fileUrl,
+    }));
+    const sentFiles: Array<{ fileName: string; fileId: string }> =
+      fileItems.map(({ fileName, fileId }) => ({ fileName, fileId }));
     let cachedSentFilesForReturn: SentFileCard[] = [];
 
-    for (const uploadedFile of uploadedFiles) {
-      const { fileName, fileId, fileUrl, mimeType } = uploadedFile;
-
-      const agentResponse: OutboundWebSocketMessage = {
-        msgType: "agent_response",
-        agentId: config.agentId,
-        sessionId: sessionId,
-        taskId,
-        msgDetail: JSON.stringify({
-          jsonrpc: "2.0",
-          id: messageId,
-          result: {
-            kind: "artifact-update",
-            isNew: true,
-            append: true,
-            lastChunk: false,
-            final: false,
-            artifact: {
-              artifactId: taskId,
-              parts: [
-                {
-                  kind: "file",
-                  file: {
-                    name: fileName,
-                    mimeType: mimeType,
-                    fileId: fileId,
-                    fileUrl: fileUrl,
-                  },
-                },
-              ],
-            },
-          },
-          error: { code: 0 },
-          hostname: os.hostname(),
-        }),
-      };
-
-      logger.log(`[SEND-FILE-TO-USER] EXEC sending, fileName=${fileName}`);
-      // Send WebSocket message
-      await wsManager.sendMessage(sessionId, agentResponse);
-      logger.log(`[SEND-FILE-TO-USER] send ${fileName} file to user success`)
-      if (getCurrentSessionContext().runCrossTaskContext) {
-        const sentFileCard: SentFileCard = { fileName, fileId, mimeType };
-        const cachedSentFiles = appendRunCrossTaskSentFiles(
-          [sentFileCard],
-          getCurrentSessionContext().runCrossTaskContext,
-        );
-        cachedSentFilesForReturn = cachedSentFiles;
-        logger.log(`[RunCrossTask] cached file card for cross-task result, fileName=${fileName}, cachedFileCardCount=${cachedSentFiles.length}`);
-      }
-      sentFiles.push({ fileName, fileId });
+    // 跨设备任务缓存（与下发时机无关：跨设备结果命令需要完整卡片列表）
+    if (getCurrentSessionContext().runCrossTaskContext) {
+      const sentFileCards: SentFileCard[] = fileItems.map((f) => ({
+        fileName: f.fileName,
+        fileId: f.fileId,
+        mimeType: f.mimeType,
+      }));
+      const cachedSentFiles = appendRunCrossTaskSentFiles(
+        sentFileCards,
+        getCurrentSessionContext().runCrossTaskContext,
+      );
+      cachedSentFilesForReturn = cachedSentFiles;
+      logger.log(`[RunCrossTask] cached file cards for cross-task result, count=${sentFileCards.length}, cachedFileCardCount=${cachedSentFiles.length}`);
     }
 
+    // 高版本普通 turn：攒批延迟下发 —— 文件帧必须在最后一个正文之后、引用帧
+    // 之前（协议时序要求），由 turn 收尾序列统一 flush。低版本链路（终帧即
+    // 正文，其后下发可能丢失）与 cron 上下文（无 turn 收尾序列）保持直发。
+    const deferToTerminalFlush =
+      !isLegacyAppVersion(taskId)
+      && !sessionId.startsWith("cron-")
+      && !_c.isCron
+      && !isCronToolCall(toolCallId);
+
+    if (deferToTerminalFlush) {
+      appendPendingFiles(taskId, fileItems);
+      logger.log(`[SEND-FILE-TO-USER] Queued ${fileItems.length} file(s) for post-body flush (before references), taskId=${taskId}`);
+    } else {
+      for (const file of fileItems) {
+        const { fileName, fileId, fileUrl, mimeType } = file;
+
+        const agentResponse: OutboundWebSocketMessage = {
+          msgType: "agent_response",
+          agentId: config.agentId,
+          sessionId: sessionId,
+          taskId,
+          msgDetail: JSON.stringify({
+            jsonrpc: "2.0",
+            id: messageId,
+            result: {
+              kind: "artifact-update",
+              isNew: true,
+              append: true,
+              lastChunk: false,
+              final: false,
+              artifact: {
+                artifactId: taskId,
+                parts: [
+                  {
+                    kind: "file",
+                    file: {
+                      name: fileName,
+                      mimeType: mimeType,
+                      fileId: fileId,
+                      fileUrl: fileUrl,
+                    },
+                  },
+                ],
+              },
+            },
+            error: { code: 0 },
+            hostname: os.hostname(),
+          }),
+        };
+
+        logger.log(`[SEND-FILE-TO-USER] EXEC sending, fileName=${fileName}`);
+        // Send WebSocket message
+        await wsManager.sendMessage(sessionId, agentResponse);
+        logger.log(`[SEND-FILE-TO-USER] send ${fileName} file to user success`)
+      }
+    }
 
     return {
       content: [
@@ -331,7 +364,9 @@ b. 操作超时时间为2分钟（120秒），请勿重复调用此工具，如�
           text: JSON.stringify({
             sentFiles,
             count: sentFiles.length,
-            message: `成功发送 ${sentFiles.length} 个文件到用户设备`,
+            message: deferToTerminalFlush
+              ? `已记录 ${sentFiles.length} 个文件，将在回复正文完成后统一发送到用户设备`
+              : `成功发送 ${sentFiles.length} 个文件到用户设备`,
             cachedSentFiles: cachedSentFilesForReturn
           }),
         },

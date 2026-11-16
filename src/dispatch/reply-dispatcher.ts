@@ -1,7 +1,7 @@
 // Reply dispatcher - completely following feishu/reply-dispatcher.ts pattern
 import type { ClawdbotConfig, RuntimeEnv, ReplyPayload } from "openclaw/plugin-sdk";
 import { getXYRuntime } from "../runtime.js";
-import { sendA2AResponse, sendStatusUpdate, sendReasoningTextUpdate, sendCommand, sendDisplayTaskCardData, sendExecuteStatusCard, sendReference } from "../formatter.js";
+import { sendA2AResponse, sendStatusUpdate, sendReasoningTextUpdate, sendCommand, sendDisplayTaskCardData, sendExecuteStatusCard, sendReference, sendFileArtifacts } from "../formatter.js";
 import { resolveXYConfig } from "../config.js";
 import type { A2ACommand, RunCrossTaskContext, XYChannelConfig } from "../types.js";
 import { clearRunCrossTaskSentFiles, getCurrentSessionContext } from "../tools/session-manager.js";
@@ -35,6 +35,7 @@ import {
 } from "../utils/reasoning-segment.js";
 import { getOrCreateStreamingTextId } from "../utils/streaming-text-id.js";
 import { drainPendingReferences } from "../utils/pending-references.js";
+import { drainPendingFiles } from "../utils/pending-files.js";
 import { getCurrentStatusCardSeq } from "../utils/status-card-seq.js";
 import { markReasoningBlockEnd, getAccumulatedThinkIndex, peekLastBodyBlockSeq } from "../utils/think-index.js";
 
@@ -572,6 +573,27 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
                       lastChunk: true,
                     }),
                 });
+              }
+
+              // 文件帧：send_file_to_user / 跨设备结果回传等攒批的文件在
+              // 【最后一个正文帧之后、引用帧之前】统一下发（协议时序要求）。
+              // 排在汇总卡之前；上传在工具调用点已完成，此处仅下发帧。
+              {
+                const pendingFiles = drainPendingFiles(terminalTaskId);
+                if (pendingFiles.length > 0) {
+                  outboundQueue.enqueue({
+                    taskId: terminalTaskId,
+                    label: "terminal-files",
+                    send: () =>
+                      sendFileArtifacts({
+                        config,
+                        sessionId,
+                        taskId: terminalTaskId,
+                        messageId: terminalMessageId,
+                        files: pendingFiles,
+                      }),
+                  });
+                }
               }
 
               // 引用来源帧：xiaoyi_append_reference 工具攒批的引用在【最后一个

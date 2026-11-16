@@ -35,6 +35,7 @@ vi.mock("../src/formatter.js", () => ({
   sendCommand: mocks.sendCommand,
   sendExecuteStatusCard: mocks.sendExecuteStatusCard,
   sendDisplayTaskCardData: mocks.sendDisplayTaskCardData,
+  sendFileArtifacts: vi.fn(),
 }));
 
 vi.mock("../src/tools/session-manager.js", () => ({
