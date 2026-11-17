@@ -39,7 +39,7 @@ import { getOrCreateStreamingTextId } from "../utils/streaming-text-id.js";
 import { drainPendingReferences } from "../utils/pending-references.js";
 import { drainPendingFiles } from "../utils/pending-files.js";
 import { getCurrentStatusCardSeq } from "../utils/status-card-seq.js";
-import { markReasoningBlockClosed, takeOpenBodyRoundCardIndex } from "../utils/body-round-cards.js";
+import { markReasoningBlockClosed, takeOpenBodyRoundCardIndex, noteTextBlockClosedForToolCarry } from "../utils/body-round-cards.js";
 
 /** 延后收尾期间的上游 run 轮询间隔。 */
 const EMPTY_IDLE_POLL_MS = 1_000;
@@ -708,6 +708,8 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
                         text: "生成回复已完成",
                         isFinal: true,
                         taskUniqIndexId: openRoundCardIndex,
+                        // 显式空数组：本卡不参与工具卡 thinkIndex 捎带
+                        thinkIndex: [],
                       }),
                   });
                 }
@@ -1059,6 +1061,8 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
             // 取思考块开块时锁存的序号：块期间下发的状态卡 command 推高的
             // 全局计数不属于本块（见 utils/reasoning-segment）。
             markReasoningBlockClosed(endTaskId, peekReasoningSegmentSeq(endTaskId));
+            // 同时登记为工具卡捎带的"前一轮文本块"
+            noteTextBlockClosedForToolCarry(endTaskId, peekReasoningSegmentSeq(endTaskId));
             // 同步闭合分段（不等标记帧 drain），分段边界据此判断本段已收尾
             closeReasoningSegment(endTaskId);
             // 结束标记帧携带本思考段的完整文本（append=false 快照语义），

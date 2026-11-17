@@ -22,7 +22,12 @@ vi.mock("../src/utils/logger.js", () => ({
   isA2AOutLogEnabled: () => true,
 }));
 
-import { sendA2AResponse, sendCommand, sendReference, sendStatusUpdate } from "../src/formatter.js";
+import { sendA2AResponse, sendCommand, sendExecuteStatusCard, sendReference, sendStatusUpdate } from "../src/formatter.js";
+import {
+  noteTextBlockClosedForToolCarry,
+  releaseBodyRoundCards,
+} from "../src/utils/body-round-cards.js";
+import { releaseStatusCardSeq } from "../src/utils/status-card-seq.js";
 import {
   getOrCreateStreamingTextId,
   rotateStreamingTextId,
@@ -157,5 +162,80 @@ describe("command streamingTextId 跟随最后发出帧", () => {
     releaseLastSentStreamingTextId(taskId);
     releaseLastSentStreamingTextId(taskId);
     expect(peekLastSentStreamingTextId(taskId)).toBeUndefined();
+  });
+});
+
+describe("工具状态卡 thinkIndex 捎带（前一轮文本块收尾帧已发 + 下一个文本消息已发）", () => {
+  const taskId = "task-tool-carry";
+
+  beforeEach(() => {
+    mocks.sendMessage.mockResolvedValue(undefined);
+  });
+
+  afterEach(() => {
+    releaseBodyRoundCards(taskId);
+    releaseStatusCardSeq(taskId);
+    releaseStreamingTextId(taskId);
+    releaseLastSentStreamingTextId(taskId);
+    vi.clearAllMocks();
+  });
+
+  /** 从捕获的出站信封中取出所有 DisplayExecuteStatusCard 命令的 payload。 */
+  function sentStatusCardPayloads(): Array<Record<string, any>> {
+    return mocks.sendMessage.mock.calls
+      .map((call) => JSON.parse((call[1] as { msgDetail: string }).msgDetail))
+      .flatMap((frame) => frame?.result?.artifact?.parts ?? [])
+      .filter((p) => p?.kind === "data" && Array.isArray(p.data?.commands))
+      .flatMap((p) => p.data.commands)
+      .filter((c) => c?.header?.name === "DisplayExecuteStatusCard")
+      .map((c) => c.payload as Record<string, any>);
+  }
+
+  it("两段确认满足后第一张工具卡携带前一轮块槽位，仅一次", async () => {
+    // 前一轮文本块（seq=1）收尾决策点登记 + 收尾帧（lastChunk=true）实际发出
+    noteTextBlockClosedForToolCarry(taskId, 1);
+    await sendA2AResponse({ config, sessionId, taskId, messageId, text: "前一轮正文", append: false, final: false, lastChunk: true });
+
+    // 收尾帧刚发、下一个文本消息未发：不携带（也不消费）
+    await sendExecuteStatusCard({ config, sessionId, taskId, messageId, text: "使用工具" });
+    expect(sentStatusCardPayloads().at(-1)?.thinkIndex).toBeUndefined();
+
+    // 下一个文本消息发出
+    await sendA2AResponse({ config, sessionId, taskId, messageId, text: "新一轮正文", append: false, final: false });
+
+    // 其后第一张工具卡携带 [1]
+    await sendExecuteStatusCard({ config, sessionId, taskId, messageId, text: "使用工具" });
+    expect(sentStatusCardPayloads().at(-1)?.thinkIndex).toEqual(["1"]);
+    // 第二张起不再重复携带
+    await sendExecuteStatusCard({ config, sessionId, taskId, messageId, text: "使用工具" });
+    expect(sentStatusCardPayloads().at(-1)?.thinkIndex).toBeUndefined();
+  });
+
+  it("显式 thinkIndex 的卡（正文轮次配对卡）不消费捎带", async () => {
+    noteTextBlockClosedForToolCarry(taskId, 2);
+    await sendA2AResponse({ config, sessionId, taskId, messageId, text: "前一轮正文", append: false, final: false, lastChunk: true });
+    await sendA2AResponse({ config, sessionId, taskId, messageId, text: "新一轮正文", append: false, final: false });
+
+    // 显式携带 thinkIndex 的卡：用显式值，不消费捎带
+    await sendExecuteStatusCard({ config, sessionId, taskId, messageId, text: "生成回复", isFinal: false, thinkIndex: ["9"] });
+    expect(sentStatusCardPayloads().at(-1)?.thinkIndex).toEqual(["9"]);
+
+    // 捎带仍在：下一张工具卡携带 [2]
+    await sendExecuteStatusCard({ config, sessionId, taskId, messageId, text: "使用工具" });
+    expect(sentStatusCardPayloads().at(-1)?.thinkIndex).toEqual(["2"]);
+  });
+
+  it("显式空 thinkIndex 的终态收尾卡不参与捎带", async () => {
+    noteTextBlockClosedForToolCarry(taskId, 4);
+    await sendA2AResponse({ config, sessionId, taskId, messageId, text: "前一轮正文", append: false, final: false, lastChunk: true });
+    await sendA2AResponse({ config, sessionId, taskId, messageId, text: "新一轮正文", append: false, final: false });
+
+    // 终态 close 卡（显式空数组）：不携带
+    await sendExecuteStatusCard({ config, sessionId, taskId, messageId, text: "生成回复已完成", isFinal: true, thinkIndex: [] });
+    expect(sentStatusCardPayloads().at(-1)?.thinkIndex).toBeUndefined();
+
+    // 捎带仍未被消费，下一张工具卡携带 [4]
+    await sendExecuteStatusCard({ config, sessionId, taskId, messageId, text: "使用工具" });
+    expect(sentStatusCardPayloads().at(-1)?.thinkIndex).toEqual(["4"]);
   });
 });

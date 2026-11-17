@@ -63,6 +63,10 @@ import {
   openBodyRound,
   takeOpenBodyRoundCardIndex,
   releaseBodyRoundCards,
+  noteTextBlockClosedForToolCarry,
+  noteTextCloseFrameSentForToolCarry,
+  noteTextMessageSentForToolCarry,
+  takeToolCardThinkIndex,
 } from "../src/utils/body-round-cards.js";
 import {
   advanceStatusCardSeqForSegment,
@@ -244,6 +248,56 @@ describe("claimStatusCardSeqForBodyRound（正文轮次 open 卡槽位认领）"
     expect(advanceStatusCardSeqForSegment(taskId)).toBe(2); // 轮换推进到 2（新鲜）
     expect(nextStatusCardSeq(taskId)).toBe(3); // 中途工具卡越过 → 2 不再新鲜
     expect(claimStatusCardSeqForBodyRound(taskId)).toBe(4);
+  });
+});
+
+describe("tool-card thinkIndex carry（工具卡捎带前一轮文本块）", () => {
+  const taskId = "task-toolcarry";
+
+  afterEach(() => {
+    releaseBodyRoundCards(taskId);
+  });
+
+  it("does not carry when only the close decision was made (close frame not sent)", () => {
+    noteTextBlockClosedForToolCarry(taskId, 1);
+    expect(takeToolCardThinkIndex(taskId)).toBeUndefined();
+  });
+
+  it("does not carry when the close frame was sent but the next text message has not", () => {
+    noteTextBlockClosedForToolCarry(taskId, 1);
+    noteTextCloseFrameSentForToolCarry(taskId);
+    // 收尾帧已发、下一个文本消息未发：仍不携带（且未消费，后续条件满足可携带）
+    expect(takeToolCardThinkIndex(taskId)).toBeUndefined();
+    noteTextMessageSentForToolCarry(taskId);
+    expect(takeToolCardThinkIndex(taskId)).toEqual(["1"]);
+  });
+
+  it("carries the previous block slot once both conditions hold, exactly once", () => {
+    noteTextBlockClosedForToolCarry(taskId, 3);
+    noteTextCloseFrameSentForToolCarry(taskId);
+    noteTextMessageSentForToolCarry(taskId);
+    expect(takeToolCardThinkIndex(taskId)).toEqual(["3"]);
+    expect(takeToolCardThinkIndex(taskId)).toBeUndefined(); // 取一次消费一次
+  });
+
+  it("keeps only the latest closed block (前一轮覆盖更早轮)", () => {
+    noteTextBlockClosedForToolCarry(taskId, 1);
+    noteTextCloseFrameSentForToolCarry(taskId);
+    noteTextMessageSentForToolCarry(taskId); // 块1 已可携带但未及消费
+    // 块2 收尾：只捎带"前一轮"（块2），块1 由配对卡 thinkIndex 覆盖
+    noteTextBlockClosedForToolCarry(taskId, 2);
+    expect(takeToolCardThinkIndex(taskId)).toBeUndefined(); // 块2 收尾帧未发
+    noteTextCloseFrameSentForToolCarry(taskId);
+    noteTextMessageSentForToolCarry(taskId);
+    expect(takeToolCardThinkIndex(taskId)).toEqual(["2"]);
+  });
+
+  it("release clears the pending carry", () => {
+    noteTextBlockClosedForToolCarry(taskId, 1);
+    noteTextCloseFrameSentForToolCarry(taskId);
+    noteTextMessageSentForToolCarry(taskId);
+    releaseBodyRoundCards(taskId);
+    expect(takeToolCardThinkIndex(taskId)).toBeUndefined();
   });
 });
 
