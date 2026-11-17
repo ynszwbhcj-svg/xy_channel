@@ -911,7 +911,7 @@ export async function deliverSubagentFinalResult(params: {
   const session = sessions.get(state.sessionId);
   // 正文文本完成帧（lastChunk=true, final=false）：权威全文本在此下发，
   // final=true 留给最后的空载终帧 —— 与 reply-dispatcher 终态序列一致
-  // （正文 lastChunk → 汇总卡 → final）。终态不下发 status-update
+  // （正文 lastChunk → 收尾卡 → final）。终态不下发 status-update
   // （"已完成深度思考" state=completed）：该文案是思考期状态，发正文时
   // 不下发。终态帧延迟挂在本帧上（原 terminal-status 帧的 delayMs 语义）。
   const sendTextComplete = () =>
@@ -925,8 +925,8 @@ export async function deliverSubagentFinalResult(params: {
       final: false,
       lastChunk: true,
     });
-  // 引用来源帧：工具攒批的引用在最后一个正文帧（正文完成帧）之后下发，
-  // 排在汇总卡之前；streamingTextId 由 sendReference 取 last-sent（即正文
+  // 引用来源帧：工具攒批的引用在最后一个正文帧（正文完成帧）之后下发；
+  // streamingTextId 由 sendReference 取 last-sent（即正文
   // 完成帧的 id）。与 reply-dispatcher 正常终态序列的落点一致。
   const pendingReferences = drainPendingReferences(effectiveTaskId);
   const sendPendingReferences = () =>
@@ -948,18 +948,9 @@ export async function deliverSubagentFinalResult(params: {
       messageId: effectiveMessageId,
       files: pendingFiles,
     });
-  // 汇总状态卡：text=任务处理已完成；排在 final 帧之前。thinkIndex 不再由
-  // 汇总卡携带 —— 改由正文轮次配对卡逐轮下发（见 maybeEnqueueBodyRoundStartCards）。
-  const sendSummaryCard = () =>
-    sendExecuteStatusCard({
-      config,
-      sessionId: state.sessionId,
-      taskId: effectiveTaskId,
-      messageId: effectiveMessageId,
-      text: "任务处理已完成",
-    });
   // DisplayTaskCardData final 帧收尾对话轮（起始卡在 bot.ts 下发）；
-  // 排在汇总卡之后（index 惰性读取，落在汇总卡序号上），final 帧之前。
+  // index 惰性读取（落在最后一轮正文 open 卡的槽位上），final 帧之前。
+  // （终态汇总状态卡已下线，thinkIndex 由正文轮次配对卡逐轮下发。）
   const sendTaskCardFinal = () =>
     sendDisplayTaskCardData({
       config,
@@ -1034,11 +1025,6 @@ export async function deliverSubagentFinalResult(params: {
     }
     session.outboundQueue.enqueue({
       taskId: effectiveTaskId,
-      label: "subagent-summary-card",
-      send: sendSummaryCard,
-    });
-    session.outboundQueue.enqueue({
-      taskId: effectiveTaskId,
       label: "subagent-task-card-final",
       send: sendTaskCardFinal,
     });
@@ -1057,7 +1043,6 @@ export async function deliverSubagentFinalResult(params: {
     if (pendingReferences.length > 0) {
       await sendPendingReferences();
     }
-    await sendSummaryCard();
     await sendTaskCardFinal();
     await sendFinal();
   }

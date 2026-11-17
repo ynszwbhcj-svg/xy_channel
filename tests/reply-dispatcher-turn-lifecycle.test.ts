@@ -364,10 +364,8 @@ describe("reply dispatcher turn ownership", () => {
     expect(closeCards).toHaveLength(1);
     expect(closeCards[0]).toMatchObject({ isFinal: true, taskUniqIndexId: 2 });
     expect(closeCards[0].thinkIndex).toBeUndefined();
-    // 汇总卡不再携带 thinkIndex
-    const summaryCards = cards.filter((p) => p.text === "任务处理已完成");
-    expect(summaryCards).toHaveLength(1);
-    expect(summaryCards[0].thinkIndex).toBeUndefined();
+    // 终态汇总状态卡已下线：不再发送"任务处理已完成" status 卡
+    expect(cards.filter((p) => p.text === "任务处理已完成")).toHaveLength(0);
   });
 
   it("per-round paired cards carry thinkIndex across rounds; summary card stays clean", async () => {
@@ -427,9 +425,7 @@ describe("reply dispatcher turn ownership", () => {
       mocks.sendExecuteStatusCard.mock.invocationCallOrder[close1CallIdx],
     );
 
-    // 汇总卡仍在但不再携带 thinkIndex
-    const summaryCards = cards.filter((p) => p.text === "任务处理已完成");
-    expect(summaryCards).toHaveLength(1);
-    expect(summaryCards[0].thinkIndex).toBeUndefined();
+    // 汇总状态卡已下线：不再发送"任务处理已完成" status 卡
+    expect(cards.filter((p) => p.text === "任务处理已完成")).toHaveLength(0);
   });
 });

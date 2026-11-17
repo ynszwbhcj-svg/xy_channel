@@ -180,15 +180,15 @@ describe("file flush in the terminal sequence", () => {
     );
     expect(mocks.sendReference).toHaveBeenCalledTimes(1);
 
-    // 帧序：正文完成帧（lastChunk=true, final≠true）→ 文件帧 → 引用帧 → 汇总卡
+    // 帧序：正文完成帧（lastChunk=true, final≠true）→ 文件帧 → 引用帧 → 空载终帧
     const textCompleteIdx = mocks.sendA2AResponse.mock.calls.findIndex(
       ([params]) => params.lastChunk === true && params.final !== true,
     );
-    const summaryCardIdx = mocks.sendExecuteStatusCard.mock.calls.findIndex(
-      ([params]) => params.text === "任务处理已完成",
+    const finalIdx = mocks.sendA2AResponse.mock.calls.findIndex(
+      ([params]) => params.final === true,
     );
     expect(textCompleteIdx).toBeGreaterThanOrEqual(0);
-    expect(summaryCardIdx).toBeGreaterThanOrEqual(0);
+    expect(finalIdx).toBeGreaterThanOrEqual(0);
     expect(mocks.sendA2AResponse.mock.invocationCallOrder[textCompleteIdx]).toBeLessThan(
       mocks.sendFileArtifacts.mock.invocationCallOrder[0],
     );
@@ -196,7 +196,7 @@ describe("file flush in the terminal sequence", () => {
       mocks.sendReference.mock.invocationCallOrder[0],
     );
     expect(mocks.sendReference.mock.invocationCallOrder[0]).toBeLessThan(
-      mocks.sendExecuteStatusCard.mock.invocationCallOrder[summaryCardIdx],
+      mocks.sendA2AResponse.mock.invocationCallOrder[finalIdx],
     );
   });
 
