@@ -139,18 +139,8 @@ describe("reply dispatcher turn ownership", () => {
     expect(mocks.sendA2AResponse).not.toHaveBeenCalledWith(
       expect.objectContaining({ errorCode: 99921111 }),
     );
-    // 权威全文本由正文完成帧（lastChunk=true, final=false）携带
-    const textCompleteCalls = mocks.sendA2AResponse.mock.calls
-      .map(([params]) => params)
-      .filter((params) => params.lastChunk === true && params.final !== true);
-    expect(textCompleteCalls).toHaveLength(1);
-    expect(textCompleteCalls[0]).toMatchObject({
-      taskId: "task-new",
-      messageId: "message-new",
-      text: fullText,
-      append: false,
-    });
-    // final:true 留给空载终帧（仅标记流结束）
+    // 权威全文本由合并终帧携带（lastChunk=true 且 final=true：正文收尾与
+    // 对话终态合并为同一帧）
     const finalCalls = mocks.sendA2AResponse.mock.calls
       .map(([params]) => params)
       .filter((params) => params.final === true);
@@ -158,9 +148,16 @@ describe("reply dispatcher turn ownership", () => {
     expect(finalCalls[0]).toMatchObject({
       taskId: "task-new",
       messageId: "message-new",
-      text: "",
-      append: true,
+      text: fullText,
+      append: false,
+      lastChunk: true,
     });
+    // 不再有独立的正文完成帧（lastChunk=true, final=false）
+    expect(
+      mocks.sendA2AResponse.mock.calls.filter(
+        ([params]) => params.lastChunk === true && params.final !== true,
+      ),
+    ).toHaveLength(0);
   });
 
   it("direct steer keeps the original dispatcher but uses the latest A2A identity", async () => {
@@ -173,18 +170,8 @@ describe("reply dispatcher turn ownership", () => {
     await directTurn.dispatcher.deliver({ text: "完整回复" }, { kind: "final" });
     await directTurn.dispatcher.onIdle();
 
-    // 权威全文本由正文完成帧（lastChunk=true, final=false）携带，
+    // 权威全文本由合并终帧携带（lastChunk=true 且 final=true），
     // 身份跟随任务链末尾（steer 后的最新 taskId/messageId）
-    const textCompleteCalls = mocks.sendA2AResponse.mock.calls
-      .map(([params]) => params)
-      .filter((params) => params.lastChunk === true && params.final !== true);
-    expect(textCompleteCalls).toHaveLength(1);
-    expect(textCompleteCalls[0]).toMatchObject({
-      taskId: "task-steered",
-      messageId: "message-steered",
-      text: "完整回复",
-    });
-    // final:true 为空载终帧（仅标记流结束）
     const finalCalls = mocks.sendA2AResponse.mock.calls
       .map(([params]) => params)
       .filter((params) => params.final === true);
@@ -192,9 +179,16 @@ describe("reply dispatcher turn ownership", () => {
     expect(finalCalls[0]).toMatchObject({
       taskId: "task-steered",
       messageId: "message-steered",
-      text: "",
-      append: true,
+      text: "完整回复",
+      append: false,
+      lastChunk: true,
     });
+    // 不再有独立的正文完成帧（lastChunk=true, final=false）
+    expect(
+      mocks.sendA2AResponse.mock.calls.filter(
+        ([params]) => params.lastChunk === true && params.final !== true,
+      ),
+    ).toHaveLength(0);
   });
 
   it("rotates the streamingTextId at a tool boundary even before any body paragraph", async () => {

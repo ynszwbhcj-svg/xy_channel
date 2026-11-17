@@ -155,21 +155,21 @@ describe("reference flush in the terminal sequence", () => {
       expect.objectContaining({ taskId, references: [refItem] }),
     );
 
-    // 帧序：正文完成帧（lastChunk=true, final≠true）→ 引用帧 → 空载终帧（final=true）
-    const textCompleteIdx = mocks.sendA2AResponse.mock.calls.findIndex(
-      ([params]) => params.lastChunk === true && params.final !== true,
+    // 帧序：引用帧在合并终帧（lastChunk=true 且 final=true，正文收尾与对话
+    // 终态合并为同一帧）之前下发
+    const mergedFinalIdx = mocks.sendA2AResponse.mock.calls.findIndex(
+      ([params]) => params.lastChunk === true && params.final === true,
     );
-    const finalIdx = mocks.sendA2AResponse.mock.calls.findIndex(
-      ([params]) => params.final === true,
-    );
-    expect(textCompleteIdx).toBeGreaterThanOrEqual(0);
-    expect(finalIdx).toBeGreaterThanOrEqual(0);
-    expect(mocks.sendA2AResponse.mock.invocationCallOrder[textCompleteIdx]).toBeLessThan(
-      mocks.sendReference.mock.invocationCallOrder[0],
-    );
+    expect(mergedFinalIdx).toBeGreaterThanOrEqual(0);
     expect(mocks.sendReference.mock.invocationCallOrder[0]).toBeLessThan(
-      mocks.sendA2AResponse.mock.invocationCallOrder[finalIdx],
+      mocks.sendA2AResponse.mock.invocationCallOrder[mergedFinalIdx],
     );
+    // 不再有独立的正文完成帧（lastChunk=true, final=false）
+    expect(
+      mocks.sendA2AResponse.mock.calls.filter(
+        ([params]) => params.lastChunk === true && params.final !== true,
+      ),
+    ).toHaveLength(0);
     // 终态汇总状态卡（"任务处理已完成"）已下线
     expect(
       mocks.sendExecuteStatusCard.mock.calls.filter(([params]) => params.text === "任务处理已完成"),

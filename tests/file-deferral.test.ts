@@ -180,23 +180,17 @@ describe("file flush in the terminal sequence", () => {
     );
     expect(mocks.sendReference).toHaveBeenCalledTimes(1);
 
-    // 帧序：正文完成帧（lastChunk=true, final≠true）→ 文件帧 → 引用帧 → 空载终帧
-    const textCompleteIdx = mocks.sendA2AResponse.mock.calls.findIndex(
-      ([params]) => params.lastChunk === true && params.final !== true,
+    // 帧序：文件帧 → 引用帧 → 合并终帧（lastChunk=true 且 final=true，正文
+    // 收尾与对话终态合并为同一帧）
+    const mergedFinalIdx = mocks.sendA2AResponse.mock.calls.findIndex(
+      ([params]) => params.lastChunk === true && params.final === true,
     );
-    const finalIdx = mocks.sendA2AResponse.mock.calls.findIndex(
-      ([params]) => params.final === true,
-    );
-    expect(textCompleteIdx).toBeGreaterThanOrEqual(0);
-    expect(finalIdx).toBeGreaterThanOrEqual(0);
-    expect(mocks.sendA2AResponse.mock.invocationCallOrder[textCompleteIdx]).toBeLessThan(
-      mocks.sendFileArtifacts.mock.invocationCallOrder[0],
-    );
+    expect(mergedFinalIdx).toBeGreaterThanOrEqual(0);
     expect(mocks.sendFileArtifacts.mock.invocationCallOrder[0]).toBeLessThan(
       mocks.sendReference.mock.invocationCallOrder[0],
     );
     expect(mocks.sendReference.mock.invocationCallOrder[0]).toBeLessThan(
-      mocks.sendA2AResponse.mock.invocationCallOrder[finalIdx],
+      mocks.sendA2AResponse.mock.invocationCallOrder[mergedFinalIdx],
     );
   });
 

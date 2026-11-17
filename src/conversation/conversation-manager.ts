@@ -913,12 +913,13 @@ export async function deliverSubagentFinalResult(params: {
 
   const terminalFrameDelayMs = config.terminalFrameDelayMs ?? 0;
   const session = sessions.get(state.sessionId);
-  // 正文文本完成帧（lastChunk=true, final=false）：权威全文本在此下发，
-  // final=true 留给最后的空载终帧 —— 与 reply-dispatcher 终态序列一致
-  // （正文 lastChunk → 收尾卡 → final）。终态不下发 status-update
-  // （"已完成深度思考" state=completed）：该文案是思考期状态，发正文时
-  // 不下发。终态帧延迟挂在本帧上（原 terminal-status 帧的 delayMs 语义）。
-  const sendTextComplete = () =>
+  // 合并终帧（lastChunk=true, final=true）：正文文本完成帧与空载终帧合并为
+  // 同一帧 —— 权威全文本在此下发，同时完成正文文本卡收尾（lastChunk）与
+  // 整个对话的终态收尾（final），排在引用帧之后 —— 与 reply-dispatcher
+  // 终态序列一致。终态不下发 status-update（"已完成深度思考"
+  // state=completed）：该文案是思考期状态，发正文时不下发。终态帧延迟
+  // 挂在本帧上（原 terminal-status 帧的 delayMs 语义）。
+  const sendMergedFinal = () =>
     sendA2AResponse({
       config,
       sessionId: state.sessionId,
@@ -926,12 +927,12 @@ export async function deliverSubagentFinalResult(params: {
       messageId: effectiveMessageId,
       text: finalText,
       append: false,
-      final: false,
+      final: true,
       lastChunk: true,
     });
-  // 引用来源帧：工具攒批的引用在最后一个正文帧（正文完成帧）之后下发；
-  // streamingTextId 由 sendReference 取 last-sent（即正文
-  // 完成帧的 id）。与 reply-dispatcher 正常终态序列的落点一致。
+  // 引用来源帧：工具攒批的引用在合并终帧之前下发；streamingTextId 由
+  // sendReference 取 last-sent（与随后合并终帧同属一个正文段，id 一致）。
+  // 与 reply-dispatcher 正常终态序列的落点一致。
   const pendingReferences = drainPendingReferences(effectiveTaskId);
   const sendPendingReferences = () =>
     sendReference({
@@ -941,8 +942,8 @@ export async function deliverSubagentFinalResult(params: {
       messageId: effectiveMessageId,
       references: pendingReferences,
     });
-  // 文件帧：工具攒批的文件在最后一个正文帧之后、引用帧之前下发
-  // （协议时序要求），与 reply-dispatcher 终态序列的落点一致。
+  // 文件帧：工具攒批的文件统一在引用帧之前下发（协议时序要求），
+  // 与 reply-dispatcher 终态序列的落点一致。
   const pendingFiles = drainPendingFiles(effectiveTaskId);
   const sendPendingFiles = () =>
     sendFileArtifacts({
@@ -953,7 +954,7 @@ export async function deliverSubagentFinalResult(params: {
       files: pendingFiles,
     });
   // DisplayTaskCardData final 帧收尾对话轮（起始卡在 bot.ts 下发）；
-  // index 惰性读取（落在最后一轮正文 open 卡的槽位上），final 帧之前。
+  // index 惰性读取（落在最后一轮正文 open 卡的槽位上），合并终帧之前。
   // （终态汇总状态卡已下线，thinkIndex 由正文轮次配对卡逐轮下发。）
   const sendTaskCardFinal = () =>
     sendDisplayTaskCardData({
@@ -965,17 +966,6 @@ export async function deliverSubagentFinalResult(params: {
       stepName: "任务处理已完成",
       isFinal: true,
     });
-  // 空载终帧（append:true, final:true）仅标记流结束
-  const sendFinal = () =>
-    sendA2AResponse({
-      config,
-      sessionId: state.sessionId,
-      taskId: effectiveTaskId,
-      messageId: effectiveMessageId,
-      text: "",
-      append: true,
-      final: true,
-    });
   if (session) {
     // 子任务终态正文若是本 turn 首个正文轮次（等待期间未流式产出正文），
     // 先补该轮 open 卡（"生成回复"）；已开始的轮次幂等跳过。
@@ -985,15 +975,9 @@ export async function deliverSubagentFinalResult(params: {
       taskId: effectiveTaskId,
       messageId: effectiveMessageId,
     });
-    session.outboundQueue.enqueue({
-      taskId: effectiveTaskId,
-      label: "subagent-text-complete",
-      delayMs: terminalFrameDelayMs,
-      send: sendTextComplete,
-    });
     // 正文轮次收尾卡：最后一轮正文没有「下一轮正文」触发 close，由终态
     // 序列补发（index 复用其 open 卡槽位，isFinal=true，不带 thinkIndex
-    // —— 最后一轮正文保持展开）。排在正文完成帧之后。
+    // —— 最后一轮正文保持展开）。排在文件/引用帧之前。
     {
       const openRoundCardIndex = takeOpenBodyRoundCardIndex(effectiveTaskId);
       if (openRoundCardIndex !== undefined) {
@@ -1038,11 +1022,10 @@ export async function deliverSubagentFinalResult(params: {
       taskId: effectiveTaskId,
       label: "subagent-final",
       delayMs: terminalFrameDelayMs,
-      send: sendFinal,
+      send: sendMergedFinal,
     });
     await session.outboundQueue.whenIdle();
   } else {
-    await sendTextComplete();
     if (pendingFiles.length > 0) {
       await sendPendingFiles();
     }
@@ -1050,7 +1033,7 @@ export async function deliverSubagentFinalResult(params: {
       await sendPendingReferences();
     }
     await sendTaskCardFinal();
-    await sendFinal();
+    await sendMergedFinal();
   }
 
   clearWaitState(state.sessionId, reason ?? "all-subagent-results-delivered", state.taskId);
