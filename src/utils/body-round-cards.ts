@@ -23,6 +23,12 @@ interface BodyRoundCardsState {
   reasoningSlots: string[];
   /** 当前未闭合正文轮次的 open 卡槽位；无未闭合轮次为 undefined。 */
   openRoundCardIndex?: number;
+  /** 待捎带的前一轮文本块槽位（lastChunk 收尾决策点登记）。 */
+  carrySlot?: string;
+  /** 前一轮文本块的 lastChunk 收尾帧已实际发出。 */
+  carryCloseSent?: boolean;
+  /** 下一个文本消息已实际发出（可随工具卡捎带）。 */
+  carryArmed?: boolean;
 }
 
 /** taskId → 本 turn 的正文轮次卡片状态。 */
@@ -73,4 +79,61 @@ export function takeOpenBodyRoundCardIndex(taskId: string): number | undefined {
 /** 释放指定 taskId 的轮次卡片状态（turn 结束 / 会话销毁时调用）。幂等。 */
 export function releaseBodyRoundCards(taskId: string): void {
   stateByTask.delete(taskId);
+}
+
+// ── 工具状态卡 thinkIndex 捎带 ─────────────────────────────────────
+//
+// 前一轮文本块（思考段 / 正文段）的 lastChunk 收尾帧发完、且下一个文本
+// 消息已发出之后，其后第一张工具状态卡（未显式携带 thinkIndex 的
+// sendExecuteStatusCard）携带该块的 taskUniqIndexId 作为 thinkIndex，
+// 取一次消费一次。与正文轮次配对卡（open/close 卡）的 thinkIndex 可能
+// 重合 —— 刻意不去重：配对卡是轮次语义的权威下发，本捎带是更早触达
+// 端侧的折叠提示。
+//
+// 两段确认均按"实际发出"判定（formatter 的 drain 发送点置位），而非决策
+// 点/入队点：保证卡片落在下一个文本消息之后到达端侧。
+
+/**
+ * 文本块 lastChunk 收尾决策点登记待捎带槽位（思考块结束 / 分段边界正文
+ * 冲刷 / 思考→正文切换收尾）。新登记覆盖旧值：只捎带"前一轮"（最近的
+ * 已完成块），更早的块由配对卡 thinkIndex 覆盖。
+ */
+export function noteTextBlockClosedForToolCarry(taskId: string, taskUniqIndexId: number): void {
+  const state = getOrCreateState(taskId);
+  state.carrySlot = String(taskUniqIndexId);
+  state.carryCloseSent = false;
+  state.carryArmed = false;
+}
+
+/** lastChunk=true 文本收尾帧实际发出后调用（formatter drain 发送点）。 */
+export function noteTextCloseFrameSentForToolCarry(taskId: string): void {
+  const state = stateByTask.get(taskId);
+  if (state?.carrySlot !== undefined) {
+    state.carryCloseSent = true;
+  }
+}
+
+/** 非收尾文本帧（下一块的过程帧）实际发出后调用（formatter drain 发送点）。 */
+export function noteTextMessageSentForToolCarry(taskId: string): void {
+  const state = stateByTask.get(taskId);
+  if (state?.carrySlot !== undefined && state.carryCloseSent === true) {
+    state.carryArmed = true;
+  }
+}
+
+/**
+ * 读取并消费工具状态卡待捎带的 thinkIndex：仅当【前一轮块收尾帧已发出
+ * 且下一个文本消息已发出】时返回 [前一轮块槽位]，否则 undefined；返回后
+ * 即消费，后续卡片不再重复携带（直到再有块完成上述两段确认）。
+ */
+export function takeToolCardThinkIndex(taskId: string): string[] | undefined {
+  const state = stateByTask.get(taskId);
+  if (!state || state.carrySlot === undefined || state.carryArmed !== true) {
+    return undefined;
+  }
+  const slot = state.carrySlot;
+  state.carrySlot = undefined;
+  state.carryCloseSent = false;
+  state.carryArmed = false;
+  return [slot];
 }

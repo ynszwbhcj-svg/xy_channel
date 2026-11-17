@@ -14,7 +14,7 @@ import { randomUUID } from "crypto";
 import { logger } from "../utils/logger.js";
 import { releaseStreamingTextId, releaseLastSentStreamingTextId, rotateStreamingTextId, peekStreamingTextId, getOrCreateStreamingTextId } from "../utils/streaming-text-id.js";
 import { releaseStatusCardSeq, getCurrentStatusCardSeq, nextStatusCardSeq, advanceStatusCardSeqForSegment, claimStatusCardSeqForBodyRound } from "../utils/status-card-seq.js";
-import { markReasoningBlockClosed, peekClosedReasoningSlots, openBodyRound, takeOpenBodyRoundCardIndex, releaseBodyRoundCards } from "../utils/body-round-cards.js";
+import { markReasoningBlockClosed, peekClosedReasoningSlots, openBodyRound, takeOpenBodyRoundCardIndex, releaseBodyRoundCards, noteTextBlockClosedForToolCarry } from "../utils/body-round-cards.js";
 import { releaseAppVersion, isLegacyAppVersion } from "../utils/app-version.js";
 import { clearBodyTextState, isBodyTextSent } from "../utils/body-text-state.js";
 import {
@@ -213,6 +213,10 @@ export async function rotateStreamingTextSegment(params: {
 
   if (session && assembler?.hasContent()) {
     const oldSegmentText = assembler.getFullText();
+    // 登记待捎带槽位：本正文段即"前一轮文本块"，其后第一张工具状态卡
+    // 携带它的 taskUniqIndexId（条件：本收尾帧已发出 + 下一个文本消息已
+    // 发出，见 utils/body-round-cards）。同步标记不受出站队列时序影响。
+    noteTextBlockClosedForToolCarry(taskId, getCurrentStatusCardSeq(taskId));
     // 分段收尾帧：lastChunk=true 标识旧流文本块已结束（可开始下一块）。
     // 它是协议关键帧，不设 coalesceKey —— 若被后方同 key 全量帧合并丢弃，
     // 端侧将永远收不到旧块的结束标记。
@@ -246,6 +250,8 @@ export async function rotateStreamingTextSegment(params: {
     // 取思考块开块时锁存的序号：块期间下发的状态卡 command 推高的全局
     // 计数不属于本块（见 utils/reasoning-segment）。
     markReasoningBlockClosed(taskId, peekReasoningSegmentSeq(taskId));
+    // 同时登记为工具卡捎带的"前一轮文本块"
+    noteTextBlockClosedForToolCarry(taskId, peekReasoningSegmentSeq(taskId));
     // 同步闭合分段（不等收尾帧 drain），onReasoningEnd 据此不再补标记帧
     closeReasoningSegment(taskId);
     // 段文本与 streamingTextId 均在入队时捕获/pin —— drain 期间新快照或
@@ -351,6 +357,8 @@ export async function rotateStreamingTextForBodyStart(params: {
     // 携带），同步标记不受出站队列时序影响。
     // 取思考块开块时锁存的序号（见 utils/reasoning-segment）。
     markReasoningBlockClosed(taskId, peekReasoningSegmentSeq(taskId));
+    // 同时登记为工具卡捎带的"前一轮文本块"
+    noteTextBlockClosedForToolCarry(taskId, peekReasoningSegmentSeq(taskId));
     // 同步闭合分段（不等收尾帧 drain），onReasoningEnd 据此不再补标记帧
     closeReasoningSegment(taskId);
     // 段文本与 streamingTextId 均在入队时捕获/pin —— drain 期间新快照或
@@ -1005,6 +1013,8 @@ export async function deliverSubagentFinalResult(params: {
               text: "生成回复已完成",
               isFinal: true,
               taskUniqIndexId: openRoundCardIndex,
+              // 显式空数组：本卡不参与工具卡 thinkIndex 捎带
+              thinkIndex: [],
             }),
         });
       }

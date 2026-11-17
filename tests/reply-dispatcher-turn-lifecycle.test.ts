@@ -360,10 +360,11 @@ describe("reply dispatcher turn ownership", () => {
       mocks.sendA2AResponse.mock.invocationCallOrder[firstBodyIdx],
     );
     // 末轮正文的 close 卡由终态序列补发：同 index，isFinal=true，不带 thinkIndex
+    // （显式空数组 opt-out 工具卡捎带；空数组不会出现在线帧里）
     const closeCards = cards.filter((p) => p.text === "生成回复已完成");
     expect(closeCards).toHaveLength(1);
     expect(closeCards[0]).toMatchObject({ isFinal: true, taskUniqIndexId: 2 });
-    expect(closeCards[0].thinkIndex).toBeUndefined();
+    expect(closeCards[0].thinkIndex ?? []).toEqual([]);
     // 终态汇总状态卡已下线：不再发送"任务处理已完成" status 卡
     expect(cards.filter((p) => p.text === "任务处理已完成")).toHaveLength(0);
   });
@@ -415,7 +416,7 @@ describe("reply dispatcher turn ownership", () => {
     expect(closeCards).toHaveLength(2);
     expect(closeCards[0]).toMatchObject({ isFinal: true, taskUniqIndexId: 2, thinkIndex: ["1", "2", "5"] });
     expect(closeCards[1]).toMatchObject({ isFinal: true, taskUniqIndexId: 7 });
-    expect(closeCards[1].thinkIndex).toBeUndefined();
+    expect(closeCards[1].thinkIndex ?? []).toEqual([]);
 
     // 时序：open 卡二先于段一的 close 卡（"下一个正文发送开始之后"），
     // 两者都排在正文段二首帧之前
