@@ -63,9 +63,9 @@ import {
   openBodyRound,
   takeOpenBodyRoundCardIndex,
   releaseBodyRoundCards,
-  noteTextBlockClosedForToolCarry,
-  noteTextCloseFrameSentForToolCarry,
-  noteTextMessageSentForToolCarry,
+  noteReasoningBlockClosedForToolCarry,
+  noteReasoningCloseFrameSentForToolCarry,
+  noteReasoningMessageSentForToolCarry,
   takeToolCardThinkIndex,
 } from "../src/utils/body-round-cards.js";
 import {
@@ -251,7 +251,7 @@ describe("claimStatusCardSeqForBodyRound（正文轮次 open 卡槽位认领）"
   });
 });
 
-describe("tool-card thinkIndex carry（工具卡捎带前一轮文本块）", () => {
+describe("tool-card thinkIndex carry（工具卡捎带旧一轮思考块）", () => {
   const taskId = "task-toolcarry";
 
   afterEach(() => {
@@ -259,43 +259,43 @@ describe("tool-card thinkIndex carry（工具卡捎带前一轮文本块）", ()
   });
 
   it("does not carry when only the close decision was made (close frame not sent)", () => {
-    noteTextBlockClosedForToolCarry(taskId, 1);
+    noteReasoningBlockClosedForToolCarry(taskId, 1);
     expect(takeToolCardThinkIndex(taskId)).toBeUndefined();
   });
 
-  it("does not carry when the close frame was sent but the next text message has not", () => {
-    noteTextBlockClosedForToolCarry(taskId, 1);
-    noteTextCloseFrameSentForToolCarry(taskId);
-    // 收尾帧已发、下一个文本消息未发：仍不携带（且未消费，后续条件满足可携带）
+  it("does not carry when the close frame was sent but the next reasoning message has not", () => {
+    noteReasoningBlockClosedForToolCarry(taskId, 1);
+    noteReasoningCloseFrameSentForToolCarry(taskId);
+    // 收尾帧已发、新一轮思考未发：仍不携带（且未消费，后续条件满足可携带）
     expect(takeToolCardThinkIndex(taskId)).toBeUndefined();
-    noteTextMessageSentForToolCarry(taskId);
+    noteReasoningMessageSentForToolCarry(taskId);
     expect(takeToolCardThinkIndex(taskId)).toEqual(["1"]);
   });
 
-  it("carries the previous block slot once both conditions hold, exactly once", () => {
-    noteTextBlockClosedForToolCarry(taskId, 3);
-    noteTextCloseFrameSentForToolCarry(taskId);
-    noteTextMessageSentForToolCarry(taskId);
+  it("carries the previous reasoning block slot once both conditions hold, exactly once", () => {
+    noteReasoningBlockClosedForToolCarry(taskId, 3);
+    noteReasoningCloseFrameSentForToolCarry(taskId);
+    noteReasoningMessageSentForToolCarry(taskId);
     expect(takeToolCardThinkIndex(taskId)).toEqual(["3"]);
     expect(takeToolCardThinkIndex(taskId)).toBeUndefined(); // 取一次消费一次
   });
 
-  it("keeps only the latest closed block (前一轮覆盖更早轮)", () => {
-    noteTextBlockClosedForToolCarry(taskId, 1);
-    noteTextCloseFrameSentForToolCarry(taskId);
-    noteTextMessageSentForToolCarry(taskId); // 块1 已可携带但未及消费
-    // 块2 收尾：只捎带"前一轮"（块2），块1 由配对卡 thinkIndex 覆盖
-    noteTextBlockClosedForToolCarry(taskId, 2);
+  it("keeps only the latest closed reasoning block (旧一轮覆盖更早轮)", () => {
+    noteReasoningBlockClosedForToolCarry(taskId, 1);
+    noteReasoningCloseFrameSentForToolCarry(taskId);
+    noteReasoningMessageSentForToolCarry(taskId); // 块1 已可携带但未及消费
+    // 块2 收尾：只捎带"旧一轮"（块2），块1 由配对卡 thinkIndex 覆盖
+    noteReasoningBlockClosedForToolCarry(taskId, 2);
     expect(takeToolCardThinkIndex(taskId)).toBeUndefined(); // 块2 收尾帧未发
-    noteTextCloseFrameSentForToolCarry(taskId);
-    noteTextMessageSentForToolCarry(taskId);
+    noteReasoningCloseFrameSentForToolCarry(taskId);
+    noteReasoningMessageSentForToolCarry(taskId);
     expect(takeToolCardThinkIndex(taskId)).toEqual(["2"]);
   });
 
   it("release clears the pending carry", () => {
-    noteTextBlockClosedForToolCarry(taskId, 1);
-    noteTextCloseFrameSentForToolCarry(taskId);
-    noteTextMessageSentForToolCarry(taskId);
+    noteReasoningBlockClosedForToolCarry(taskId, 1);
+    noteReasoningCloseFrameSentForToolCarry(taskId);
+    noteReasoningMessageSentForToolCarry(taskId);
     releaseBodyRoundCards(taskId);
     expect(takeToolCardThinkIndex(taskId)).toBeUndefined();
   });
