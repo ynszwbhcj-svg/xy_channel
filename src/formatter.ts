@@ -6,7 +6,7 @@ import { getOrCreateStreamingTextId, peekStreamingTextId, peekLastSentStreamingT
 import { isReasoningFinished as readReasoningFinished, releaseReasoningState } from "./utils/reasoning-state.js";
 import { releaseReasoningSegment, peekReasoningSegmentSeq } from "./utils/reasoning-segment.js";
 import { releaseStatusCardSeq, getCurrentStatusCardSeq, nextStatusCardSeq } from "./utils/status-card-seq.js";
-import { releaseBodyRoundCards, takeToolCardThinkIndex, noteTextCloseFrameSentForToolCarry, noteTextMessageSentForToolCarry } from "./utils/body-round-cards.js";
+import { releaseBodyRoundCards, takeToolCardThinkIndex, noteReasoningCloseFrameSentForToolCarry, noteReasoningMessageSentForToolCarry } from "./utils/body-round-cards.js";
 import { isLegacyAppVersion, releaseAppVersion } from "./utils/app-version.js";
 import { markBodyTextSent, clearBodyTextState } from "./utils/body-text-state.js";
 import { logger } from "./utils/logger.js";
@@ -184,16 +184,6 @@ export async function sendA2AResponse(params: SendA2AResponseParams): Promise<vo
   }
 
   await sendWsFrame({ config, sessionId, taskId, payload: jsonRpcResponse });
-  // 工具卡 thinkIndex 捎带的两段确认（实际发出后置位，见 utils/body-round-cards）：
-  // lastChunk=true 收尾帧确认"前一轮块已发完"；非收尾正文帧确认"下一个文本
-  // 消息已发出"。空载终帧（final=true 无文本）不参与。
-  if (typeof bridgedText === "string" && bridgedText.length > 0) {
-    if (artifact.lastChunk === true) {
-      noteTextCloseFrameSentForToolCarry(taskId);
-    } else if (!final) {
-      noteTextMessageSentForToolCarry(taskId);
-    }
-  }
   // 终帧（本轮 turn 文本输出完成）发出后释放 streamingTextId、reasoning 状态、
   // 状态卡序号与正文轮次卡片状态：下轮 turn 生成新 id、reasoning 状态复位为
   // 默认 false、taskUniqIndexId 重新从 1 开始
@@ -281,14 +271,14 @@ export async function sendReasoningTextUpdate(params: SendReasoningTextUpdatePar
   };
 
   await sendWsFrame({ config, sessionId, taskId, payload: jsonRpcResponse });
-  // 工具卡 thinkIndex 捎带的两段确认（同 sendA2AResponse）：思考收尾帧
-  // （lastChunk=true）确认"前一轮块已发完"；思考过程帧确认"下一个文本消息
-  // 已发出"。
+  // 工具卡 thinkIndex 捎带的两段确认（实际发出后置位，见 utils/body-round-cards）：
+  // 思考收尾帧（lastChunk=true）确认"旧一轮思考已发完"；思考过程帧确认
+  // "新一轮思考已发出"。
   if (bridgedText.length > 0) {
     if (params.lastChunk === true) {
-      noteTextCloseFrameSentForToolCarry(taskId);
+      noteReasoningCloseFrameSentForToolCarry(taskId);
     } else {
-      noteTextMessageSentForToolCarry(taskId);
+      noteReasoningMessageSentForToolCarry(taskId);
     }
   }
   // 思考块结束标记帧不再单独打印完整帧日志（A2A-OUT 已覆盖精简版帧内容，
@@ -611,9 +601,9 @@ export async function sendExecuteStatusCard(params: SendExecuteStatusCardParams)
   // 卡复用 open 卡槽位）时直接使用；否则推进占用下一个序号（常规状态卡）。
   const seq = params.taskUniqIndexId ?? nextStatusCardSeq(taskId);
 
-  // thinkIndex 来源：调用方显式传入（正文轮次配对卡）优先；否则取"前一轮
-  // 文本块已收尾且下一个文本消息已发出"的待捎带槽位 —— 其后第一张工具
-  // 状态卡携带前一轮文本块的 taskUniqIndexId（取出即消费，后续卡不再重复
+  // thinkIndex 来源：调用方显式传入（正文轮次配对卡）优先；否则取"旧一轮
+  // 思考块已收尾且新一轮思考消息已发出"的待捎带槽位 —— 其后第一张工具
+  // 状态卡携带旧一轮思考的 taskUniqIndexId（取出即消费，后续卡不再重复
   // 携带；与配对卡的 thinkIndex 允许重合，见 utils/body-round-cards）。
   const thinkIndex = params.thinkIndex ?? takeToolCardThinkIndex(taskId);
 

@@ -23,11 +23,11 @@ interface BodyRoundCardsState {
   reasoningSlots: string[];
   /** 当前未闭合正文轮次的 open 卡槽位；无未闭合轮次为 undefined。 */
   openRoundCardIndex?: number;
-  /** 待捎带的前一轮文本块槽位（lastChunk 收尾决策点登记）。 */
+  /** 待捎带的旧一轮思考块槽位（思考收尾决策点登记）。 */
   carrySlot?: string;
-  /** 前一轮文本块的 lastChunk 收尾帧已实际发出。 */
+  /** 旧一轮思考块的 lastChunk 收尾帧已实际发出。 */
   carryCloseSent?: boolean;
-  /** 下一个文本消息已实际发出（可随工具卡捎带）。 */
+  /** 新一轮思考消息已实际发出（可随工具卡捎带）。 */
   carryArmed?: boolean;
 }
 
@@ -81,40 +81,42 @@ export function releaseBodyRoundCards(taskId: string): void {
   stateByTask.delete(taskId);
 }
 
-// ── 工具状态卡 thinkIndex 捎带 ─────────────────────────────────────
+// ── 工具状态卡 thinkIndex 捎带（思考轮次）─────────────────────────
 //
-// 前一轮文本块（思考段 / 正文段）的 lastChunk 收尾帧发完、且下一个文本
-// 消息已发出之后，其后第一张工具状态卡（未显式携带 thinkIndex 的
-// sendExecuteStatusCard）携带该块的 taskUniqIndexId 作为 thinkIndex，
-// 取一次消费一次。与正文轮次配对卡（open/close 卡）的 thinkIndex 可能
-// 重合 —— 刻意不去重：配对卡是轮次语义的权威下发，本捎带是更早触达
-// 端侧的折叠提示。
+// 旧一轮思考块的 lastChunk 收尾帧发完、且新一轮思考消息已发出之后，其后
+// 第一张工具状态卡（未显式携带 thinkIndex 的 sendExecuteStatusCard）携带
+// 旧一轮思考的 taskUniqIndexId 作为 thinkIndex，取一次消费一次。与正文
+// 轮次配对卡（open/close 卡）的 thinkIndex 可能重合 —— 刻意不去重：
+// 配对卡是轮次语义的权威下发，本捎带是更早触达端侧的折叠提示。
 //
+// 只跟踪思考块：工具状态卡实际只能出现在思考链路（正文产生后工具卡被
+// body-text 门控抑制，等不到边界轮换清门控），正文轮次的折叠由 close 卡
+// （生成回复已完成）携带，无需工具卡捎带。
 // 两段确认均按"实际发出"判定（formatter 的 drain 发送点置位），而非决策
-// 点/入队点：保证卡片落在下一个文本消息之后到达端侧。
+// 点/入队点：保证卡片落在下一轮思考消息之后到达端侧。
 
 /**
- * 文本块 lastChunk 收尾决策点登记待捎带槽位（思考块结束 / 分段边界正文
- * 冲刷 / 思考→正文切换收尾）。新登记覆盖旧值：只捎带"前一轮"（最近的
- * 已完成块），更早的块由配对卡 thinkIndex 覆盖。
+ * 思考块 lastChunk 收尾决策点登记待捎带槽位（onReasoningEnd / 分段边界
+ * 思考收尾 / 思考→正文切换收尾）。新登记覆盖旧值：只捎带"旧一轮"（最近的
+ * 已完成思考块），更早的块由配对卡 thinkIndex 覆盖。
  */
-export function noteTextBlockClosedForToolCarry(taskId: string, taskUniqIndexId: number): void {
+export function noteReasoningBlockClosedForToolCarry(taskId: string, taskUniqIndexId: number): void {
   const state = getOrCreateState(taskId);
   state.carrySlot = String(taskUniqIndexId);
   state.carryCloseSent = false;
   state.carryArmed = false;
 }
 
-/** lastChunk=true 文本收尾帧实际发出后调用（formatter drain 发送点）。 */
-export function noteTextCloseFrameSentForToolCarry(taskId: string): void {
+/** 思考块 lastChunk=true 收尾帧实际发出后调用（formatter drain 发送点）。 */
+export function noteReasoningCloseFrameSentForToolCarry(taskId: string): void {
   const state = stateByTask.get(taskId);
   if (state?.carrySlot !== undefined) {
     state.carryCloseSent = true;
   }
 }
 
-/** 非收尾文本帧（下一块的过程帧）实际发出后调用（formatter drain 发送点）。 */
-export function noteTextMessageSentForToolCarry(taskId: string): void {
+/** 新一轮思考过程帧（非收尾）实际发出后调用（formatter drain 发送点）。 */
+export function noteReasoningMessageSentForToolCarry(taskId: string): void {
   const state = stateByTask.get(taskId);
   if (state?.carrySlot !== undefined && state.carryCloseSent === true) {
     state.carryArmed = true;
@@ -122,9 +124,9 @@ export function noteTextMessageSentForToolCarry(taskId: string): void {
 }
 
 /**
- * 读取并消费工具状态卡待捎带的 thinkIndex：仅当【前一轮块收尾帧已发出
- * 且下一个文本消息已发出】时返回 [前一轮块槽位]，否则 undefined；返回后
- * 即消费，后续卡片不再重复携带（直到再有块完成上述两段确认）。
+ * 读取并消费工具状态卡待捎带的 thinkIndex：仅当【旧一轮思考收尾帧已发出
+ * 且新一轮思考消息已发出】时返回 [旧一轮思考槽位]，否则 undefined；返回后
+ * 即消费，后续卡片不再重复携带（直到再有思考块完成上述两段确认）。
  */
 export function takeToolCardThinkIndex(taskId: string): string[] | undefined {
   const state = stateByTask.get(taskId);
