@@ -49,7 +49,7 @@ afterEach(() => {
 
 describe("native image failures through upstream A2A formatters", () => {
   it.each([
-    ["11.7.9.310", false], ["11.7.9.329", false], ["11.7.9.330", true],
+    ["11.7.9.330", false], ["11.7.10.299", false], ["11.7.10.300", true],
   ])("preserves %s framing and the older active task", async (appVer, modern) => {
     const sessionId = `native-failure-${appVer}`;
     const taskId = `incoming-${appVer}`;

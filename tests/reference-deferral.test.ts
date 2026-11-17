@@ -218,7 +218,7 @@ describe("xiaoyi_append_reference tool deferral", () => {
   });
 
   it("sends immediately on the legacy link (final frame carries full text)", async () => {
-    markAppVersion(taskId, "11.7.8.100"); // 低版本链路（< 11.7.9.330）
+    markAppVersion(taskId, "11.7.8.100"); // 低版本链路（< 11.7.10.300）
 
     const result = await xiaoyiAppendReferenceTool.execute("tc-2", { references: [refItem] });
 
