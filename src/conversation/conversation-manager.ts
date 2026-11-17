@@ -13,8 +13,8 @@
 import { randomUUID } from "crypto";
 import { logger } from "../utils/logger.js";
 import { releaseStreamingTextId, releaseLastSentStreamingTextId, rotateStreamingTextId, peekStreamingTextId, getOrCreateStreamingTextId } from "../utils/streaming-text-id.js";
-import { releaseStatusCardSeq, getCurrentStatusCardSeq, nextStatusCardSeq, advanceStatusCardSeqForSegment } from "../utils/status-card-seq.js";
-import { markLastChunkBlock, markReasoningBlockEnd, getAccumulatedThinkIndex, notifyTextBlockStarted, releaseThinkIndex } from "../utils/think-index.js";
+import { releaseStatusCardSeq, getCurrentStatusCardSeq, nextStatusCardSeq, advanceStatusCardSeqForSegment, claimStatusCardSeqForBodyRound } from "../utils/status-card-seq.js";
+import { markReasoningBlockClosed, peekClosedReasoningSlots, openBodyRound, takeOpenBodyRoundCardIndex, releaseBodyRoundCards } from "../utils/body-round-cards.js";
 import { releaseAppVersion, isLegacyAppVersion } from "../utils/app-version.js";
 import { clearBodyTextState, isBodyTextSent } from "../utils/body-text-state.js";
 import {
@@ -76,17 +76,17 @@ export function deleteSession(sessionId: string): void {
   const session = sessions.get(sessionId);
   session?.outboundQueue.destroy();
   // 会话销毁：释放其任务链上所有 turn 的 streamingTextId、状态卡序号、
-  // thinkIndex 标记、App 版本标记、正文首帧标记、思考分段状态、待下发引用与待下发文件
+  // 正文轮次卡片状态、App 版本标记、正文首帧标记、思考分段状态、待下发引用与待下发文件
   for (const entry of session?.tasks ?? []) {
     releaseStreamingTextId(entry.taskId);
     releaseLastSentStreamingTextId(entry.taskId);
     releaseStatusCardSeq(entry.taskId);
-    releaseThinkIndex(entry.taskId);
     releaseAppVersion(entry.taskId);
     clearBodyTextState(entry.taskId);
     releaseReasoningSegment(entry.taskId);
     releasePendingReferences(entry.taskId);
     releasePendingFiles(entry.taskId);
+    releaseBodyRoundCards(entry.taskId);
   }
   sessions.delete(sessionId);
 }
@@ -144,6 +144,7 @@ export function completeTask(sessionId: string, expectedTaskId?: string): void {
       releaseReasoningSegment(entry.taskId);
       releasePendingReferences(entry.taskId);
       releasePendingFiles(entry.taskId);
+      releaseBodyRoundCards(entry.taskId);
     }
     session.tasks = [];
     return;
@@ -161,6 +162,7 @@ export function completeTask(sessionId: string, expectedTaskId?: string): void {
   releaseReasoningSegment(expectedTaskId);
   releasePendingReferences(expectedTaskId);
   releasePendingFiles(expectedTaskId);
+  releaseBodyRoundCards(expectedTaskId);
   if (nextTasks.length > 0) {
     logger.log(`[TASK_MANAGER] Removed taskId ${expectedTaskId}, restored current taskId ${nextTasks[nextTasks.length - 1].taskId}`);
   } else {
@@ -211,10 +213,6 @@ export async function rotateStreamingTextSegment(params: {
 
   if (session && assembler?.hasContent()) {
     const oldSegmentText = assembler.getFullText();
-    // 攒入旧文本块的 taskUniqIndexId：统一在终态汇总卡（text=任务处理已完成）
-    // 携带，中间状态卡不携带。同步标记（而非等收尾帧 drain），保证不受
-    // 出站队列时序影响。
-    markLastChunkBlock(taskId, getCurrentStatusCardSeq(taskId));
     // 分段收尾帧：lastChunk=true 标识旧流文本块已结束（可开始下一块）。
     // 它是协议关键帧，不设 coalesceKey —— 若被后方同 key 全量帧合并丢弃，
     // 端侧将永远收不到旧块的结束标记。
@@ -242,11 +240,12 @@ export async function rotateStreamingTextSegment(params: {
   // 该字段无实际作用）。闭环依赖 whenIdle：收尾帧与在途思考帧的 drain 先
   // 于轮换，drain 时 lazy 读 id 的帧也仍以旧 id 发出。
   if (session && isReasoningSegmentOpen(taskId)) {
-    // 攒入思考块的 taskUniqIndexId（与 onReasoningEnd 同理，终态汇总卡统一
-    // 携带），同步标记不受出站队列时序影响。
+    // 攒入已闭合思考块的 taskUniqIndexId（与 onReasoningEnd 同理）——下一轮
+    // 正文 open 卡（text=生成回复）的 thinkIndex 携带，端侧据此折叠思考块。
+    // 同步标记（而非等收尾帧 drain），保证不受出站队列时序影响。
     // 取思考块开块时锁存的序号：块期间下发的状态卡 command 推高的全局
     // 计数不属于本块（见 utils/reasoning-segment）。
-    markReasoningBlockEnd(taskId, peekReasoningSegmentSeq(taskId));
+    markReasoningBlockClosed(taskId, peekReasoningSegmentSeq(taskId));
     // 同步闭合分段（不等收尾帧 drain），onReasoningEnd 据此不再补标记帧
     closeReasoningSegment(taskId);
     // 段文本与 streamingTextId 均在入队时捕获/pin —— drain 期间新快照或
@@ -297,8 +296,6 @@ export async function rotateStreamingTextSegment(params: {
   // 序号到当前值 +1（旧段的收尾帧已在上方 drain 完毕、以旧序号发出），
   // 保证相邻文本段（尤其最后一轮思考与正文）序号不同（见 utils/status-card-seq）。
   advanceStatusCardSeqForSegment(taskId);
-  // 新文本段开始：边界处闭合块的 thinkIndex 可随下一张状态卡下发
-  notifyTextBlockStarted(taskId);
   assembler?.cutSegment();
   // 新文本段 = 新一轮模型回复：复位"正文首帧已发出"标记，工具 command
   // 重新获得先于正文下发的窗口（见 utils/body-text-state.ts）。
@@ -350,10 +347,10 @@ export async function rotateStreamingTextForBodyStart(params: {
   // 与分段边界的思考收尾同理不设 coalesceKey（协议关键帧）；isReasoningFinished
   // 显式 pin false —— 此处是思考→正文的类型切换，非 thinking_end 语义。
   if (session && isReasoningSegmentOpen(taskId)) {
-    // 攒入思考块的 taskUniqIndexId（终态汇总卡统一携带），同步标记不受出站
-    // 队列时序影响。
+    // 攒入已闭合思考块的 taskUniqIndexId（下一轮正文 open 卡的 thinkIndex
+    // 携带），同步标记不受出站队列时序影响。
     // 取思考块开块时锁存的序号（见 utils/reasoning-segment）。
-    markReasoningBlockEnd(taskId, peekReasoningSegmentSeq(taskId));
+    markReasoningBlockClosed(taskId, peekReasoningSegmentSeq(taskId));
     // 同步闭合分段（不等收尾帧 drain），onReasoningEnd 据此不再补标记帧
     closeReasoningSegment(taskId);
     // 段文本与 streamingTextId 均在入队时捕获/pin —— drain 期间新快照或
@@ -398,12 +395,83 @@ export async function rotateStreamingTextForBodyStart(params: {
   // 序号（当前值 +1），保证最后一轮思考与正文的 taskUniqIndexId 不同
   // （见 utils/status-card-seq）。
   advanceStatusCardSeqForSegment(taskId);
-  // 正文段开始：此前闭合思考块的 thinkIndex 可随下一张状态卡下发
-  notifyTextBlockStarted(taskId);
   logger.withContext(sessionId, taskId).log(
     `[SEGMENT] reasoning→body switch, rotated streamingTextId=${newId}`,
   );
   return newId;
+}
+
+/**
+ * 正文轮次开始（高版本链路）：在正文段首帧入队之前调用（reply-dispatcher
+ * 的 onPartialReply 流式路径 / deliver 非流式回退路径 / 子任务终态正文帧
+ * 之前），为新一轮正文装配配对状态卡：
+ *   1. 上一轮正文未闭合 → 先补 close 卡（"生成回复已完成"，isFinal=true，
+ *      taskUniqIndexId 复用其 open 卡槽位，thinkIndex=[已闭合思考块槽位...,
+ *      完成轮正文的槽位]，端侧一并折叠思考块与该轮正文）；
+ *   2. 再下发本轮 open 卡（"生成回复"，isFinal=false）——认领当前展示槽位
+ *      （claimStatusCardSeqForBodyRound：分段轮换刚推进的槽位直接占用，不
+ *      产生空槽），本轮正文帧落在同一槽位；thinkIndex 携带本 turn 已闭合
+ *      思考块的槽位快照（端侧折叠已发送的思考块）。
+ * 卡片与正文帧同走会话出站队列，open → close → 正文首帧的相对顺序即入队
+ * 顺序（协议要求 command 先于正文下发）。
+ * no-op 情形：低版本链路（无状态卡能力）、会话缺失、本段正文已开始
+ * （装配器有内容或正文首帧已发出 —— 续流 partial 重复调用幂等）。
+ */
+export function maybeEnqueueBodyRoundStartCards(params: {
+  config: XYChannelConfig;
+  sessionId: string;
+  taskId: string;
+  messageId: string;
+}): void {
+  const { config, sessionId, taskId, messageId } = params;
+  if (isLegacyAppVersion(taskId)) return;
+  const session = sessions.get(sessionId);
+  if (!session) return;
+  if (session.assembler?.hasContent() || isBodyTextSent(taskId)) return;
+
+  // 本轮 open 卡：认领当前展示槽位（轮换刚推进的槽位直接占用）
+  const openCardIndex = claimStatusCardSeqForBodyRound(taskId);
+  const openThinkIndex = peekClosedReasoningSlots(taskId);
+  session.outboundQueue.enqueue({
+    taskId,
+    label: "body-round-open",
+    send: () =>
+      sendExecuteStatusCard({
+        config,
+        sessionId,
+        taskId,
+        messageId,
+        text: "生成回复",
+        isFinal: false,
+        taskUniqIndexId: openCardIndex,
+        thinkIndex: openThinkIndex,
+      }),
+  });
+
+  // 上一轮正文的 close 卡：index 复用其 open 卡槽位，thinkIndex=[已闭合思考块
+  // 槽位 + 完成轮正文槽位]（端侧一并折叠思考块与该轮正文）。槽位全局按时间
+  // 递增分配，按数值排序后列表即时间序。
+  const prevCardIndex = takeOpenBodyRoundCardIndex(taskId);
+  if (prevCardIndex !== undefined) {
+    session.outboundQueue.enqueue({
+      taskId,
+      label: "body-round-close",
+      send: () =>
+        sendExecuteStatusCard({
+          config,
+          sessionId,
+          taskId,
+          messageId,
+          text: "生成回复已完成",
+          isFinal: true,
+          taskUniqIndexId: prevCardIndex,
+          thinkIndex: [...peekClosedReasoningSlots(taskId), String(prevCardIndex)]
+            .sort((a, b) => Number(a) - Number(b)),
+        }),
+    });
+  }
+
+  openBodyRound(taskId, openCardIndex);
 }
 
 /**
@@ -880,11 +948,8 @@ export async function deliverSubagentFinalResult(params: {
       messageId: effectiveMessageId,
       files: pendingFiles,
     });
-  // 汇总状态卡：thinkIndex 攒批，text=任务处理已完成；排在 final 帧之前。
-  // 携带规则（与 reply-dispatcher 终态路径一致）：除最后一轮正文外，其余
-  // 所有文本块都进 thinkIndex（全部思考块无一例外）。本路径终态正文即
-  // finalText（必有内容，见上方兜底），最后一轮正文从不标记、天然不在
-  // 列表 —— 无需任何过滤。
+  // 汇总状态卡：text=任务处理已完成；排在 final 帧之前。thinkIndex 不再由
+  // 汇总卡携带 —— 改由正文轮次配对卡逐轮下发（见 maybeEnqueueBodyRoundStartCards）。
   const sendSummaryCard = () =>
     sendExecuteStatusCard({
       config,
@@ -892,7 +957,6 @@ export async function deliverSubagentFinalResult(params: {
       taskId: effectiveTaskId,
       messageId: effectiveMessageId,
       text: "任务处理已完成",
-      thinkIndex: getAccumulatedThinkIndex(effectiveTaskId),
     });
   // DisplayTaskCardData final 帧收尾对话轮（起始卡在 bot.ts 下发）；
   // 排在汇总卡之后（index 惰性读取，落在汇总卡序号上），final 帧之前。
@@ -918,12 +982,42 @@ export async function deliverSubagentFinalResult(params: {
       final: true,
     });
   if (session) {
+    // 子任务终态正文若是本 turn 首个正文轮次（等待期间未流式产出正文），
+    // 先补该轮 open 卡（"生成回复"）；已开始的轮次幂等跳过。
+    maybeEnqueueBodyRoundStartCards({
+      config,
+      sessionId: state.sessionId,
+      taskId: effectiveTaskId,
+      messageId: effectiveMessageId,
+    });
     session.outboundQueue.enqueue({
       taskId: effectiveTaskId,
       label: "subagent-text-complete",
       delayMs: terminalFrameDelayMs,
       send: sendTextComplete,
     });
+    // 正文轮次收尾卡：最后一轮正文没有「下一轮正文」触发 close，由终态
+    // 序列补发（index 复用其 open 卡槽位，isFinal=true，不带 thinkIndex
+    // —— 最后一轮正文保持展开）。排在正文完成帧之后。
+    {
+      const openRoundCardIndex = takeOpenBodyRoundCardIndex(effectiveTaskId);
+      if (openRoundCardIndex !== undefined) {
+        session.outboundQueue.enqueue({
+          taskId: effectiveTaskId,
+          label: "subagent-body-round-close",
+          send: () =>
+            sendExecuteStatusCard({
+              config,
+              sessionId: state.sessionId,
+              taskId: effectiveTaskId,
+              messageId: effectiveMessageId,
+              text: "生成回复已完成",
+              isFinal: true,
+              taskUniqIndexId: openRoundCardIndex,
+            }),
+        });
+      }
+    }
     if (pendingFiles.length > 0) {
       session.outboundQueue.enqueue({
         taskId: effectiveTaskId,

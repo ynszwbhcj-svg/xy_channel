@@ -19,10 +19,15 @@
 /** taskId → 本轮对话当前已占用的最大展示槽位序号。 */
 const statusCardSeqByTask = new Map<string, number>();
 
+/** taskId → 最近一次分段轮换推进的槽位是否尚未被占用（可被正文轮次 open 卡直接认领）。 */
+const freshSegmentSlotByTask = new Map<string, boolean>();
+
 /** 推进并占用下一个展示槽位序号（发状态卡 / 文本分段轮换时调用，首张为 1）。 */
 export function nextStatusCardSeq(taskId: string): number {
   const next = (statusCardSeqByTask.get(taskId) ?? 0) + 1;
   statusCardSeqByTask.set(taskId, next);
+  // 状态卡越过/占用了序号：此前轮换推进的槽位不再视为"未占用"
+  freshSegmentSlotByTask.set(taskId, false);
   return next;
 }
 
@@ -30,11 +35,29 @@ export function nextStatusCardSeq(taskId: string): number {
  * 文本分段轮换推进槽位序号：推进到当前有效值 +1（含起始卡默认 1），
  * 保证新文本段与旧段的 taskUniqIndexId 不同。与 nextStatusCardSeq 的区别：
  * 首卡在空计数器上与起始卡同槽（1）；分段轮换必须越过当前槽位。
+ * 推进后的槽位标记为"未占用"：正文轮次 open 卡可经
+ * claimStatusCardSeqForBodyRound 直接认领该槽（不再二次推进），避免
+ * 轮换推进与 open 卡各占一号产生空槽。
  */
 export function advanceStatusCardSeqForSegment(taskId: string): number {
   const next = getCurrentStatusCardSeq(taskId) + 1;
   statusCardSeqByTask.set(taskId, next);
+  freshSegmentSlotByTask.set(taskId, true);
   return next;
+}
+
+/**
+ * 为正文轮次 open 卡认领展示槽位：当前槽位是分段轮换刚推进且尚未被任何
+ * 帧/卡占用时，直接占用当前值（正文帧落在同一槽位，不产生空槽）；否则
+ * 推进占用下一个序号。认领只发生在正文轮次开始（思考→正文切换 / 工具
+ * 边界后的纯正文段首帧之前），此刻被认领的槽位必然无思考内容。
+ */
+export function claimStatusCardSeqForBodyRound(taskId: string): number {
+  if (freshSegmentSlotByTask.get(taskId) === true) {
+    freshSegmentSlotByTask.set(taskId, false);
+    return getCurrentStatusCardSeq(taskId);
+  }
+  return nextStatusCardSeq(taskId);
 }
 
 /**
@@ -51,4 +74,5 @@ export function getCurrentStatusCardSeq(taskId: string): number {
 /** 释放指定 taskId 的序号状态（turn 结束 / 会话销毁时调用）。幂等。 */
 export function releaseStatusCardSeq(taskId: string): void {
   statusCardSeqByTask.delete(taskId);
+  freshSegmentSlotByTask.delete(taskId);
 }

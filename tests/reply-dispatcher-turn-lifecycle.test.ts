@@ -328,68 +328,108 @@ describe("reply dispatcher turn ownership", () => {
     expect(closeFrames[0]).toMatchObject({ text: "思考内容", isReasoningFinished: false });
   });
 
-  it("keeps the reasoning block in thinkIndex and gives the body a different taskUniqIndexId (think+body, no tools)", async () => {
+  it("body round gets a paired status card; open card carries closed reasoning slots (think+body, no tools)", async () => {
     const sessionId = "sess-think-body-same-slot";
     registerTask(sessionId, "task-tb", "msg-tb");
     const turn = createDispatcher(sessionId, "task-tb", "msg-tb");
 
-    // 思考块 pin 在 seq=1（起始卡槽位）→ thinking_end 收尾；正文经
-    // 思考→正文切换轮换 streamingTextId，taskUniqIndexId 同步推进到 seq=2
+    // 思考块 pin 在 seq=1（起始卡槽位）→ thinking_end 收尾（登记为已闭合
+    // 思考块）；正文经思考→正文切换推进到 seq=2，open 卡直接认领该槽位
     await turn.replyOptions.onReasoningStream({ text: "思考内容" });
     await turn.replyOptions.onReasoningEnd();
     expect(peekReasoningSegmentSeq("task-tb")).toBe(1);
     await turn.replyOptions.onPartialReply({ text: "正文" });
-    // 核心断言：最后一轮思考与正文的 taskUniqIndexId 不同
+    // 核心断言：最后一轮思考与正文（含其 open 卡）的 taskUniqIndexId 不同
     expect(getCurrentStatusCardSeq("task-tb")).toBe(2);
     await turn.dispatcher.deliver({ text: "正文" }, { kind: "final" });
     await turn.dispatcher.onIdle();
     await getOrCreateSession(sessionId).outboundQueue.whenIdle();
 
-    const summaryCards = mocks.sendExecuteStatusCard.mock.calls
-      .map(([params]) => params)
-      .filter((params) => params.text === "任务处理已完成");
+    const cards = mocks.sendExecuteStatusCard.mock.calls.map(([params]) => params);
+    // open 卡：正文首帧之前下发，text=生成回复，isFinal=false，
+    // thinkIndex 携带已闭合思考块槽位（思考块 seq=1）
+    const openCards = cards.filter((p) => p.text === "生成回复");
+    expect(openCards).toHaveLength(1);
+    expect(openCards[0]).toMatchObject({ isFinal: false, taskUniqIndexId: 2, thinkIndex: ["1"] });
+    // open 卡必须排在首个正文帧之前
+    const firstBodyIdx = mocks.sendA2AResponse.mock.calls.findIndex(
+      ([params]) => (params.text ?? "").length > 0,
+    );
+    expect(firstBodyIdx).toBeGreaterThanOrEqual(0);
+    expect(mocks.sendExecuteStatusCard.mock.invocationCallOrder[cards.indexOf(openCards[0])]).toBeLessThan(
+      mocks.sendA2AResponse.mock.invocationCallOrder[firstBodyIdx],
+    );
+    // 末轮正文的 close 卡由终态序列补发：同 index，isFinal=true，不带 thinkIndex
+    const closeCards = cards.filter((p) => p.text === "生成回复已完成");
+    expect(closeCards).toHaveLength(1);
+    expect(closeCards[0]).toMatchObject({ isFinal: true, taskUniqIndexId: 2 });
+    expect(closeCards[0].thinkIndex).toBeUndefined();
+    // 汇总卡不再携带 thinkIndex
+    const summaryCards = cards.filter((p) => p.text === "任务处理已完成");
     expect(summaryCards).toHaveLength(1);
-    // 思考块必须进 thinkIndex：终态段（正文）有文本，不做任何剔除
-    expect(summaryCards[0].thinkIndex).toEqual(["1"]);
+    expect(summaryCards[0].thinkIndex).toBeUndefined();
   });
 
-  it("terminal summary card keeps all reasoning blocks and excludes only the last body segment", async () => {
+  it("per-round paired cards carry thinkIndex across rounds; summary card stays clean", async () => {
     const sessionId = "sess-think-index";
     registerTask(sessionId, "task-t", "msg-t");
     const turn = createDispatcher(sessionId, "task-t", "msg-t");
 
-    // 思考块一（seq=1 —— 起始卡槽位）→ thinking_end 收尾 → thinkIndex=["1"]
+    // 思考块一（seq=1 —— 起始卡槽位）→ thinking_end 收尾
     await turn.replyOptions.onReasoningStream({ text: "思考块一" });
     await turn.replyOptions.onReasoningEnd();
-    // 正文段一出现：思考→正文切换轮换 id 并推进展示槽位序号 → seq=2
+    // 正文段一：思考→正文切换推进到 seq=2，open 卡认领该槽（thinkIndex=["1"]），
+    // 正文段一与 open 卡同槽（seq=2）
     await turn.replyOptions.onPartialReply({ text: "正文段一" });
     await getOrCreateSession(sessionId).outboundQueue.whenIdle();
-    // 工具边界：正文段一冲刷（以 seq=2 入 thinkIndex），轮换后再推进 → seq=3
+    // 工具边界：正文段一冲刷，轮换后再推进 → seq=3
     await rotateStreamingTextSegment({ config: {} as never, sessionId, taskId: "task-t", messageId: "msg-t" });
 
     // 两张工具状态卡推进 seq 到 4、5 —— 思考块二落到 seq=5
     nextStatusCardSeq("task-t");
     nextStatusCardSeq("task-t");
 
-    // 思考块二（seq=5）→ thinking_end → thinkIndex=["1","2","5"]
+    // 思考块二（seq=5）→ thinking_end 收尾
     await turn.replyOptions.onReasoningStream({ text: "思考块一思考块二" });
     await turn.replyOptions.onReasoningEnd();
 
     // 再一张状态卡推进到 6
     nextStatusCardSeq("task-t");
 
-    // 正文段二 + 终态序列：思考→正文切换再推进 → 正文段二在 seq=7
+    // 正文段二：思考→正文切换推进到 seq=7，open 卡二认领（thinkIndex=["1","5"]）；
+    // 正文段一的 close 卡随之下发（index=2，thinkIndex=已闭合思考块+完成轮正文）
     await turn.replyOptions.onPartialReply({ text: "正文" });
     await turn.dispatcher.deliver({ text: "正文" }, { kind: "final" });
     await turn.dispatcher.onIdle();
     await getOrCreateSession(sessionId).outboundQueue.whenIdle();
 
-    const summaryCards = mocks.sendExecuteStatusCard.mock.calls
-      .map(([params]) => params)
-      .filter((params) => params.text === "任务处理已完成");
+    const cards = mocks.sendExecuteStatusCard.mock.calls.map(([params]) => params);
+    const openCards = cards.filter((p) => p.text === "生成回复");
+    const closeCards = cards.filter((p) => p.text === "生成回复已完成");
+
+    // 两轮正文各一张 open 卡：思考块槽位全量快照逐轮累积
+    expect(openCards).toHaveLength(2);
+    expect(openCards[0]).toMatchObject({ isFinal: false, taskUniqIndexId: 2, thinkIndex: ["1"] });
+    expect(openCards[1]).toMatchObject({ isFinal: false, taskUniqIndexId: 7, thinkIndex: ["1", "5"] });
+
+    // close 卡两张：段一的由下一轮正文开始触发（thinkIndex=已闭合思考块
+    // 槽位+完成轮正文槽位），末轮的由终态序列补发（不带 thinkIndex）
+    expect(closeCards).toHaveLength(2);
+    expect(closeCards[0]).toMatchObject({ isFinal: true, taskUniqIndexId: 2, thinkIndex: ["1", "2", "5"] });
+    expect(closeCards[1]).toMatchObject({ isFinal: true, taskUniqIndexId: 7 });
+    expect(closeCards[1].thinkIndex).toBeUndefined();
+
+    // 时序：open 卡二先于段一的 close 卡（"下一个正文发送开始之后"），
+    // 两者都排在正文段二首帧之前
+    const open2CallIdx = cards.indexOf(openCards[1]);
+    const close1CallIdx = cards.indexOf(closeCards[0]);
+    expect(mocks.sendExecuteStatusCard.mock.invocationCallOrder[open2CallIdx]).toBeLessThan(
+      mocks.sendExecuteStatusCard.mock.invocationCallOrder[close1CallIdx],
+    );
+
+    // 汇总卡仍在但不再携带 thinkIndex
+    const summaryCards = cards.filter((p) => p.text === "任务处理已完成");
     expect(summaryCards).toHaveLength(1);
-    // 全部思考块（1、5）与中间正文段（2）都进 thinkIndex；最后正文段
-    // （seq=7 终态段）从不标记，天然不在列表（终态段有文本，无剔除）
-    expect(summaryCards[0].thinkIndex).toEqual(["1", "2", "5"]);
+    expect(summaryCards[0].thinkIndex).toBeUndefined();
   });
 });

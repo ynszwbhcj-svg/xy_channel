@@ -22,6 +22,7 @@ import {
   isTurnSuperseded,
   deliverSubagentFinalResult,
   rotateStreamingTextForBodyStart,
+  maybeEnqueueBodyRoundStartCards,
 } from "../conversation/conversation-manager.js";
 import { StreamAssembler } from "../conversation/stream-assembler.js";
 import { markReasoningFinished, markReasoningStreaming } from "../utils/reasoning-state.js";
@@ -37,7 +38,7 @@ import { getOrCreateStreamingTextId } from "../utils/streaming-text-id.js";
 import { drainPendingReferences } from "../utils/pending-references.js";
 import { drainPendingFiles } from "../utils/pending-files.js";
 import { getCurrentStatusCardSeq } from "../utils/status-card-seq.js";
-import { markReasoningBlockEnd, getAccumulatedThinkIndex, peekLastBodyBlockSeq } from "../utils/think-index.js";
+import { markReasoningBlockClosed, takeOpenBodyRoundCardIndex } from "../utils/body-round-cards.js";
 
 // ⚙️ 前缀是 openclaw 系统消息稳定标记（infra/system-message.ts SYSTEM_MARK）。
 // ACP 绑定会话 turn 结束会以 kind=final 尾随投递系统诊断通知（如
@@ -374,6 +375,14 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
             taskId: deliverTaskId,
             messageId: deliverMessageId,
           });
+          // 正文轮次开始：下发配对状态卡（上一轮 close 卡 + 本轮 open 卡），
+          // 排在本轮正文首帧之前；非首轮/低版本幂等跳过
+          maybeEnqueueBodyRoundStartCards({
+            config,
+            sessionId,
+            taskId: deliverTaskId,
+            messageId: deliverMessageId,
+          });
           outboundQueue.enqueue({
             taskId: deliverTaskId,
             label: "deliver-fallback",
@@ -620,19 +629,79 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
                 }
               }
 
-              // 🔑 汇总状态卡：thinkIndex 攒批（本 turn 内工具卡不逐张携带，
-              // 攒到这里统一下发）。携带规则：除最后一轮正文外，其余所有
-              // 文本块都进 thinkIndex（全部思考块无一例外，含与最后一轮正文
-              // 同 seq 的思考块 —— 不得按当前卡序号过滤误杀）。最后一轮正文
-              // 即终态正文段，从不标记、天然不在列表；唯一需要剔除的情形：
-              // 终态段为空（正文停在某个边界冲刷段、之后没有新内容），该
-              // 冲刷段即最后一轮正文，按登记值剔除。
-              // 排在 final 帧之前：终态帧发出后服务端可能关闭本 turn。
+              // 正文轮次收尾卡：最后一轮正文没有「下一轮正文」触发 close，
+              // 由终态序列补发（index 复用其 open 卡槽位，isFinal=true，不带
+              // thinkIndex —— 最后一轮正文保持展开）。排在正文完成帧之后、
+              // 文件/引用帧之前。
               {
-                // 终态段无文本时，最后冲刷正文段承载最终展示，从 thinkIndex 剔除
-                const excludeSeq = fullFinalText ? undefined : peekLastBodyBlockSeq(terminalTaskId);
-                const summaryThinkIndex = getAccumulatedThinkIndex(terminalTaskId)
-                  .filter((id) => id !== excludeSeq);
+                const openRoundCardIndex = takeOpenBodyRoundCardIndex(terminalTaskId);
+                if (openRoundCardIndex !== undefined) {
+                  outboundQueue.enqueue({
+                    taskId: terminalTaskId,
+                    label: "terminal-body-round-close",
+                    send: () =>
+                      sendExecuteStatusCard({
+                        config,
+                        sessionId,
+                        taskId: terminalTaskId,
+                        messageId: terminalMessageId,
+                        text: "生成回复已完成",
+                        isFinal: true,
+                        taskUniqIndexId: openRoundCardIndex,
+                      }),
+                  });
+                }
+              }
+
+              // 文件帧：send_file_to_user / 跨设备结果回传等攒批的文件在
+              // 【最后一个正文帧之后、引用帧之前】统一下发（协议时序要求）。
+              // 排在汇总卡之前；上传在工具调用点已完成，此处仅下发帧。
+              {
+                const pendingFiles = drainPendingFiles(terminalTaskId);
+                if (pendingFiles.length > 0) {
+                  outboundQueue.enqueue({
+                    taskId: terminalTaskId,
+                    label: "terminal-files",
+                    send: () =>
+                      sendFileArtifacts({
+                        config,
+                        sessionId,
+                        taskId: terminalTaskId,
+                        messageId: terminalMessageId,
+                        files: pendingFiles,
+                      }),
+                  });
+                }
+              }
+
+              // 引用来源帧：xiaoyi_append_reference 工具攒批的引用在【最后一个
+              // 正文帧之后】统一下发（协议要求），排在汇总卡之前；streamingTextId
+              // 由 sendReference 取 last-sent（此时即 terminal-text-complete 帧
+              // 的正文段 id）。无正文完成帧（异常空文本）时 last-sent 退化为最后
+              // 一帧流式正文的 id，仍在其后下发。
+              {
+                const pendingReferences = drainPendingReferences(terminalTaskId);
+                if (pendingReferences.length > 0) {
+                  outboundQueue.enqueue({
+                    taskId: terminalTaskId,
+                    label: "terminal-references",
+                    delayMs: terminalFrameDelayMs,
+                    send: () =>
+                      sendReference({
+                        config,
+                        sessionId,
+                        taskId: terminalTaskId,
+                        messageId: terminalMessageId,
+                        references: pendingReferences,
+                      }),
+                  });
+                }
+              }
+
+              // 🔑 汇总状态卡：text=任务处理已完成，排在 final 帧之前（终态
+              // 帧发出后服务端可能关闭本 turn）。thinkIndex 不再由汇总卡携带
+              // —— 改由正文轮次配对卡逐轮下发（见 maybeEnqueueBodyRoundStartCards）。
+              {
                 outboundQueue.enqueue({
                   taskId: terminalTaskId,
                   label: "terminal-summary-card",
@@ -643,7 +712,6 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
                       taskId: terminalTaskId,
                       messageId: terminalMessageId,
                       text: "任务处理已完成",
-                      thinkIndex: summaryThinkIndex,
                     }),
                 });
               }
@@ -898,12 +966,12 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
           }
 
           if (isReasoningSegmentOpen(endTaskId)) {
-            // 攒入思考文本块的 taskUniqIndexId：统一在终态汇总卡（text=任务
-            // 处理已完成）携带，中间状态卡不携带。同步标记（而非等标记帧
-            // drain），保证不受出站队列时序影响。
+            // 攒入已闭合思考块的 taskUniqIndexId：下一轮正文 open 卡
+            // （text=生成回复）的 thinkIndex 携带，端侧据此折叠思考块。
+            // 同步标记（而非等标记帧 drain），保证不受出站队列时序影响。
             // 取思考块开块时锁存的序号：块期间下发的状态卡 command 推高的
             // 全局计数不属于本块（见 utils/reasoning-segment）。
-            markReasoningBlockEnd(endTaskId, peekReasoningSegmentSeq(endTaskId));
+            markReasoningBlockClosed(endTaskId, peekReasoningSegmentSeq(endTaskId));
             // 同步闭合分段（不等标记帧 drain），分段边界据此判断本段已收尾
             closeReasoningSegment(endTaskId);
             // 结束标记帧携带本思考段的完整文本（append=false 快照语义），
@@ -960,6 +1028,15 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
           // 不共用 id（思考段1=思考段2 ≠ 正文1）。必须在 onStreamText 之前：
           // 装配器一旦有内容即视为正文段已开始，后续 partial 不再触发切换。
           await rotateStreamingTextForBodyStart({
+            config,
+            sessionId,
+            taskId: partialTaskId,
+            messageId: partialMessageId,
+          });
+
+          // 正文轮次开始：下发配对状态卡（上一轮 close 卡 + 本轮 open 卡），
+          // 排在本轮正文首帧之前；续流 partial（装配器已有内容）幂等跳过
+          maybeEnqueueBodyRoundStartCards({
             config,
             sessionId,
             taskId: partialTaskId,
