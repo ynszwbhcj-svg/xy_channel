@@ -6,6 +6,7 @@ vi.mock("../src/formatter.js", () => ({
   sendStatusUpdate: vi.fn(),
   sendDisplayTaskCardData: vi.fn(),
   sendExecuteStatusCard: vi.fn(),
+  sendFileArtifacts: vi.fn(),
 }));
 
 vi.mock("../src/utils/logger.js", () => ({

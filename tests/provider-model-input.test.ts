@@ -6,7 +6,7 @@ vi.mock("../src/utils/logger.js", () => ({
 vi.mock("../src/utils/self-evolution-manager.js", () => ({
   selfEvolutionManager: { isEnabled: vi.fn().mockResolvedValue(false) },
 }));
-vi.mock("../src/formatter.js", () => ({ sendStatusUpdate: vi.fn().mockResolvedValue(undefined) }));
+vi.mock("../src/formatter.js", () => ({ sendStatusUpdate: vi.fn().mockResolvedValue(undefined), sendFileArtifacts: vi.fn() }));
 
 import { xiaoyiProvider } from "../src/provider.js";
 import { resolveModelInput } from "../src/model-input.js";

@@ -6,8 +6,8 @@
 //    时轮换本 turn 的 streamingTextId 并切分流式装配器
 //    （conversation-manager.rotateStreamingTextSegment）：边界前的旧段以
 //    lastChunk=true 收尾帧结束（思考段收尾前先补一帧 status-update
-//    「已完成深度思考」，pin 思考段 id）、并攒入 thinkIndex（终态汇总卡统一
-//    携带），边界后的文本帧使用新 id，且新 id 帧不叠加旧段文本。
+//    「已完成深度思考」，pin 思考段 id），边界后的文本帧使用新 id，且新 id
+//    帧不叠加旧段文本。
 //    边界无条件拆分 —— 每个独立的思考文本段都是独立的 streamingTextId
 //    （思考段1……工具……思考段2……正文1 路径中，思考段1 与思考段2 分属
 //    不同 id，正文再另换新 id）。思考→正文的类型切换不在本模块：由
@@ -368,7 +368,7 @@ export function registerStepInfoHook(api: OpenClawPluginApi): void {
       const sendCtx = resolveSendContext(event, ctx);
       if (!sendCtx) return;
 
-      // 低版本链路（app_ver < 11.7.9.330）整体跳过：不下发状态卡/技能卡/
+      // 低版本链路（app_ver < 11.7.10.300）整体跳过：不下发状态卡/技能卡/
       // 步骤卡，也不做文本分段边界（旧客户端无此能力，按合并前逻辑下发）
       if (isLegacyAppVersion(sendCtx.taskId)) return;
 
@@ -476,7 +476,7 @@ export function registerStepInfoHook(api: OpenClawPluginApi): void {
         return;
       }
 
-      // 低版本链路（app_ver < 11.7.9.330）不做分段边界：旧客户端无
+      // 低版本链路（app_ver < 11.7.10.300）不做分段边界：旧客户端无
       // streamingTextId 分段能力，正文按合并前的单段流式下发
       if (isLegacyAppVersion(sendCtx.taskId)) return;
 

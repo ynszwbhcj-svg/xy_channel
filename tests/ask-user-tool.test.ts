@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../src/formatter.js", () => ({
   sendCommand: mocks.sendCommand,
+  sendFileArtifacts: vi.fn(),
 }));
 vi.mock("../src/transport/client.js", () => ({
   getCachedXYWebSocketManager: mocks.getCachedXYWebSocketManager,
@@ -28,7 +29,7 @@ const context = {
   sessionId: "session-1",
   taskId: "task-1",
   messageId: "message-1",
-  appVer: "11.7.9.330",
+  appVer: "11.7.10.300",
 };
 
 const questions = [

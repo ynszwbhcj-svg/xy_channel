@@ -40,6 +40,7 @@ vi.mock("../src/formatter.js", () => ({
   sendExecuteStatusCard: mocks.sendExecuteStatusCard,
   sendDisplayTaskCardData: mocks.sendDisplayTaskCardData,
   sendReference: mocks.sendReference,
+  sendFileArtifacts: vi.fn(),
 }));
 
 vi.mock("../src/tools/session-manager.js", () => ({
@@ -154,21 +155,25 @@ describe("reference flush in the terminal sequence", () => {
       expect.objectContaining({ taskId, references: [refItem] }),
     );
 
-    // 帧序：正文完成帧（lastChunk=true, final≠true）→ 引用帧 → 汇总卡
-    const textCompleteIdx = mocks.sendA2AResponse.mock.calls.findIndex(
-      ([params]) => params.lastChunk === true && params.final !== true,
+    // 帧序：引用帧在合并终帧（lastChunk=true 且 final=true，正文收尾与对话
+    // 终态合并为同一帧）之前下发
+    const mergedFinalIdx = mocks.sendA2AResponse.mock.calls.findIndex(
+      ([params]) => params.lastChunk === true && params.final === true,
     );
-    const summaryCardIdx = mocks.sendExecuteStatusCard.mock.calls.findIndex(
-      ([params]) => params.text === "任务处理已完成",
-    );
-    expect(textCompleteIdx).toBeGreaterThanOrEqual(0);
-    expect(summaryCardIdx).toBeGreaterThanOrEqual(0);
-    expect(mocks.sendA2AResponse.mock.invocationCallOrder[textCompleteIdx]).toBeLessThan(
-      mocks.sendReference.mock.invocationCallOrder[0],
-    );
+    expect(mergedFinalIdx).toBeGreaterThanOrEqual(0);
     expect(mocks.sendReference.mock.invocationCallOrder[0]).toBeLessThan(
-      mocks.sendExecuteStatusCard.mock.invocationCallOrder[summaryCardIdx],
+      mocks.sendA2AResponse.mock.invocationCallOrder[mergedFinalIdx],
     );
+    // 不再有独立的正文完成帧（lastChunk=true, final=false）
+    expect(
+      mocks.sendA2AResponse.mock.calls.filter(
+        ([params]) => params.lastChunk === true && params.final !== true,
+      ),
+    ).toHaveLength(0);
+    // 终态汇总状态卡（"任务处理已完成"）已下线
+    expect(
+      mocks.sendExecuteStatusCard.mock.calls.filter(([params]) => params.text === "任务处理已完成"),
+    ).toHaveLength(0);
   });
 
   it("sends no reference frame when nothing was queued", async () => {
@@ -213,7 +218,7 @@ describe("xiaoyi_append_reference tool deferral", () => {
   });
 
   it("sends immediately on the legacy link (final frame carries full text)", async () => {
-    markAppVersion(taskId, "11.7.8.100"); // 低版本链路（< 11.7.9.330）
+    markAppVersion(taskId, "11.7.8.100"); // 低版本链路（< 11.7.10.300）
 
     const result = await xiaoyiAppendReferenceTool.execute("tc-2", { references: [refItem] });
 

@@ -6,13 +6,14 @@ import { getOrCreateStreamingTextId, peekStreamingTextId, peekLastSentStreamingT
 import { isReasoningFinished as readReasoningFinished, releaseReasoningState } from "./utils/reasoning-state.js";
 import { releaseReasoningSegment, peekReasoningSegmentSeq } from "./utils/reasoning-segment.js";
 import { releaseStatusCardSeq, getCurrentStatusCardSeq, nextStatusCardSeq } from "./utils/status-card-seq.js";
-import { releaseThinkIndex, takeFirstCardThinkIndex } from "./utils/think-index.js";
+import { releaseBodyRoundCards, takeToolCardThinkIndex, noteReasoningCloseFrameSentForToolCarry, noteReasoningMessageSentForToolCarry } from "./utils/body-round-cards.js";
 import { isLegacyAppVersion, releaseAppVersion } from "./utils/app-version.js";
 import { markBodyTextSent, clearBodyTextState } from "./utils/body-text-state.js";
 import { logger } from "./utils/logger.js";
 import { redactSensitiveText, containsSensitiveInfo } from "./sensitive-redactor.js";
 import { rewriteOutboundApprovalText } from "./approval-bridge.js";
 import { isCronToolCall, getCurrentCronJobId } from "./tools/session-manager.js";
+import type { PendingFileItem } from "./utils/pending-files.js";
 import { configManager } from "./utils/config-manager.js";
 import { getPushIdByJobId } from "./utils/cron-push-map.js";
 import { getAllPushIds } from "./utils/pushid-manager.js";
@@ -184,14 +185,14 @@ export async function sendA2AResponse(params: SendA2AResponseParams): Promise<vo
 
   await sendWsFrame({ config, sessionId, taskId, payload: jsonRpcResponse });
   // 终帧（本轮 turn 文本输出完成）发出后释放 streamingTextId、reasoning 状态、
-  // 状态卡序号与 thinkIndex 攒批：下轮 turn 生成新 id、reasoning 状态复位为
+  // 状态卡序号与正文轮次卡片状态：下轮 turn 生成新 id、reasoning 状态复位为
   // 默认 false、taskUniqIndexId 重新从 1 开始
   if (final) {
     releaseStreamingTextId(taskId);
     releaseReasoningState(taskId);
     releaseReasoningSegment(taskId);
     releaseStatusCardSeq(taskId);
-    releaseThinkIndex(taskId);
+    releaseBodyRoundCards(taskId);
     releaseAppVersion(taskId);
     clearBodyTextState(taskId);
   }
@@ -270,6 +271,16 @@ export async function sendReasoningTextUpdate(params: SendReasoningTextUpdatePar
   };
 
   await sendWsFrame({ config, sessionId, taskId, payload: jsonRpcResponse });
+  // 工具卡 thinkIndex 捎带的两段确认（实际发出后置位，见 utils/body-round-cards）：
+  // 思考收尾帧（lastChunk=true）确认"旧一轮思考已发完"；思考过程帧确认
+  // "新一轮思考已发出"。
+  if (bridgedText.length > 0) {
+    if (params.lastChunk === true) {
+      noteReasoningCloseFrameSentForToolCarry(taskId);
+    } else {
+      noteReasoningMessageSentForToolCarry(taskId);
+    }
+  }
   // 思考块结束标记帧不再单独打印完整帧日志（A2A-OUT 已覆盖精简版帧内容，
   // 此处全量 payload 含完整思考文本，刷屏且冗余）
 }
@@ -561,8 +572,13 @@ export interface SendExecuteStatusCardParams {
   symbolName?: string;
   /** 默认 true。 */
   isFinal?: boolean;
-  /** thinkIndex 攒批数组（前置轮文本块的 taskUniqIndexId，字符串数组）；
-   *  仅对话轮结束的汇总卡携带；空数组时省略该字段。 */
+  /** 显式指定卡片的 taskUniqIndexId（正文轮次配对卡）：open 卡传入认领的
+   *  新槽位，close 卡复用其 open 卡槽位实现同卡更新；未提供时推进占用
+   *  下一个序号（nextStatusCardSeq，工具状态卡等常规路径）。 */
+  taskUniqIndexId?: number;
+  /** thinkIndex 数组（待折叠文本块的 taskUniqIndexId，字符串数组）；
+   *  正文轮次 open 卡携带已闭合思考块槽位快照、close 卡携带完成轮正文
+   *  槽位（见 utils/body-round-cards）；空数组时省略该字段。 */
   thinkIndex?: string[];
 }
 
@@ -576,17 +592,20 @@ export interface SendExecuteStatusCardParams {
  *  index/taskUniqIndexId 取本卡序号，stepName 取本卡 text，isFinal=false。
  *
  *  本函数收口在 formatter（而非 tools 层）：conversation-manager 的终态路径
- *  也要下发汇总卡，tools 层不可被 conversation 层反向依赖。
+ *  也要下发正文轮次收尾卡，tools 层不可被 conversation 层反向依赖。
  */
 export async function sendExecuteStatusCard(params: SendExecuteStatusCardParams): Promise<void> {
   const { config, sessionId, taskId, messageId } = params;
   const log = logger.withContext(sessionId, taskId);
-  const seq = nextStatusCardSeq(taskId);
+  // 卡槽位：调用方显式指定（正文轮次配对卡 —— open 卡认领的新槽位 / close
+  // 卡复用 open 卡槽位）时直接使用；否则推进占用下一个序号（常规状态卡）。
+  const seq = params.taskUniqIndexId ?? nextStatusCardSeq(taskId);
 
-  // thinkIndex 来源：调用方显式传入（终态汇总卡）优先；否则取"已闭合且下
-  // 一个文本块已开始"的待下发块 —— 中途第一张状态卡携带前一轮文本块的
-  // taskUniqIndexId（取出即消费，后续卡不再重复携带，见 utils/think-index）。
-  const thinkIndex = params.thinkIndex ?? takeFirstCardThinkIndex(taskId);
+  // thinkIndex 来源：调用方显式传入（正文轮次配对卡）优先；否则取"旧一轮
+  // 思考块已收尾且新一轮思考消息已发出"的待捎带槽位 —— 其后第一张工具
+  // 状态卡携带旧一轮思考的 taskUniqIndexId（取出即消费，后续卡不再重复
+  // 携带；与配对卡的 thinkIndex 允许重合，见 utils/body-round-cards）。
+  const thinkIndex = params.thinkIndex ?? takeToolCardThinkIndex(taskId);
 
   // 配对卡先行：DisplayTaskCardData 的顺序必须在 statusCard 之前
   await sendDisplayTaskCardData({
@@ -620,7 +639,7 @@ export async function sendExecuteStatusCard(params: SendExecuteStatusCardParams)
     command,
     toolCallId: params.toolCallId,
   });
-  // 卡片日志统一一行格式；thinkIndex（终态汇总卡 / 中途首卡）保留在此行末尾
+  // 卡片日志统一一行格式；thinkIndex（正文轮次配对卡）保留在此行末尾
   log.log(
     `[STEP-INFO] cardType=DisplayExecuteStatusCard, taskUniqId=${taskId}, taskUniqIndexId=${seq}, text=${params.text}` +
       (thinkIndex && thinkIndex.length > 0 ? `, thinkIndex=${JSON.stringify(thinkIndex)}` : ""),
@@ -825,6 +844,65 @@ export async function sendReference(params: SendReferenceParams): Promise<void> 
 }
 
 /**
+ * Parameters for sending deferred file artifacts (see utils/pending-files).
+ */
+export interface SendFileArtifactsParams {
+  config: XYChannelConfig;
+  sessionId: string;
+  taskId: string;
+  messageId: string;
+  files: PendingFileItem[];
+}
+
+/**
+ * Send queued file artifacts, one artifact-update frame per file.
+ *
+ * 帧结构与 send_file_to_user 工具直发帧保持一致（kind:"file" part、
+ * artifactId=taskId、append:true、不携带 streamingTextId），仅下发时机不同：
+ * 由 turn 收尾序列在【最后一个正文帧之后、引用帧之前】统一调用
+ * （utils/pending-files 攒批）。
+ */
+export async function sendFileArtifacts(params: SendFileArtifactsParams): Promise<void> {
+  const { config, sessionId, taskId, messageId, files } = params;
+  const log = logger.withContext(sessionId, taskId);
+
+  for (const file of files) {
+    const jsonRpcResponse = {
+      jsonrpc: "2.0",
+      id: messageId,
+      result: {
+        kind: "artifact-update",
+        isNew: true,
+        append: true,
+        lastChunk: false,
+        final: false,
+        artifact: {
+          artifactId: taskId,
+          parts: [
+            {
+              kind: "file",
+              file: {
+                name: file.fileName,
+                ...(file.mimeType ? { mimeType: file.mimeType } : {}),
+                fileId: file.fileId,
+                ...(file.fileUrl ? { fileUrl: file.fileUrl } : {}),
+              },
+            },
+          ],
+        },
+      },
+      error: { code: 0 },
+    };
+
+    log.log(`[A2A_FILE] Sending deferred file artifact, fileName=${file.fileName}`);
+    await sendWsFrame({ config, sessionId, taskId, payload: jsonRpcResponse });
+  }
+  if (files.length > 0) {
+    log.log(`[A2A_FILE] Deferred file artifacts sent, count=${files.length}`);
+  }
+}
+
+/**
  * Parameters for sending a clearContext response.
  */
 export interface SendClearContextResponseParams {
@@ -964,7 +1042,7 @@ export async function sendTriggerResponse(params: SendTriggerResponseParams): Pr
   releaseReasoningState(taskId);
   releaseReasoningSegment(taskId);
   releaseStatusCardSeq(taskId);
-  releaseThinkIndex(taskId);
+  releaseBodyRoundCards(taskId);
   releaseAppVersion(taskId);
   clearBodyTextState(taskId);
   log.log(`[TRIGGER_RESPONSE] Trigger response sent successfully`);

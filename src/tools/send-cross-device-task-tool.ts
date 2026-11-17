@@ -5,6 +5,8 @@ import { getCachedXYWebSocketManager } from "../transport/client.js";
 import type { A2ACommand, CrossDeviceTaskResultEvent, OutboundWebSocketMessage, SentFileCard } from "../types.js";
 import { logger } from "../utils/logger.js";
 import { getCurrentSessionContext } from './session-manager.js';
+import { isLegacyAppVersion } from "../utils/app-version.js";
+import { appendPendingFiles } from "../utils/pending-files.js";
 
 const LOG_TAG = "[SendPcDeviceTask]";
 const SEND_CROSS_RESULT_LOG_TAG = "[SendCrossResult]";
@@ -114,6 +116,26 @@ function countSentFileCards(sentFiles: SentFileCard[]): number {
 
 async function sendFileCardsToUser(ctx: SessionContext, fileCards: SentFileCard[]): Promise<Array<{ fileName: string; fileId: string }>> {
   const { config, sessionId, taskId, messageId } = ctx;
+
+  // 高版本普通 turn：攒批延迟下发 —— 文件帧在【最后一个正文帧之后、引用帧
+  // 之前】由 turn 收尾序列统一 flush（协议时序要求，与 send_file_to_user
+  // 工具同一规则）。低版本链路（终帧即正文，其后下发可能丢失）与 cron
+  // 上下文（无 turn 收尾序列）保持直发。
+  const deferToTerminalFlush =
+    !isLegacyAppVersion(taskId)
+    && !sessionId.startsWith("cron-")
+    && !ctx.isCron;
+
+  if (deferToTerminalFlush) {
+    appendPendingFiles(taskId, fileCards.map((card) => ({
+      fileName: card.fileName,
+      mimeType: card.mimeType,
+      fileId: card.fileId,
+    })));
+    logger.log(`${SEND_CROSS_RESULT_LOG_TAG} queued ${fileCards.length} file card(s) for post-body flush (before references), taskId=${taskId}`);
+    return fileCards.map(({ fileName, fileId }) => ({ fileName, fileId }));
+  }
+
   const wsManager = getCachedXYWebSocketManager();
   const sentFileCards: Array<{ fileName: string; fileId: string }> = [];
 
