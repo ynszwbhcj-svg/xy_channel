@@ -155,21 +155,25 @@ describe("reference flush in the terminal sequence", () => {
       expect.objectContaining({ taskId, references: [refItem] }),
     );
 
-    // 帧序：正文完成帧（lastChunk=true, final≠true）→ 引用帧 → 汇总卡
+    // 帧序：正文完成帧（lastChunk=true, final≠true）→ 引用帧 → 空载终帧（final=true）
     const textCompleteIdx = mocks.sendA2AResponse.mock.calls.findIndex(
       ([params]) => params.lastChunk === true && params.final !== true,
     );
-    const summaryCardIdx = mocks.sendExecuteStatusCard.mock.calls.findIndex(
-      ([params]) => params.text === "任务处理已完成",
+    const finalIdx = mocks.sendA2AResponse.mock.calls.findIndex(
+      ([params]) => params.final === true,
     );
     expect(textCompleteIdx).toBeGreaterThanOrEqual(0);
-    expect(summaryCardIdx).toBeGreaterThanOrEqual(0);
+    expect(finalIdx).toBeGreaterThanOrEqual(0);
     expect(mocks.sendA2AResponse.mock.invocationCallOrder[textCompleteIdx]).toBeLessThan(
       mocks.sendReference.mock.invocationCallOrder[0],
     );
     expect(mocks.sendReference.mock.invocationCallOrder[0]).toBeLessThan(
-      mocks.sendExecuteStatusCard.mock.invocationCallOrder[summaryCardIdx],
+      mocks.sendA2AResponse.mock.invocationCallOrder[finalIdx],
     );
+    // 终态汇总状态卡（"任务处理已完成"）已下线
+    expect(
+      mocks.sendExecuteStatusCard.mock.calls.filter(([params]) => params.text === "任务处理已完成"),
+    ).toHaveLength(0);
   });
 
   it("sends no reference frame when nothing was queued", async () => {

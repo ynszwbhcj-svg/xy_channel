@@ -6,8 +6,8 @@
 //    时轮换本 turn 的 streamingTextId 并切分流式装配器
 //    （conversation-manager.rotateStreamingTextSegment）：边界前的旧段以
 //    lastChunk=true 收尾帧结束（思考段收尾前先补一帧 status-update
-//    「已完成深度思考」，pin 思考段 id）、并攒入 thinkIndex（终态汇总卡统一
-//    携带），边界后的文本帧使用新 id，且新 id 帧不叠加旧段文本。
+//    「已完成深度思考」，pin 思考段 id），边界后的文本帧使用新 id，且新 id
+//    帧不叠加旧段文本。
 //    边界无条件拆分 —— 每个独立的思考文本段都是独立的 streamingTextId
 //    （思考段1……工具……思考段2……正文1 路径中，思考段1 与思考段2 分属
 //    不同 id，正文再另换新 id）。思考→正文的类型切换不在本模块：由

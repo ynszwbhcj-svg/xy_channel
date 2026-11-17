@@ -582,7 +582,7 @@ export interface SendExecuteStatusCardParams {
  *  index/taskUniqIndexId 取本卡序号，stepName 取本卡 text，isFinal=false。
  *
  *  本函数收口在 formatter（而非 tools 层）：conversation-manager 的终态路径
- *  也要下发汇总卡，tools 层不可被 conversation 层反向依赖。
+ *  也要下发正文轮次收尾卡，tools 层不可被 conversation 层反向依赖。
  */
 export async function sendExecuteStatusCard(params: SendExecuteStatusCardParams): Promise<void> {
   const { config, sessionId, taskId, messageId } = params;
@@ -625,7 +625,7 @@ export async function sendExecuteStatusCard(params: SendExecuteStatusCardParams)
     command,
     toolCallId: params.toolCallId,
   });
-  // 卡片日志统一一行格式；thinkIndex（终态汇总卡 / 中途首卡）保留在此行末尾
+  // 卡片日志统一一行格式；thinkIndex（正文轮次配对卡）保留在此行末尾
   log.log(
     `[STEP-INFO] cardType=DisplayExecuteStatusCard, taskUniqId=${taskId}, taskUniqIndexId=${seq}, text=${params.text}` +
       (thinkIndex && thinkIndex.length > 0 ? `, thinkIndex=${JSON.stringify(thinkIndex)}` : ""),

@@ -664,12 +664,12 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
               // delayMs 在队列 drain 内 sleep，阻塞后续帧）。
               // 注：终态不再下发 status-update（"已完成深度思考" state=completed）
               // —— 该文案是思考期状态，正文完成帧下发时不应再出现；turn 的
-              // 完结由下方正文完成帧（lastChunk=true）、汇总卡/收尾卡与
+              // 完结由下方正文完成帧（lastChunk=true）、正文轮次收尾卡与
               // final=true 空载终帧表达。
 
               // 🔑 正文文本完成帧（lastChunk=true, final=false）：权威全文本在此
               // 补齐（原终帧携带全文本的语义前移到本帧），把 final=true 留给
-              // 最后的空载终帧 —— 满足「正文 lastChunk → 汇总卡 → final」时序。
+              // 最后的空载终帧 —— 满足「正文 lastChunk → 收尾卡 → final」时序。
               if (fullFinalText) {
                 outboundQueue.enqueue({
                   taskId: terminalTaskId,
@@ -687,51 +687,6 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
                       lastChunk: true,
                     }),
                 });
-              }
-
-              // 文件帧：send_file_to_user / 跨设备结果回传等攒批的文件在
-              // 【最后一个正文帧之后、引用帧之前】统一下发（协议时序要求）。
-              // 排在汇总卡之前；上传在工具调用点已完成，此处仅下发帧。
-              {
-                const pendingFiles = drainPendingFiles(terminalTaskId);
-                if (pendingFiles.length > 0) {
-                  outboundQueue.enqueue({
-                    taskId: terminalTaskId,
-                    label: "terminal-files",
-                    send: () =>
-                      sendFileArtifacts({
-                        config,
-                        sessionId,
-                        taskId: terminalTaskId,
-                        messageId: terminalMessageId,
-                        files: pendingFiles,
-                      }),
-                  });
-                }
-              }
-
-              // 引用来源帧：xiaoyi_append_reference 工具攒批的引用在【最后一个
-              // 正文帧之后】统一下发（协议要求），排在汇总卡之前；streamingTextId
-              // 由 sendReference 取 last-sent（此时即 terminal-text-complete 帧
-              // 的正文段 id）。无正文完成帧（异常空文本）时 last-sent 退化为最后
-              // 一帧流式正文的 id，仍在其后下发。
-              {
-                const pendingReferences = drainPendingReferences(terminalTaskId);
-                if (pendingReferences.length > 0) {
-                  outboundQueue.enqueue({
-                    taskId: terminalTaskId,
-                    label: "terminal-references",
-                    delayMs: terminalFrameDelayMs,
-                    send: () =>
-                      sendReference({
-                        config,
-                        sessionId,
-                        taskId: terminalTaskId,
-                        messageId: terminalMessageId,
-                        references: pendingReferences,
-                      }),
-                  });
-                }
               }
 
               // 正文轮次收尾卡：最后一轮正文没有「下一轮正文」触发 close，
@@ -759,8 +714,8 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
               }
 
               // 文件帧：send_file_to_user / 跨设备结果回传等攒批的文件在
-              // 【最后一个正文帧之后、引用帧之前】统一下发（协议时序要求）。
-              // 排在汇总卡之前；上传在工具调用点已完成，此处仅下发帧。
+              // 【最后一个正文帧之后、引用帧之前】统一下发（协议时序要求）；
+              // 上传在工具调用点已完成，此处仅下发帧。
               {
                 const pendingFiles = drainPendingFiles(terminalTaskId);
                 if (pendingFiles.length > 0) {
@@ -780,7 +735,7 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
               }
 
               // 引用来源帧：xiaoyi_append_reference 工具攒批的引用在【最后一个
-              // 正文帧之后】统一下发（协议要求），排在汇总卡之前；streamingTextId
+              // 正文帧之后】统一下发（协议要求）；streamingTextId
               // 由 sendReference 取 last-sent（此时即 terminal-text-complete 帧
               // 的正文段 id）。无正文完成帧（异常空文本）时 last-sent 退化为最后
               // 一帧流式正文的 id，仍在其后下发。
@@ -803,27 +758,10 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
                 }
               }
 
-              // 🔑 汇总状态卡：text=任务处理已完成，排在 final 帧之前（终态
-              // 帧发出后服务端可能关闭本 turn）。thinkIndex 不再由汇总卡携带
-              // —— 改由正文轮次配对卡逐轮下发（见 maybeEnqueueBodyRoundStartCards）。
-              {
-                outboundQueue.enqueue({
-                  taskId: terminalTaskId,
-                  label: "terminal-summary-card",
-                  send: () =>
-                    sendExecuteStatusCard({
-                      config,
-                      sessionId,
-                      taskId: terminalTaskId,
-                      messageId: terminalMessageId,
-                      text: "任务处理已完成",
-                    }),
-                });
-              }
-
               // 对话轮结束：DisplayTaskCardData final 帧收尾（起始卡在 bot.ts
-              // 下发）。index 在 drain 时惰性读取 —— 排在汇总卡之后，落在
-              // 汇总卡的序号上完成配对收尾。
+              // 下发）。index 在 drain 时惰性读取 —— 落在最后一轮正文 open 卡
+              // 的槽位上完成配对收尾（终态汇总状态卡已下线，thinkIndex 由正文
+              // 轮次配对卡逐轮下发）。
               outboundQueue.enqueue({
                 taskId: terminalTaskId,
                 label: "task-card-final",
