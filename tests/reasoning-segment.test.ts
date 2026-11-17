@@ -57,15 +57,17 @@ import {
   releaseStreamingTextId,
 } from "../src/utils/streaming-text-id.js";
 import { markAppVersion, releaseAppVersion } from "../src/utils/app-version.js";
-import { releaseThinkIndex } from "../src/utils/think-index.js";
 import {
-  markLastChunkBlock,
-  markReasoningBlockEnd,
-  peekLastBodyBlockSeq,
-  getAccumulatedThinkIndex,
-  notifyTextBlockStarted,
-  takeFirstCardThinkIndex,
-} from "../src/utils/think-index.js";
+  markReasoningBlockClosed,
+  peekClosedReasoningSlots,
+  openBodyRound,
+  takeOpenBodyRoundCardIndex,
+  releaseBodyRoundCards,
+} from "../src/utils/body-round-cards.js";
+import {
+  advanceStatusCardSeqForSegment,
+  claimStatusCardSeqForBodyRound,
+} from "../src/utils/status-card-seq.js";
 
 describe("reasoning-segment registry", () => {
   const taskId = "task-seg-unit";
@@ -178,99 +180,70 @@ describe("reasoning-segment seq pinning (taskUniqIndexId 锁存)", () => {
 });
 
 
-describe("think-index accumulation（所有文本块含全部思考块）", () => {
-  const taskId = "task-thinkidx";
+describe("body-round-cards registry（思考块槽位 + 正文轮次开合）", () => {
+  const taskId = "task-bodyround";
 
   afterEach(() => {
-    releaseThinkIndex(taskId);
+    releaseBodyRoundCards(taskId);
   });
 
-  it("accumulates every closed text block in order", () => {
-    markReasoningBlockEnd(taskId, 1); // 思考块一
-    markReasoningBlockEnd(taskId, 2); // 思考块二
-    markLastChunkBlock(taskId, 3); // 中间正文段冲刷
-    expect(getAccumulatedThinkIndex(taskId)).toEqual(["1", "2", "3"]);
+  it("accumulates closed reasoning block slots in order, deduped", () => {
+    markReasoningBlockClosed(taskId, 1); // 思考块一
+    markReasoningBlockClosed(taskId, 5); // 思考块二
+    markReasoningBlockClosed(taskId, 1); // 同 seq 去重
+    expect(peekClosedReasoningSlots(taskId)).toEqual(["1", "5"]);
   });
 
-  it("dedups blocks sharing the same seq (同 seq 即同一块)", () => {
-    markReasoningBlockEnd(taskId, 1);
-    markLastChunkBlock(taskId, 1); // 与思考块同 seq 的正文冲刷：仍是一条
-    expect(getAccumulatedThinkIndex(taskId)).toEqual(["1"]);
+  it("peek does not consume the reasoning slot snapshot", () => {
+    markReasoningBlockClosed(taskId, 2);
+    expect(peekClosedReasoningSlots(taskId)).toEqual(["2"]);
+    expect(peekClosedReasoningSlots(taskId)).toEqual(["2"]);
   });
 
-  it("tracks the last flushed body block separately from reasoning blocks", () => {
-    markReasoningBlockEnd(taskId, 1);
-    expect(peekLastBodyBlockSeq(taskId)).toBeUndefined(); // 思考块不登记正文侧表
-    markLastChunkBlock(taskId, 1); // 正文冲刷段（与思考块同 seq）
-    markLastChunkBlock(taskId, 2);
-    expect(peekLastBodyBlockSeq(taskId)).toBe("2");
-    // 正文冲刷登记不影响思考块已在列表
-    expect(getAccumulatedThinkIndex(taskId)).toEqual(["1", "2"]);
+  it("open round card index is taken exactly once (close card consumes)", () => {
+    expect(takeOpenBodyRoundCardIndex(taskId)).toBeUndefined();
+    openBodyRound(taskId, 4);
+    expect(takeOpenBodyRoundCardIndex(taskId)).toBe(4);
+    // 取后即消费：close 卡不重复下发
+    expect(takeOpenBodyRoundCardIndex(taskId)).toBeUndefined();
   });
 
-  it("release clears both the list and the last-body record", () => {
-    markReasoningBlockEnd(taskId, 1);
-    markLastChunkBlock(taskId, 2);
-    releaseThinkIndex(taskId);
-    expect(getAccumulatedThinkIndex(taskId)).toEqual([]);
-    expect(peekLastBodyBlockSeq(taskId)).toBeUndefined();
+  it("release clears both the reasoning slots and the open round", () => {
+    markReasoningBlockClosed(taskId, 1);
+    openBodyRound(taskId, 3);
+    releaseBodyRoundCards(taskId);
+    expect(peekClosedReasoningSlots(taskId)).toEqual([]);
+    expect(takeOpenBodyRoundCardIndex(taskId)).toBeUndefined();
   });
 });
 
-describe("first-card thinkIndex latch（中途首张状态卡携带前一轮块）", () => {
-  const taskId = "task-firstcard";
+describe("claimStatusCardSeqForBodyRound（正文轮次 open 卡槽位认领）", () => {
+  const taskId = "task-claim";
 
   afterEach(() => {
-    releaseThinkIndex(taskId);
-    releaseReasoningSegment(taskId);
     releaseStatusCardSeq(taskId);
   });
 
-  it("does not release the thinkIndex before the next text block starts", () => {
-    markReasoningBlockEnd(taskId, 1); // 前一轮思考块闭合
-    expect(takeFirstCardThinkIndex(taskId)).toBeUndefined(); // 下一块未开始：不携带
+  it("claims the freshly advanced segment slot without bumping (无空槽)", () => {
+    expect(nextStatusCardSeq(taskId)).toBe(1); // 起始卡/工具卡占用
+    expect(advanceStatusCardSeqForSegment(taskId)).toBe(2); // 分段轮换推进
+    expect(claimStatusCardSeqForBodyRound(taskId)).toBe(2); // 直接认领，不再推进
+    expect(getCurrentStatusCardSeq(taskId)).toBe(2);
+    // 认领后槽位不再新鲜：后续 open 卡照常推进
+    expect(claimStatusCardSeqForBodyRound(taskId)).toBe(3);
   });
 
-  it("releases the closed block seq on the first card after the next block started, only once", () => {
-    markReasoningBlockEnd(taskId, 1);
-    // 下一个文本块开始（新思考块 open 转换，经由 noteReasoningSnapshot）
-    noteReasoningSnapshot(taskId, "新思考内容");
-    expect(takeFirstCardThinkIndex(taskId)).toEqual(["1"]); // 首张卡携带
-    expect(takeFirstCardThinkIndex(taskId)).toBeUndefined(); // 第二张起不再重复
+  it("falls back to the next seq when the current slot is not fresh", () => {
+    expect(nextStatusCardSeq(taskId)).toBe(1);
+    // 无分段推进（首轮正文，槽位 1 已被起始卡占用语义覆盖）→ 推进占新槽
+    expect(claimStatusCardSeqForBodyRound(taskId)).toBe(2);
   });
 
-  it("accumulates multiple closed blocks pending the first card", () => {
-    // 思考块一：开块 → 闭合（模拟 thinking_end 决策点：mark + close + cut）
-    noteReasoningSnapshot(taskId, "思考一");
-    markReasoningBlockEnd(taskId, 1);
-    closeReasoningSegment(taskId);
-    cutReasoningSegment(taskId);
-    // 思考块二开块（open 转换 → 锁存可下发）
-    noteReasoningSnapshot(taskId, "思考一思考二");
-    markReasoningBlockEnd(taskId, 2);
-    closeReasoningSegment(taskId);
-    cutReasoningSegment(taskId);
-    // 思考块三开块 → 再次锁存
-    noteReasoningSnapshot(taskId, "思考一思考二思考三");
-    expect(takeFirstCardThinkIndex(taskId)).toEqual(["1", "2"]);
-  });
-
-  it("re-arms for the next cycle after consumption", () => {
-    markReasoningBlockEnd(taskId, 1);
-    notifyTextBlockStarted(taskId);
-    expect(takeFirstCardThinkIndex(taskId)).toEqual(["1"]);
-    // 新周期：再闭合 + 再开始 → 首张卡再次携带
-    markLastChunkBlock(taskId, 2);
-    expect(takeFirstCardThinkIndex(taskId)).toBeUndefined();
-    notifyTextBlockStarted(taskId);
-    expect(takeFirstCardThinkIndex(taskId)).toEqual(["2"]);
-  });
-
-  it("release clears the pending latch", () => {
-    markReasoningBlockEnd(taskId, 1);
-    notifyTextBlockStarted(taskId);
-    releaseThinkIndex(taskId);
-    expect(takeFirstCardThinkIndex(taskId)).toBeUndefined();
+  it("a status card consumed in between invalidates the fresh slot", () => {
+    expect(nextStatusCardSeq(taskId)).toBe(1);
+    expect(advanceStatusCardSeqForSegment(taskId)).toBe(2); // 轮换推进到 2（新鲜）
+    expect(nextStatusCardSeq(taskId)).toBe(3); // 中途工具卡越过 → 2 不再新鲜
+    expect(claimStatusCardSeqForBodyRound(taskId)).toBe(4);
   });
 });
 
@@ -292,7 +265,7 @@ describe("rotateStreamingTextSegment reasoning close", () => {
     }
     releaseReasoningSegment(taskId);
     releaseStreamingTextId(taskId);
-    releaseThinkIndex(taskId);
+    releaseBodyRoundCards(taskId);
     vi.clearAllMocks();
   });
 
@@ -443,7 +416,7 @@ describe("rotateStreamingTextForBodyStart reasoning→body switch", () => {
     }
     releaseReasoningSegment(taskId);
     releaseStreamingTextId(taskId);
-    releaseThinkIndex(taskId);
+    releaseBodyRoundCards(taskId);
     releaseAppVersion(taskId);
     vi.clearAllMocks();
   });

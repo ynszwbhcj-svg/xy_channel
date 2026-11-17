@@ -6,7 +6,7 @@ import { getOrCreateStreamingTextId, peekStreamingTextId, peekLastSentStreamingT
 import { isReasoningFinished as readReasoningFinished, releaseReasoningState } from "./utils/reasoning-state.js";
 import { releaseReasoningSegment, peekReasoningSegmentSeq } from "./utils/reasoning-segment.js";
 import { releaseStatusCardSeq, getCurrentStatusCardSeq, nextStatusCardSeq } from "./utils/status-card-seq.js";
-import { releaseThinkIndex, takeFirstCardThinkIndex } from "./utils/think-index.js";
+import { releaseBodyRoundCards } from "./utils/body-round-cards.js";
 import { isLegacyAppVersion, releaseAppVersion } from "./utils/app-version.js";
 import { markBodyTextSent, clearBodyTextState } from "./utils/body-text-state.js";
 import { logger } from "./utils/logger.js";
@@ -185,14 +185,14 @@ export async function sendA2AResponse(params: SendA2AResponseParams): Promise<vo
 
   await sendWsFrame({ config, sessionId, taskId, payload: jsonRpcResponse });
   // 终帧（本轮 turn 文本输出完成）发出后释放 streamingTextId、reasoning 状态、
-  // 状态卡序号与 thinkIndex 攒批：下轮 turn 生成新 id、reasoning 状态复位为
+  // 状态卡序号与正文轮次卡片状态：下轮 turn 生成新 id、reasoning 状态复位为
   // 默认 false、taskUniqIndexId 重新从 1 开始
   if (final) {
     releaseStreamingTextId(taskId);
     releaseReasoningState(taskId);
     releaseReasoningSegment(taskId);
     releaseStatusCardSeq(taskId);
-    releaseThinkIndex(taskId);
+    releaseBodyRoundCards(taskId);
     releaseAppVersion(taskId);
     clearBodyTextState(taskId);
   }
@@ -562,8 +562,13 @@ export interface SendExecuteStatusCardParams {
   symbolName?: string;
   /** 默认 true。 */
   isFinal?: boolean;
-  /** thinkIndex 攒批数组（前置轮文本块的 taskUniqIndexId，字符串数组）；
-   *  仅对话轮结束的汇总卡携带；空数组时省略该字段。 */
+  /** 显式指定卡片的 taskUniqIndexId（正文轮次配对卡）：open 卡传入认领的
+   *  新槽位，close 卡复用其 open 卡槽位实现同卡更新；未提供时推进占用
+   *  下一个序号（nextStatusCardSeq，工具状态卡等常规路径）。 */
+  taskUniqIndexId?: number;
+  /** thinkIndex 数组（待折叠文本块的 taskUniqIndexId，字符串数组）；
+   *  正文轮次 open 卡携带已闭合思考块槽位快照、close 卡携带完成轮正文
+   *  槽位（见 utils/body-round-cards）；空数组时省略该字段。 */
   thinkIndex?: string[];
 }
 
@@ -582,12 +587,11 @@ export interface SendExecuteStatusCardParams {
 export async function sendExecuteStatusCard(params: SendExecuteStatusCardParams): Promise<void> {
   const { config, sessionId, taskId, messageId } = params;
   const log = logger.withContext(sessionId, taskId);
-  const seq = nextStatusCardSeq(taskId);
+  // 卡槽位：调用方显式指定（正文轮次配对卡 —— open 卡认领的新槽位 / close
+  // 卡复用 open 卡槽位）时直接使用；否则推进占用下一个序号（常规状态卡）。
+  const seq = params.taskUniqIndexId ?? nextStatusCardSeq(taskId);
 
-  // thinkIndex 来源：调用方显式传入（终态汇总卡）优先；否则取"已闭合且下
-  // 一个文本块已开始"的待下发块 —— 中途第一张状态卡携带前一轮文本块的
-  // taskUniqIndexId（取出即消费，后续卡不再重复携带，见 utils/think-index）。
-  const thinkIndex = params.thinkIndex ?? takeFirstCardThinkIndex(taskId);
+  const thinkIndex = params.thinkIndex;
 
   // 配对卡先行：DisplayTaskCardData 的顺序必须在 statusCard 之前
   await sendDisplayTaskCardData({
@@ -1024,7 +1028,7 @@ export async function sendTriggerResponse(params: SendTriggerResponseParams): Pr
   releaseReasoningState(taskId);
   releaseReasoningSegment(taskId);
   releaseStatusCardSeq(taskId);
-  releaseThinkIndex(taskId);
+  releaseBodyRoundCards(taskId);
   releaseAppVersion(taskId);
   clearBodyTextState(taskId);
   log.log(`[TRIGGER_RESPONSE] Trigger response sent successfully`);
