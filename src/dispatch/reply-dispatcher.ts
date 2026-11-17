@@ -664,35 +664,12 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
               // delayMs 在队列 drain 内 sleep，阻塞后续帧）。
               // 注：终态不再下发 status-update（"已完成深度思考" state=completed）
               // —— 该文案是思考期状态，正文完成帧下发时不应再出现；turn 的
-              // 完结由下方正文完成帧（lastChunk=true）、正文轮次收尾卡与
-              // final=true 空载终帧表达。
-
-              // 🔑 正文文本完成帧（lastChunk=true, final=false）：权威全文本在此
-              // 补齐（原终帧携带全文本的语义前移到本帧），把 final=true 留给
-              // 最后的空载终帧 —— 满足「正文 lastChunk → 收尾卡 → final」时序。
-              if (fullFinalText) {
-                outboundQueue.enqueue({
-                  taskId: terminalTaskId,
-                  label: "terminal-text-complete",
-                  delayMs: terminalFrameDelayMs,
-                  send: () =>
-                    sendA2AResponse({
-                      config,
-                      sessionId,
-                      taskId: terminalTaskId,
-                      messageId: terminalMessageId,
-                      text: fullFinalText,
-                      append: false,
-                      final: false,
-                      lastChunk: true,
-                    }),
-                });
-              }
+              // 完结由正文轮次收尾卡与最后的合并终帧（lastChunk=true 且
+              // final=true）表达。
 
               // 正文轮次收尾卡：最后一轮正文没有「下一轮正文」触发 close，
               // 由终态序列补发（index 复用其 open 卡槽位，isFinal=true，不带
-              // thinkIndex —— 最后一轮正文保持展开）。排在正文完成帧之后、
-              // 文件/引用帧之前。
+              // thinkIndex —— 最后一轮正文保持展开）。排在文件/引用帧之前。
               {
                 const openRoundCardIndex = takeOpenBodyRoundCardIndex(terminalTaskId);
                 if (openRoundCardIndex !== undefined) {
@@ -715,9 +692,9 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
                 }
               }
 
-              // 文件帧：send_file_to_user / 跨设备结果回传等攒批的文件在
-              // 【最后一个正文帧之后、引用帧之前】统一下发（协议时序要求）；
-              // 上传在工具调用点已完成，此处仅下发帧。
+              // 文件帧：send_file_to_user / 跨设备结果回传等攒批的文件统一在
+              // 引用帧之前下发（协议时序要求）；上传在工具调用点已完成，
+              // 此处仅下发帧。
               {
                 const pendingFiles = drainPendingFiles(terminalTaskId);
                 if (pendingFiles.length > 0) {
@@ -736,11 +713,10 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
                 }
               }
 
-              // 引用来源帧：xiaoyi_append_reference 工具攒批的引用在【最后一个
-              // 正文帧之后】统一下发（协议要求）；streamingTextId
-              // 由 sendReference 取 last-sent（此时即 terminal-text-complete 帧
-              // 的正文段 id）。无正文完成帧（异常空文本）时 last-sent 退化为最后
-              // 一帧流式正文的 id，仍在其后下发。
+              // 引用来源帧：xiaoyi_append_reference 工具攒批的引用统一在
+              // 合并终帧之前下发（协议要求）；streamingTextId 由 sendReference
+              // 取 last-sent（即最后一帧流式正文的 id —— 与随后合并终帧同属
+              // 一个正文段，id 一致）。
               {
                 const pendingReferences = drainPendingReferences(terminalTaskId);
                 if (pendingReferences.length > 0) {
@@ -779,8 +755,10 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
                   }),
               });
 
-              // 🔑 空载终帧（append:true, final:true）仅标记流结束 —— 权威全文本
-              // 已在上面的 terminal-text-complete 帧下发，本帧不再携带文本。
+              // 🔑 合并终帧（lastChunk=true, final=true）：正文文本完成帧与
+              // 空载终帧合并为同一帧 —— 权威全文本在此补齐，同时完成正文
+              // 文本卡收尾（lastChunk）与整个对话的终态收尾（final）。
+              // 排在引用帧之后下发；异常空文本时退化为空载终帧（append:true）。
               outboundQueue.enqueue({
                 taskId: terminalTaskId,
                 label: "terminal-final",
@@ -791,9 +769,10 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
                     sessionId,
                     taskId: terminalTaskId,
                     messageId: terminalMessageId,
-                    text: "",
-                    append: true,
+                    text: fullFinalText || "",
+                    append: !fullFinalText,
                     final: true,
+                    lastChunk: true,
                   }),
               });
 
