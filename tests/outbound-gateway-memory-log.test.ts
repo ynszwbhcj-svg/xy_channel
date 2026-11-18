@@ -156,4 +156,18 @@ describe("sendWsFrame MemoryFileRead logging", () => {
     expect(mocks.log.mock.calls.some(([line]) => line.startsWith("[A2A-OUT] commands="))).toBe(true);
     expect(mocks.log.mock.calls.flat().join("\n")).toContain("ordinary-body");
   });
+
+  it.each(["UserMdQuery", "MemoryMdQuery", "MemoryProfileModify", "MemoryReset", "MemoryResetStatus"])(
+    "omits private %s result and diagnostics from full-frame logs", async action => {
+      const answer = { ok: false, nativeStatus: -3, result: { diagnostic: "private Core data" }, fileDetail: "private profile" };
+      const payload = { result: { artifact: { parts: [{ kind: "data", data: { commands: [{
+        header: { namespace: "AgentEvent", name: "MemoryQuery" }, payload: { action, ans: answer },
+      }] } }] } } };
+      await sendWsFrame({ config: { agentId: "agent" } as never, sessionId: "s", taskId: "t", payload });
+      expect(JSON.parse(mocks.sendMessage.mock.calls[0][1].msgDetail).result).toEqual(payload.result);
+      const logs = mocks.log.mock.calls.flat().join("\n");
+      expect(logs).toContain(`action=${action}`);
+      expect(logs).not.toContain("private");
+    },
+  );
 });

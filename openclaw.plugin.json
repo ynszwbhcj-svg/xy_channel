@@ -18,6 +18,13 @@
         "type": "object",
         "properties": {
           "enabled": { "type": "boolean", "description": "Enable/disable the XY channel", "default": false },
+          "memory": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": { "backend": { "type": "string", "enum": ["mcp-http"] } },
+            "required": ["backend"],
+            "description": "Shared memory MCP; endpoint and private token file are supplied through CELIA_MEMORY_HTTP_URL/CELIA_MEMORY_HTTP_TOKEN_FILE"
+          },
           "wsUrl1": { "type": "string", "description": "Primary WebSocket URL" },
           "wsUrl2": { "type": "string", "description": "Secondary WebSocket URL" },
           "apiKey": { "type": "string", "description": "API key for authentication" },

@@ -12,6 +12,7 @@ import { getAllPushIds } from "../utils/pushid-manager.js";
 import { getOrCreateConvId } from "../utils/cron-conv-map.js";
 import { recordSentStreamingTextId } from "../utils/streaming-text-id.js";
 import { logger, isA2AOutLogEnabled } from "../utils/logger.js";
+import { isMemoryQueryCommand, memoryAnswerSummary } from "../memory/command.js";
 import type {
   XYChannelConfig,
   OutboundWebSocketMessage,
@@ -37,12 +38,6 @@ function extractCommands(payload: Record<string, any>): A2ACommand[] {
     .flatMap((p: any) => p.data.commands);
 }
 
-/** MemoryFileRead 响应命令：文件正文必须原样传输，但绝不进入日志。 */
-function isMemoryFileReadCommand(command: A2ACommand): boolean {
-  return command?.header?.namespace === "AgentEvent"
-    && command?.header?.name === "MemoryQuery"
-    && command?.payload?.action === "MemoryFileRead";
-}
 
 /**
  * 将混合携带 reasoningText 与 text 的 artifact-update 帧拆分为两帧
@@ -150,23 +145,18 @@ export async function sendWsFrame(params: SendWsFrameParams): Promise<void> {
     // 整块跳过，省掉 buildLoggableMsgDetail / extractCommands 的序列化开销）：
     // 每一帧打印信封摘要 + msgDetail 精简版（text/reasoningText/reference
     // 内容只留首尾各 5 字符并标注长度）+ 内嵌 command 单独打印。
-    // MemoryFileRead 为保证端侧文件完整性会保留原文，日志只能记录元数据：
-    // 含 MemoryFileRead 的帧省略 msgDetail 全量；MemoryFileRead 命令只打
-    // action/ok/contentBytes，同帧其它命令照常全量打印。
+    // All memory responses may contain private profiles or Core diagnostics.
+    // Keep their business payload on the wire and log only fixed metadata.
     if (isA2AOutLogEnabled()) {
       log.log(
         `[A2A-OUT] msgType=${outboundMessage.msgType}, agentId=${outboundMessage.agentId}, sessionId=${sessionId}, taskId=${taskId}, size=${outboundMessage.msgDetail.length}`,
       );
       const commands = extractCommands(frame);
-      if (commands.some(isMemoryFileReadCommand)) {
-        log.log(`[A2A-OUT] msgDetail omitted for MemoryFileRead response`);
+      if (commands.some(isMemoryQueryCommand)) {
+        log.log(`[A2A-OUT] msgDetail omitted for MemoryQuery response`);
         for (const command of commands) {
-          if (isMemoryFileReadCommand(command)) {
-            const answer = command.payload?.ans;
-            const contentBytes = typeof answer?.contentBytes === "number" && Number.isFinite(answer.contentBytes)
-              ? answer.contentBytes
-              : typeof answer?.content === "string" ? Buffer.byteLength(answer.content, "utf8") : 0;
-            log.log(`[A2A-OUT] action=MemoryFileRead, ok=${answer?.ok === true}, contentBytes=${contentBytes}`);
+          if (isMemoryQueryCommand(command)) {
+            log.log(`[A2A-OUT] ${memoryAnswerSummary(command.payload?.action, command.payload?.ans)}`);
           } else {
             log.log(`[A2A-OUT] command=${JSON.stringify(command)}`);
           }
