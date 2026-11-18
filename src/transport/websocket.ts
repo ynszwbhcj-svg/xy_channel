@@ -5,6 +5,7 @@ import { EventEmitter } from "events";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { logger } from "../utils/logger.js";
 import { HeartbeatManager } from "./heartbeat.js";
+import { hasMemoryQueryFrame } from "../memory/command.js";
 import { MessageQueue } from "./message-queue.js";
 import type {
   XYChannelConfig,
@@ -649,7 +650,8 @@ export class XYWebSocketManager extends EventEmitter {
         : { log: (msg, ...args) => logger.log(msg, ...args) };
 
       log.log(`[WS-RECV] Raw message frame, size: ${messageStr.length} characters`);
-      log.log(`[WS-RECV] Full message body: ${messageStr}`);
+      const memoryFrame = hasMemoryQueryFrame(parsed);
+      log.log(memoryFrame ? "[WS-RECV] MemoryQuery body omitted" : `[WS-RECV] Full message body: ${messageStr}`);
       // Handle direct cross-task requests (top-level networkId)
       const directRunCrossTaskRequest = this.toRunCrossTaskA2ARequest(parsed);
       if (directRunCrossTaskRequest) {
@@ -678,7 +680,7 @@ export class XYWebSocketManager extends EventEmitter {
         const dataParts = parts.filter((p: any) => p?.kind === "data");
 
         // 打印 text 内容（隐藏敏感信息）
-        if (textParts.length > 0) {
+        if (!memoryFrame && textParts.length > 0) {
           const textContents = textParts
             .map((p: any) => p?.text || "")
             .filter((text: string) => text.length > 0)

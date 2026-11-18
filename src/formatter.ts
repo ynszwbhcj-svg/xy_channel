@@ -12,6 +12,7 @@ import { markBodyTextSent, clearBodyTextState } from "./utils/body-text-state.js
 import { logger } from "./utils/logger.js";
 import { redactSensitiveText, containsSensitiveInfo } from "./sensitive-redactor.js";
 import { rewriteOutboundApprovalText } from "./approval-bridge.js";
+import { preserveMemoryDisplay } from "./memory/command.js";
 import { isCronToolCall, getCurrentCronJobId } from "./tools/session-manager.js";
 import type { PendingFileItem } from "./utils/pending-files.js";
 import { configManager } from "./utils/config-manager.js";
@@ -53,21 +54,8 @@ function redactMessagePayload(value: any, currentKey?: string): any {
   return value;
 }
 
-/** 文件同步合同要求按原始 UTF-8 正文返回；其他字段仍按通用规则脱敏。 */
-function isSuccessfulMemoryFileReadCommand(command: any): boolean {
-  return command?.header?.namespace === "AgentEvent"
-    && command?.header?.name === "MemoryQuery"
-    && command?.payload?.action === "MemoryFileRead"
-    && command?.payload?.ans?.ok === true
-    && typeof command?.payload?.ans?.content === "string";
-}
-
 function redactCommandForTransport(command: any): any {
-  const redactedCommand = redactMessagePayload(command);
-  if (isSuccessfulMemoryFileReadCommand(command)) {
-    redactedCommand.payload.ans.content = command.payload.ans.content;
-  }
-  return redactedCommand;
+  return preserveMemoryDisplay(command, redactMessagePayload(command));
 }
 
 function buildTextPreview(text: string): string {
@@ -455,7 +443,7 @@ export async function sendCommand(params: SendCommandParams): Promise<void> {
   // Build artifact update with command as data
   // Wrap command in commands array as per protocol requirement
   // lastChunk 恒 false（命令帧不携带文本，不是文本块终点）
-  // 命令内容逐条做传输层脱敏（MemoryFileRead 成功响应按合同还原原文）
+  // 命令逐条做传输层脱敏；成功的记忆文件/画像展示字段按接口保留原文。
   // streamingTextId：command 不允许引入端侧从未见过的新 id —— 跟随本 turn
   // 最后实际发出帧的 id（sendWsFrame 逐帧登记）。分段边界轮换后、新段首帧
   // 未发的窗口期，在役注册表已是新 id 但端侧最后收到的仍是旧 id 收尾帧；

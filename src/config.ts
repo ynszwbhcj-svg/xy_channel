@@ -1,6 +1,7 @@
 // Configuration parsing and validation
 import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
 import type { XYChannelConfig } from "./types.js";
+import { resolveMemoryMcpConfig } from "./memory/config.js";
 
 /**
  * Resolve and validate Xiaoyi channel configuration from OpenClawConfig.
@@ -21,6 +22,7 @@ export function resolveXYConfig(cfg: OpenClawConfig): XYChannelConfig {
     }
   }
 
+  const memory = resolveMemoryMcpConfig(xyConfig.memory);
   // Return configuration with defaults
   return {
     enabled: xyConfig.enabled ?? false,
@@ -31,6 +33,7 @@ export function resolveXYConfig(cfg: OpenClawConfig): XYChannelConfig {
     agentId: xyConfig.agentId,
     apiId: xyConfig.apiId,
     pushId: xyConfig.pushId,
+    ...(memory ? { memory } : {}),
     fileUploadUrl: xyConfig.fileUploadUrl ?? "http://localhost:8767",
     pushUrl: xyConfig.pushUrl,
     defaultSessionId: xyConfig.defaultSessionId,
