@@ -1,0 +1,616 @@
+// Memory query event handler.
+// Listens for memory-query-event from the WebSocket manager,
+// handles memory state read/write and MEMORY.md/USER.md file queries.
+import * as os from "os";
+import * as path from "path";
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  renameSync,
+  unlinkSync,
+  writeFileSync,
+} from "fs";
+import { randomUUID } from "crypto";
+import { sendCommand } from "./formatter.js";
+import { resolveXYConfig } from "./config.js";
+import { logger } from "./utils/logger.js";
+
+const XIAOYIRUNTIME_PATH_PRIMARY = "/home/sandbox/.openclaw/.xiaoyiruntime";
+const XIAOYIRUNTIME_PATH_FALLBACK = `${os.homedir()}/.openclaw/.xiaoyiruntime`;
+const MEMORY_STATE_KEY = "MEMORYSTATE";
+export const MEMORY_FILE_ROOT = "/home/sandbox/.openclaw/workspace/memory/celia_memory";
+
+type MemoryFileErrorCode = "INVALID_REQUEST" | "INVALID_PATH" | "NOT_FOUND" | "IO_ERROR";
+type MemoryFileFailure = { ok: false; errorCode: MemoryFileErrorCode; message: string };
+type MemoryFileWriteResult = { ok: true; bytesWritten: number } | MemoryFileFailure;
+type MemoryFileReadResult = { ok: true; content: string; contentBytes: number } | MemoryFileFailure;
+
+class MemoryFileError extends Error {
+  constructor(
+    readonly errorCode: MemoryFileErrorCode,
+    message: string,
+  ) {
+    super(message);
+    this.name = "MemoryFileError";
+  }
+}
+
+/** Resolve writable .xiaoyiruntime path: try sandbox path first, fallback to user home. */
+function resolveXiaoyiRuntimePath(): string {
+  try {
+    // If primary path's parent dir exists and is writable, use it
+    const fs = require("fs");
+    fs.accessSync(XIAOYIRUNTIME_PATH_PRIMARY, fs.constants.W_OK);
+    return XIAOYIRUNTIME_PATH_PRIMARY;
+  } catch {
+    // If primary path doesn't exist, try creating parent
+    try {
+      const fs = require("fs");
+      const dir = require("path").dirname(XIAOYIRUNTIME_PATH_PRIMARY);
+      fs.mkdirSync(dir, { recursive: true });
+      return XIAOYIRUNTIME_PATH_PRIMARY;
+    } catch {
+      // Fallback to user home
+    }
+  }
+  return XIAOYIRUNTIME_PATH_FALLBACK;
+}
+
+/** 网关单帧上限 65536 B，给信封 / hostname 留 3.5 KB。 */
+const MAX_WS_FRAME_BYTES = 62_000;
+
+/** 信封常量：jsonrpc/artifact/taskId/streamingTextId/hostname 等不含 content 的固定开销上限。 */
+const FRAME_ENVELOPE_BYTES = 2_000;
+
+function utf8ByteLength(value: string): number {
+  return Buffer.byteLength(value, "utf8");
+}
+
+/**
+ * ans 落到 ws.send 时的真实字节数（不含信封常量）。
+ * content 会被转义两层：formatter.sendCommand 把 commands 序列化成 msgDetail 字符串，
+ * 再由 websocket.ts 把 outboundMessage 序列化一次。所以必须量 stringify 两次的结果，
+ * 只量一次会低估引号 / 反斜杠 / 换行等字符的膨胀。
+ */
+function frameAnsBytes(ans: any): number {
+  return utf8ByteLength(JSON.stringify(JSON.stringify(ans)));
+}
+
+/**
+ * MemoryFileRead 的 content 可能远超单帧上限。按 offset 裁成一页，带
+ * total/offset/limit/hasMore/nextOffset 供调用方续拉；contentBytes 同步改为本页
+ * 字节数（端侧会校验 contentBytes === byteLength(content)）。整份能一帧发完时
+ * 原样返回，既有字段与行为完全不变。
+ */
+function paginateFileReadAns(ans: any, params: any): any {
+  if (!ans || ans.ok !== true || typeof ans.content !== "string") return ans;
+
+  const body = params?.body ?? params ?? {};
+  const offset = Number.isFinite(body.offset) ? Math.max(0, Math.trunc(body.offset)) : 0;
+  const budget = MAX_WS_FRAME_BYTES - FRAME_ENVELOPE_BYTES;
+  if (offset === 0 && frameAnsBytes(ans) <= budget) return ans;
+
+  const full: string = ans.content;
+  const total = full.length;
+  const start = Math.min(offset, total);
+  // 用「最长形态」度量，避免低估：hasMore=true、nextOffset 取最大值。
+  const candidate = (n: number): any => {
+    const page = full.slice(start, start + n);
+    return {
+      ...ans,
+      content: page,
+      contentBytes: utf8ByteLength(page),
+      total,
+      offset: start,
+      limit: n,
+      hasMore: true,
+      nextOffset: total,
+    };
+  };
+
+  let lo = 0;
+  let hi = total - start;
+  while (lo < hi) {
+    const mid = Math.ceil((lo + hi) / 2);
+    if (frameAnsBytes(candidate(mid)) <= budget) lo = mid;
+    else hi = mid - 1;
+  }
+  if (lo === 0) {
+    // offset 已越界：正常返回空页并结束续拉。
+    if (start >= total) {
+      return {
+        ...ans,
+        content: "",
+        contentBytes: 0,
+        total,
+        offset: start,
+        limit: 0,
+        hasMore: false,
+        nextOffset: null,
+      };
+    }
+    // 单字符都放不下时不能发空页（端侧会写成空文件且续拉会死循环）。
+    return {
+      ok: false,
+      errorCode: "IO_ERROR",
+      message: "MemoryFileRead content exceeds WS frame limit",
+    };
+  }
+
+  let end = start + lo;
+  // 不把 high surrogate 留在页尾。
+  if (end > start && end < total && /[\uD800-\uDBFF]$/.test(full.slice(start, end))) end -= 1;
+
+  const page = full.slice(start, end);
+  const hasMore = end < total;
+  logger.warn(
+    `[MEMORY-QUERY] MemoryFileRead ans paged: totalChars=${total}, pageChars=${page.length}, ` +
+      `offset=${start}, hasMore=${hasMore}`,
+  );
+  return {
+    ...ans,
+    content: page,
+    contentBytes: utf8ByteLength(page),
+    total,
+    offset: start,
+    limit: page.length,
+    hasMore,
+    nextOffset: hasMore ? end : null,
+  };
+}
+
+export async function handleMemoryQueryEvent(context: any, cfg: any): Promise<any> {
+  const { action, params, sessionId, taskId, messageId } = context;
+  const log = logger.withContext(sessionId ?? "", taskId ?? "");
+  log.log(`[MEMORY-QUERY] Received event: action=${action}`);
+
+  let result: any;
+
+  try {
+    switch (action) {
+      case "MemoryStateSet":
+        result = handleMemoryStateSet(params);
+        break;
+      case "MemoryStateGet":
+        result = handleMemoryStateGet();
+        break;
+      case "UserMdQuery":
+        result = handleUserMdQuery();
+        break;
+      case "MemoryMdQuery":
+        result = handleMemoryMdQuery();
+        break;
+      case "MemoryHistory":
+        result = handleMemoryHistory();
+        break;
+      case "MemoryFileWrite":
+        result = handleMemoryFileWrite(params);
+        break;
+      case "MemoryFileRead":
+        result = handleMemoryFileRead(params);
+        break;
+      default:
+        log.error(`[MEMORY-QUERY] Unknown action: ${action}`);
+        result = { error: `Unknown action: ${action}` };
+    }
+  } catch (err) {
+    const errorMsg = err instanceof Error ? err.message : String(err);
+    log.error(`[MEMORY-QUERY] Handler failed for action=${action}:`, err);
+    result = { error: errorMsg };
+  }
+
+  if (action === "MemoryFileWrite" || action === "MemoryFileRead") {
+    log.log(
+      `[MEMORY-QUERY] Result for action=${action}: ok=${result?.ok === true}, errorCode=${result?.errorCode ?? "none"}`,
+    );
+  } else {
+    log.log(`[MEMORY-QUERY] Result for action=${action}: ${JSON.stringify(result)}`);
+  }
+
+  // Send result back via sendCommand
+  if (cfg && sessionId && taskId && messageId) {
+    try {
+      const config = resolveXYConfig(cfg);
+      const ans = paginateFileReadAns(result, params);
+      const command = {
+        header: {
+          namespace: "AgentEvent",
+          name: "MemoryQuery",
+        },
+        payload: {
+          action,
+          ans,
+        },
+      };
+      await sendCommand({
+        config,
+        sessionId,
+        taskId,
+        messageId,
+        command,
+        final: true,
+      });
+      log.log(`[MEMORY-QUERY] Sent response via sendCommand, action=${action}, frameBytes=${frameAnsBytes(ans) + FRAME_ENVELOPE_BYTES}`);
+    } catch (sendErr) {
+      log.error(`[MEMORY-QUERY] Failed to send response via sendCommand:`, sendErr);
+    }
+  } else {
+    log.warn(`[MEMORY-QUERY] Missing cfg/sessionId/taskId/messageId, skipping sendCommand`);
+  }
+
+  return result;
+}
+
+function sanitizeFileNameForLog(value: unknown): string {
+  if (typeof value !== "string") return "<invalid>";
+  return value.replace(/[\u0000-\u001f\u007f]/g, "?").slice(0, 512);
+}
+
+function validateFileName(value: unknown): string {
+  if (typeof value !== "string" || value.length === 0) {
+    throw new MemoryFileError("INVALID_REQUEST", "fileName must be a non-empty string");
+  }
+  if (
+    value === "." ||
+    value === ".." ||
+    value.includes("/") ||
+    value.includes("\\") ||
+    /[\u0000-\u001f\u007f]/.test(value) ||
+    Buffer.byteLength(value, "utf-8") > 255
+  ) {
+    throw new MemoryFileError("INVALID_PATH", "fileName must be a single valid file name");
+  }
+  return value;
+}
+
+function resolveReadPath(fileName: string, rootDir: string): string {
+  const realRoot = realpathSync(rootDir);
+  const targetPath = path.join(realRoot, fileName);
+  const targetLstat = lstatSync(targetPath);
+  if (targetLstat.isSymbolicLink()) {
+    throw new MemoryFileError("INVALID_PATH", "Symbolic link files are not allowed");
+  }
+  if (!targetLstat.isFile()) {
+    throw new MemoryFileError("INVALID_PATH", "Target must be a regular file");
+  }
+  return targetPath;
+}
+
+function resolveWritePath(fileName: string, rootDir: string): string {
+  if (!path.isAbsolute(rootDir)) {
+    throw new MemoryFileError("IO_ERROR", "Memory file root is invalid");
+  }
+  mkdirSync(rootDir, { recursive: true });
+  const realRoot = realpathSync(rootDir);
+  const targetPath = path.join(realRoot, fileName);
+  if (existsSync(targetPath)) {
+    const targetLstat = lstatSync(targetPath);
+    if (targetLstat.isSymbolicLink() || !targetLstat.isFile()) {
+      throw new MemoryFileError("INVALID_PATH", "Target must be a regular file");
+    }
+  }
+  return targetPath;
+}
+
+function toMemoryFileFailure(error: unknown): MemoryFileFailure {
+  if (error instanceof MemoryFileError) {
+    return { ok: false, errorCode: error.errorCode, message: error.message };
+  }
+
+  const errorCode = typeof error === "object" && error !== null && "code" in error
+    ? String((error as { code?: unknown }).code)
+    : "";
+  if (errorCode === "ENOENT") {
+    return { ok: false, errorCode: "NOT_FOUND", message: "File does not exist" };
+  }
+  if (errorCode === "EISDIR" || errorCode === "ENOTDIR" || errorCode === "ELOOP") {
+    return { ok: false, errorCode: "INVALID_PATH", message: "Target is not a valid regular file" };
+  }
+  return { ok: false, errorCode: "IO_ERROR", message: "File operation failed" };
+}
+
+function logMemoryFileFailure(
+  operation: "MemoryFileWrite" | "MemoryFileRead",
+  fileName: string,
+  failure: MemoryFileFailure,
+  error: unknown,
+): void {
+  const message = `[MEMORY-QUERY] ${operation} failed: fileName=${fileName}, errorCode=${failure.errorCode}`;
+  if (failure.errorCode === "NOT_FOUND") {
+    logger.log(message);
+  } else if (failure.errorCode === "IO_ERROR") {
+    logger.error(message, error);
+  } else {
+    logger.warn(message);
+  }
+}
+
+/** Atomically write UTF-8 text beneath the fixed memory file root. */
+export function handleMemoryFileWrite(
+  params: any,
+  rootDir = MEMORY_FILE_ROOT,
+): MemoryFileWriteResult {
+  const startedAt = Date.now();
+  const body = params?.body ?? params;
+  const fileNameForLog = sanitizeFileNameForLog(body?.fileName);
+  let tmpPath: string | undefined;
+
+  try {
+    const fileName = validateFileName(body?.fileName);
+    if (typeof body?.content !== "string") {
+      throw new MemoryFileError("INVALID_REQUEST", "content must be a string");
+    }
+    const contentBytes = Buffer.byteLength(body.content, "utf-8");
+
+    logger.log(`[MEMORY-QUERY] MemoryFileWrite received: fileName=${fileNameForLog}, contentBytes=${contentBytes}`);
+    const targetPath = resolveWritePath(fileName, rootDir);
+    tmpPath = path.join(path.dirname(targetPath), `.memory-file.tmp.${process.pid}.${randomUUID()}`);
+    writeFileSync(tmpPath, body.content, { encoding: "utf-8", flag: "wx" });
+    renameSync(tmpPath, targetPath);
+    tmpPath = undefined;
+
+    logger.log(
+      `[MEMORY-QUERY] MemoryFileWrite completed: fileName=${fileNameForLog}, contentBytes=${contentBytes}, durationMs=${Date.now() - startedAt}`,
+    );
+    return { ok: true, bytesWritten: contentBytes };
+  } catch (error) {
+    if (tmpPath) {
+      try {
+        unlinkSync(tmpPath);
+      } catch {
+        // The temporary file may not exist or may already have been renamed.
+      }
+    }
+    const failure = toMemoryFileFailure(error);
+    logMemoryFileFailure("MemoryFileWrite", fileNameForLog, failure, error);
+    return failure;
+  }
+}
+
+/** Read UTF-8 text beneath the fixed memory file root without interpreting it. */
+export function handleMemoryFileRead(
+  params: any,
+  rootDir = MEMORY_FILE_ROOT,
+): MemoryFileReadResult {
+  const startedAt = Date.now();
+  const body = params?.body ?? params;
+  const fileNameForLog = sanitizeFileNameForLog(body?.fileName);
+
+  try {
+    const fileName = validateFileName(body?.fileName);
+    logger.log(`[MEMORY-QUERY] MemoryFileRead received: fileName=${fileNameForLog}`);
+    const targetPath = resolveReadPath(fileName, rootDir);
+    const contentBuffer = readFileSync(targetPath);
+    const content = contentBuffer.toString("utf-8");
+
+    logger.log(
+      `[MEMORY-QUERY] MemoryFileRead completed: fileName=${fileNameForLog}, contentBytes=${contentBuffer.byteLength}, durationMs=${Date.now() - startedAt}`,
+    );
+    return { ok: true, content, contentBytes: contentBuffer.byteLength };
+  } catch (error) {
+    const failure = toMemoryFileFailure(error);
+    logMemoryFileFailure("MemoryFileRead", fileNameForLog, failure, error);
+    return failure;
+  }
+}
+
+/**
+ * Write MEMORYSTATE=true/false to .xiaoyiruntime.
+ */
+function handleMemoryStateSet(params: any): { code: number } {
+  const memoryState = params?.memoryState;
+  if (typeof memoryState !== "boolean") {
+    logger.error(`[MEMORY-QUERY] memoryStateSet: invalid memoryState type: ${typeof memoryState}`);
+    return { code: 0 };
+  }
+
+  const value = String(memoryState);
+  const filePath = resolveXiaoyiRuntimePath();
+
+  let content: string;
+  try {
+    content = readFileSync(filePath, "utf-8");
+  } catch {
+    logger.log(`[MEMORY-QUERY] ${filePath} not found, creating new file`);
+    writeFileSync(filePath, `${MEMORY_STATE_KEY}=${value}\n`, "utf-8");
+    logger.log(`[MEMORY-QUERY] wrote ${MEMORY_STATE_KEY}=${value}`);
+    return { code: 0 };
+  }
+
+  const lines = content.split("\n");
+  const key = MEMORY_STATE_KEY;
+  let found = false;
+
+  const updated = lines.map((line) => {
+    if (line.startsWith(`${key}=`)) {
+      found = true;
+      return `${key}=${value}`;
+    }
+    return line;
+  });
+
+  if (!found) {
+    const trimmed = content.trimEnd();
+    writeFileSync(filePath, `${trimmed}\n${key}=${value}\n`, "utf-8");
+  } else {
+    writeFileSync(filePath, updated.join("\n"), "utf-8");
+  }
+
+  logger.log(`[MEMORY-QUERY] updated ${MEMORY_STATE_KEY}=${value} in ${filePath}`);
+  return { code: 0 };
+}
+
+/**
+ * Read MEMORYSTATE from .xiaoyiruntime and return its boolean value.
+ * Missing file or key defaults to false.
+ */
+function handleMemoryStateGet(): { memoryState: boolean } {
+  const filePath = resolveXiaoyiRuntimePath();
+  let content: string;
+  try {
+    content = readFileSync(filePath, "utf-8");
+  } catch (err: any) {
+    if (err.code === "ENOENT") {
+      logger.log(`[MEMORY-QUERY] ${filePath} not found`);
+    } else {
+      logger.error(`[MEMORY-QUERY] Failed to read ${filePath}:`, err);
+    }
+    return { memoryState: false };
+  }
+
+  for (const line of content.split("\n")) {
+    if (line.startsWith(`${MEMORY_STATE_KEY}=`)) {
+      const value = line.slice(`${MEMORY_STATE_KEY}=`.length).trim();
+      logger.log(`[MEMORY-QUERY] read ${MEMORY_STATE_KEY}=${value} from ${filePath}`);
+      return { memoryState: value === "true" };
+    }
+  }
+
+  logger.log(`[MEMORY-QUERY] ${MEMORY_STATE_KEY} not found in ${filePath}`);
+  return { memoryState: false };
+}
+
+/**
+ * Read ~/.openclaw/workspace/USER.md and return content in fileDetail.
+ */
+function handleUserMdQuery(): { fileDetail: string } {
+  const filePath = path.join(os.homedir(), ".openclaw", "workspace", "USER.md");
+  return readMdFile(filePath);
+}
+
+/**
+ * Read ~/.openclaw/workspace/MEMORY.md and return content in fileDetail.
+ */
+function handleMemoryMdQuery(): { fileDetail: string } {
+  const filePath = path.join(os.homedir(), ".openclaw", "workspace", "MEMORY.md");
+  return readMdFile(filePath);
+}
+
+function readMdFile(filePath: string): { fileDetail: string } {
+  try {
+    const content = readFileSync(filePath, "utf-8");
+    logger.log(`[MEMORY-QUERY] Read file: ${filePath}, size: ${content.length}`);
+    return { fileDetail: content };
+  } catch (err: any) {
+    if (err.code === "ENOENT") {
+      logger.log(`[MEMORY-QUERY] File not found: ${filePath}`);
+    } else {
+      logger.error(`[MEMORY-QUERY] Failed to read ${filePath}:`, err);
+    }
+    return { fileDetail: "" };
+  }
+}
+
+const MEMORY_LOG_PATH = path.join(os.homedir(), ".openclaw", ".memory.log");
+const MEMORY_HISTORY_DAYS = 7;
+const MEMORY_RETENTION_DAYS = 30;
+const MEMORY_HISTORY_MAX_ENTRIES = 100;
+
+/**
+ * Read ~/.openclaw/.memory.log, return last 7 days grouped by date
+ * (newest first, at most MEMORY_HISTORY_MAX_ENTRIES entries total),
+ * then prune entries older than 30 days.
+ *
+ * Log line format: `2026-06-22T15:18:00|user.md|更新了xxxx`
+ * Only split on the first two `|`; everything after is the detail
+ * (detail itself may contain `|`).
+ */
+function handleMemoryHistory(): Array<Record<string, Array<{ fileName: string; detail: string; time: string }>>> {
+  let content: string;
+  try {
+    content = readFileSync(MEMORY_LOG_PATH, "utf-8");
+  } catch (err: any) {
+    if (err.code === "ENOENT") {
+      logger.log(`[MEMORY-QUERY] memory.log not found: ${MEMORY_LOG_PATH}`);
+    } else {
+      logger.error(`[MEMORY-QUERY] Failed to read memory.log:`, err);
+    }
+    return [];
+  }
+
+  const lines = content.split("\n");
+  const now = new Date();
+
+  const historySince = new Date(now);
+  historySince.setDate(now.getDate() - (MEMORY_HISTORY_DAYS - 1));
+  historySince.setHours(0, 0, 0, 0);
+
+  const retentionSince = new Date(now);
+  retentionSince.setDate(now.getDate() - (MEMORY_RETENTION_DAYS - 1));
+  retentionSince.setHours(0, 0, 0, 0);
+
+  const byDate = new Map<string, Array<{ fileName: string; detail: string; time: string }>>();
+  const keptLines: string[] = [];
+
+  for (const raw of lines) {
+    const line = raw.trimEnd();
+    if (!line) continue;
+
+    // Split on only the first two `|`; rest is detail (may contain `|`).
+    const firstPipe = line.indexOf("|");
+    if (firstPipe === -1) continue;
+    const secondPipe = line.indexOf("|", firstPipe + 1);
+    if (secondPipe === -1) continue;
+
+    const timestamp = line.slice(0, firstPipe);
+    const fileName = line.slice(firstPipe + 1, secondPipe);
+    const detail = line.slice(secondPipe + 1);
+
+    // timestamp format: 2026-06-22T15:18:00 → extract hh:mm
+    const datePart = timestamp.slice(0, 10);
+    const timePart = timestamp.slice(11, 16);
+    const entryDate = new Date(`${datePart}T00:00:00`);
+
+    // Retain log lines within the 30-day window.
+    if (!isNaN(entryDate.getTime()) && entryDate >= retentionSince) {
+      keptLines.push(line);
+    }
+
+    // Include in response if within the 7-day window.
+    if (!isNaN(entryDate.getTime()) && entryDate >= historySince) {
+      let bucket = byDate.get(datePart);
+      if (!bucket) {
+        bucket = [];
+        byDate.set(datePart, bucket);
+      }
+      bucket.push({ fileName, detail, time: timePart });
+    }
+  }
+
+  // Build ans array sorted by date descending, each entry is { <date>: [...] }.
+  // Cap the total at MEMORY_HISTORY_MAX_ENTRIES, keeping the newest entries
+  // (dates iterate newest-first; within a day, reverse() puts newest first).
+  const ans: Array<Record<string, Array<{ fileName: string; detail: string; time: string }>>> = [];
+  let remaining = MEMORY_HISTORY_MAX_ENTRIES;
+  let totalInWindow = 0;
+  let totalReturned = 0;
+  for (const dateStr of Array.from(byDate.keys()).sort().reverse()) {
+    const entries = byDate.get(dateStr)!.reverse();
+    totalInWindow += entries.length;
+    if (remaining <= 0) continue;
+    const kept = entries.slice(0, remaining);
+    ans.push({ [dateStr]: kept });
+    remaining -= kept.length;
+    totalReturned += kept.length;
+  }
+
+  // Prune memory.log: keep only the last 30 days.
+  try {
+    const newContent = keptLines.length > 0 ? `${keptLines.join("\n")}\n` : "";
+    writeFileSync(MEMORY_LOG_PATH, newContent, "utf-8");
+    logger.log(
+      `[MEMORY-QUERY] Pruned memory.log, kept ${keptLines.length} entries (>= ${retentionSince.toISOString().slice(0, 10)})`,
+    );
+  } catch (err) {
+    logger.error(`[MEMORY-QUERY] Failed to prune memory.log:`, err);
+  }
+
+  logger.log(
+    `[MEMORY-QUERY] MemoryHistory: returning ${ans.length} date buckets, ` +
+      `${totalReturned}/${totalInWindow} entries (cap=${MEMORY_HISTORY_MAX_ENTRIES})`,
+  );
+  return ans;
+}

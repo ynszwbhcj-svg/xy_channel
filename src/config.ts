@@ -1,0 +1,59 @@
+// Configuration parsing and validation
+import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
+import type { XYChannelConfig } from "./types.js";
+
+/**
+ * Resolve and validate Xiaoyi channel configuration from OpenClawConfig.
+ * Simplified version - only supports single account (no multi-account management).
+ */
+export function resolveXYConfig(cfg: OpenClawConfig): XYChannelConfig {
+  const xyConfig = cfg.channels?.["xiaoyi-channel"];
+
+  if (!xyConfig) {
+    throw new Error("Xiaoyi channel configuration not found in openclaw.json");
+  }
+
+  // Validate required fields
+  const required = ["apiKey", "agentId", "uid", "apiId", "pushId"];
+  for (const field of required) {
+    if (!xyConfig[field]) {
+      throw new Error(`XY channel configuration missing required field: ${field}`);
+    }
+  }
+
+  // Return configuration with defaults
+  return {
+    enabled: xyConfig.enabled ?? false,
+    // ✅ 兼容旧配置：优先使用 wsUrl，然后 wsUrl2（wsUrl1 被忽略）
+    wsUrl: xyConfig.wsUrl ?? xyConfig.wsUrl2 ?? "ws://localhost:8768/ws/link",
+    apiKey: xyConfig.apiKey,
+    uid: xyConfig.uid,
+    agentId: xyConfig.agentId,
+    apiId: xyConfig.apiId,
+    pushId: xyConfig.pushId,
+    fileUploadUrl: xyConfig.fileUploadUrl ?? "http://localhost:8767",
+    pushUrl: xyConfig.pushUrl,
+    defaultSessionId: xyConfig.defaultSessionId,
+    terminalFrameDelayMs: xyConfig.terminalFrameDelayMs ?? 300,
+    // 固定会话列表：缺省默认 ["00000000"]；显式配置 [] 表示禁用 reset 特殊处理
+    pinnedSessionIds: Array.isArray(xyConfig.pinnedSessionIds)
+      ? xyConfig.pinnedSessionIds.filter((id: unknown) => typeof id === "string" && id.trim() !== "")
+      : ["00000000"],
+  };
+}
+
+/**
+ * List available account IDs.
+ * Simplified - always returns single account "default".
+ */
+export function listXYAccountIds(): string[] {
+  return ["default"];
+}
+
+/**
+ * Get default account ID.
+ * Simplified - always returns "default".
+ */
+export function getDefaultXYAccountId(): string {
+  return "default";
+}

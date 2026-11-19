@@ -1,0 +1,813 @@
+// Cron query event handler.
+// Listens for cron-query-event from the WebSocket manager,
+// calls Gateway cron RPC via callGatewayTool, and sends the
+// result back to the client via sendCommand as a System.CronQuery
+// command with the result in payload.ans.
+//
+// This module adapts between the XY Channel device-facing RPC schema
+// and the OpenClaw Gateway native cron RPC (protocol v4).
+// Each action transforms request params from device format → gateway format,
+// then transforms the gateway response → device format before sending back.
+
+import { callGatewayTool } from "openclaw/plugin-sdk/agent-harness-runtime";
+import fsp from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { sendCommand } from "./formatter.js";
+import { resolveXYConfig } from "./config.js";
+import { configManager } from "./utils/config-manager.js";
+import { setJobPushId } from "./utils/cron-push-map.js";
+import { logger } from "./utils/logger.js";
+
+// ── Local run-log constants, types, and parsers (moved from cron-recovery) ───
+
+const ROOT_DIR = path.join(os.homedir(), ".openclaw");
+
+/** Path to the legacy cron run-log directory. */
+const LEGACY_CRON_RUNS_DIR = path.join(ROOT_DIR, "cron", "runs");
+
+export interface CronRunLogEntry {
+  jobId: string;
+  ts: number;
+  runId?: string;
+  status?: string;
+  error?: string;
+  summary?: string;
+  diagnosticsSummary?: string;
+  deliveryStatus?: string;
+  deliveryError?: string;
+  delivered?: boolean;
+  sessionId?: string;
+  sessionKey?: string;
+  runAtMs?: number;
+  durationMs?: number;
+  nextRunAtMs?: number;
+  model?: string;
+  provider?: string;
+  totalTokens?: number;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function readString(record: Record<string, unknown>, key: string): string | undefined {
+  const val = record[key];
+  return typeof val === "string" && val.trim() ? val.trim() : undefined;
+}
+
+function readOptionalString(record: Record<string, unknown>, key: string): string | undefined {
+  const val = record[key];
+  return typeof val === "string" ? val : undefined;
+}
+
+function readNumber(record: Record<string, unknown>, key: string): number | undefined {
+  const val = record[key];
+  return typeof val === "number" && Number.isFinite(val) ? val : undefined;
+}
+
+function readBoolean(record: Record<string, unknown>, key: string): boolean | undefined {
+  const val = record[key];
+  return typeof val === "boolean" ? val : undefined;
+}
+
+function parseRunLogEntry(obj: unknown, opts?: { jobId?: string }): CronRunLogEntry | null {
+  if (!isRecord(obj)) return null;
+
+  const ts = readNumber(obj, "ts");
+  if (ts === undefined) return null;
+
+  const jobId = opts?.jobId ?? readString(obj, "jobId");
+  if (!jobId) return null;
+
+  return {
+    jobId,
+    ts,
+    runId: readOptionalString(obj, "runId"),
+    status: readOptionalString(obj, "status"),
+    error: readOptionalString(obj, "error"),
+    summary: readOptionalString(obj, "summary"),
+    diagnosticsSummary: readOptionalString(obj, "diagnosticsSummary"),
+    deliveryStatus: readOptionalString(obj, "deliveryStatus"),
+    deliveryError: readOptionalString(obj, "deliveryError"),
+    delivered: readBoolean(obj, "delivered"),
+    sessionId: readOptionalString(obj, "sessionId"),
+    sessionKey: readOptionalString(obj, "sessionKey"),
+    runAtMs: readNumber(obj, "runAtMs"),
+    durationMs: readNumber(obj, "durationMs"),
+    nextRunAtMs: readNumber(obj, "nextRunAtMs"),
+    model: readOptionalString(obj, "model"),
+    provider: readOptionalString(obj, "provider"),
+    totalTokens: readNumber(obj, "totalTokens"),
+  };
+}
+
+function parseCronRunLogEntriesFromJsonl(
+  raw: string,
+  opts?: { jobId?: string },
+): CronRunLogEntry[] {
+  if (!raw.trim()) return [];
+  const entries: CronRunLogEntry[] = [];
+  for (const line of raw.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    try {
+      const entry = parseRunLogEntry(JSON.parse(trimmed), opts);
+      if (entry) entries.push(entry);
+    } catch {
+      // Skip malformed historical rows
+    }
+  }
+  return entries;
+}
+
+const GATEWAY_TIMEOUT_MS = 60_000;
+
+/** Hard bound (UTF-8 bytes) for a single list response, kept below the 64KiB WS frame limit. */
+const MAX_LIST_BODY_BYTES = 55_000;
+/** Ceiling for a caller-supplied CronQuery list page size. */
+const MAX_LIST_PAGE_LIMIT = 50;
+
+// ============================================================================
+// Main handler
+// ============================================================================
+
+/**
+ * Handle a cron-query-event.
+ *
+ * Calls the Gateway cron RPC and sends the result back through sendCommand
+ * as a System.CronQuery command with the full result object in payload.ans.
+ */
+export async function handleCronQueryEvent(context: any, cfg: any): Promise<void> {
+  const { action, jobId, params, sessionId, taskId, messageId } = context;
+  const log = logger.withContext(sessionId ?? "", taskId ?? "");
+  log.log(`[CRON-QUERY] Received event: action=${action}, jobId=${jobId ?? "(none)"}`);
+
+  let result: any;
+  let error: string | undefined;
+
+  try {
+    switch (action) {
+      // ── list ──────────────────────────────────────────────────────
+      case "list": {
+        const gatewayParams = buildListParams(params);
+        let gatewayResult = await callGatewayTool(
+          "cron.list",
+          { timeoutMs: GATEWAY_TIMEOUT_MS },
+          gatewayParams,
+        );
+
+        // Scan for systemEvent jobs and migrate them to agentTurn
+        // Skip main-session jobs — gateway requires payload.kind="systemEvent" for those
+        const jobs: any[] = (gatewayResult as any)?.jobs ?? [];
+        const systemEventJobs = jobs.filter(
+          (j: any) =>
+            j?.payload?.kind === "systemEvent" 
+        );
+
+        if (systemEventJobs.length > 0) {
+          log.log(
+            `[CRON-QUERY] list: found ${systemEventJobs.length} systemEvent jobs, migrating to agentTurn`,
+          );
+
+          for (const job of systemEventJobs) {
+            const updatePatch = {
+              sessionTarget: "isolated",
+              description: job.payload?.text ?? job.payload?.message ?? "",
+              payload: {
+                kind: "agentTurn",
+                message: job.payload?.text ?? job.payload?.message ?? "",
+              },
+              delivery: {
+                channel: "xiaoyi-channel",
+                mode: "announce",
+                to: "default"
+              }
+            };
+            try {
+              await callGatewayTool(
+                "cron.update",
+                { timeoutMs: GATEWAY_TIMEOUT_MS },
+                { id: job.id, patch: updatePatch },
+              );
+              log.log(
+                `[CRON-QUERY] list: migrated job ${job.id} (${job.name ?? ""}) from systemEvent → agentTurn`,
+              );
+            } catch (err) {
+              log.warn(
+                `[CRON-QUERY] list: failed to migrate job ${job.id}:`,
+                err,
+              );
+            }
+          }
+
+          // Re-fetch list after migration
+          gatewayResult = await callGatewayTool(
+            "cron.list",
+            { timeoutMs: GATEWAY_TIMEOUT_MS },
+            gatewayParams,
+          );
+        }
+
+        result = transformListResponse(gatewayResult, params);
+        break;
+      }
+
+      // ── status ────────────────────────────────────────────────────
+      case "status": {
+        const gatewayResult = await callGatewayTool(
+          "cron.status",
+          { timeoutMs: GATEWAY_TIMEOUT_MS },
+          {},
+        );
+        result = transformStatusResponse(gatewayResult);
+        break;
+      }
+
+      // ── runs ─────────────────────────────────────────────────────
+      case "runs": {
+        const { offset = 0, limit = 50, ...otherParams } = params ?? {};
+
+        // Fetch from local runs folder and gateway RPC in parallel
+        const [localEntries, gatewayResult] = await Promise.all([
+          readLocalRunLogsForJob(jobId).catch(() => [] as CronRunLogEntry[]),
+          callGatewayTool(
+            "cron.runs",
+            { timeoutMs: GATEWAY_TIMEOUT_MS },
+            { jobId, scope: "job" as const, ...otherParams },
+          ).catch(() => ({ entries: [] as any[] })),
+        ]);
+
+        const gatewayEntries: any[] = (gatewayResult as any)?.entries ?? [];
+
+        // Merge, deduplicate, and sort by time (newest first)
+        const merged = mergeAndDedupeRunEntries(localEntries, gatewayEntries);
+
+        // Apply pagination after merge
+        const total = merged.length;
+        const paged = merged.slice(offset, offset + limit);
+        const hasMore = total > offset + limit;
+
+        result = {
+          entries: paged,
+          total,
+          offset,
+          limit,
+          hasMore,
+          nextOffset: hasMore ? offset + limit : null,
+        };
+        break;
+      }
+
+      // ── add ──────────────────────────────────────────────────────
+      case "add": {
+        const gatewayParams = buildAddParams(params);
+        const gatewayResult = await callGatewayTool(
+          "cron.add",
+          { timeoutMs: GATEWAY_TIMEOUT_MS },
+          gatewayParams,
+        );
+
+        // 捕获 jobId↔pushId：cron-query 路径由 channel 自己建 job，
+        // 此处 context 握着 sessionId，configManager 有对应设备 pushId。
+        await persistCronPushMap(context.sessionId, gatewayResult).catch((err: unknown) => {
+          logger.error(`[CRON-QUERY] Failed to persist cron-push-map:`, err);
+        });
+
+        result = transformAddResponse(gatewayResult);
+        break;
+      }
+
+      // ── update ───────────────────────────────────────────────────
+      case "update": {
+        const gatewayParams = buildUpdateParams(jobId, params);
+        const gatewayResult = await callGatewayTool(
+          "cron.update",
+          { timeoutMs: GATEWAY_TIMEOUT_MS },
+          gatewayParams,
+        );
+        result = transformUpdateResponse(gatewayResult);
+        break;
+      }
+
+      // ── remove ───────────────────────────────────────────────────
+      case "remove": {
+        const gatewayResult = await callGatewayTool(
+          "cron.remove",
+          { timeoutMs: GATEWAY_TIMEOUT_MS },
+          { id: jobId },
+        );
+        result = transformRemoveResponse(gatewayResult);
+        break;
+      }
+
+      // ── run ──────────────────────────────────────────────────────
+      case "run": {
+        const gatewayResult = await callGatewayTool(
+          "cron.run",
+          { timeoutMs: GATEWAY_TIMEOUT_MS },
+          { id: jobId, mode: "force" as const },
+        );
+        result = transformRunResponse(gatewayResult);
+        break;
+      }
+
+      // ── queryTimeList ────────────────────────────────────────────
+      case "queryTimeList": {
+        result = await queryTimeListFromGateway(params);
+        break;
+      }
+
+      default:
+        error = `Unknown action: ${context.action}`;
+        log.error(`[CRON-QUERY] ${error}`);
+        result = { error };
+    }
+  } catch (err) {
+    error = err instanceof Error ? err.message : String(err);
+    log.error(`[CRON-QUERY] RPC call failed for action=${action}:`, err);
+    result = { error };
+  }
+
+  // Log the result
+  log.log(
+    `[CRON-QUERY] RPC result for action=${action}: ${JSON.stringify(result, null, 2)}`,
+  );
+
+  // Send result back via sendCommand as AgentEvent.CronQuery with payload.ans
+  if (cfg && sessionId && taskId && messageId) {
+    try {
+      const config = resolveXYConfig(cfg);
+      const command = {
+        header: {
+          namespace: "AgentEvent",
+          name: "CronQuery",
+        },
+        payload: {
+          action,
+          status: !error,
+          ans: result,
+        },
+      };
+      await sendCommand({
+        config,
+        sessionId,
+        taskId,
+        messageId,
+        command,
+        final: sessionId.toLowerCase().endsWith("cronquery"),
+      });
+      log.log(`[CRON-QUERY] Sent response via sendCommand, action=${action}`);
+    } catch (sendErr) {
+      log.error(`[CRON-QUERY] Failed to send response via sendCommand:`, sendErr);
+    }
+  } else {
+    log.warn(
+      `[CRON-QUERY] Missing cfg/sessionId/taskId/messageId, skipping sendCommand`,
+    );
+  }
+}
+
+// ============================================================================
+// Request builders — device params → gateway params
+// ============================================================================
+
+/** list: device params pass through (gateway-compatible). */
+function buildListParams(params: any): Record<string, any> {
+  return params ?? {};
+}
+
+/** add: unwrap params.job → top-level gateway params. */
+function buildAddParams(params: any): Record<string, any> {
+  const job = params?.job ?? params ?? {};
+  return {
+    name: job.name,
+    schedule: job.schedule,
+    sessionTarget: job.sessionTarget,
+    wakeMode: job.wakeMode,
+    payload: job.payload,
+    enabled: job.enabled,
+    deleteAfterRun: job.deleteAfterRun,
+    delivery: job.delivery,
+    description: job.description,
+    failureAlert: job.failureAlert,
+  };
+}
+
+/** update: unwrap params.patch → patch, add jobId. */
+function buildUpdateParams(jobId: string, params: any): Record<string, any> {
+  const patch = params?.patch ?? params ?? {};
+  return {
+    id: jobId,
+    patch
+  };
+}
+
+// ============================================================================
+// Response transformers — gateway result → device format
+// ============================================================================
+
+/** UTF-8 byte length of a string (the WS frame limit is in bytes). */
+function utf8ByteLength(value: string): number {
+  return Buffer.byteLength(value, "utf8");
+}
+
+/** list: add pagination fields + status, keep the response within a WS frame. */
+function transformListResponse(gatewayResult: any, params: any): any {
+  const jobs = gatewayResult?.jobs ?? [];
+  const total: number = gatewayResult?.total ?? jobs.length;
+
+  // Honor caller-supplied pagination, clamped to a sane upper bound. When no
+  // limit is given the caller expects the full list, so default to returning
+  // everything rather than silently dropping jobs.
+  let offset = 0;
+  let limit = jobs.length;
+  if (Number.isFinite(params?.offset)) {
+    offset = Math.max(0, Math.trunc(params.offset));
+  }
+  if (Number.isFinite(params?.limit)) {
+    limit = Math.min(Math.max(1, Math.trunc(params.limit)), MAX_LIST_PAGE_LIMIT);
+  }
+  let paged = jobs.slice(offset, offset + limit);
+
+  // Back-stop: never emit a single WS frame exceeding the gateway's 64KiB
+  // limit. Shrink the page and signal hasMore so a pagination-aware client
+  // can fetch the remainder. Job content is never modified.
+  let body = JSON.stringify({ jobs: paged, total, offset, limit: paged.length });
+  while (paged.length > 1 && utf8ByteLength(body) > MAX_LIST_BODY_BYTES) {
+    paged = paged.slice(0, -1);
+    body = JSON.stringify({ jobs: paged, total, offset, limit: paged.length });
+  }
+
+  const hasMore = total > offset + paged.length;
+  const nextOffset = hasMore ? offset + paged.length : null;
+
+  return {
+    jobs: paged,
+    total,
+    offset,
+    limit: paged.length,
+    hasMore,
+    nextOffset,
+    deliveryPreviews: gatewayResult?.deliveryPreviews ?? {},
+  };
+}
+
+/** status: rename nextRunAtMs → nextWakeAtMs, add storePath. */
+function transformStatusResponse(gatewayResult: any): any {
+  return {
+    enabled: gatewayResult?.enabled ?? false,
+    storePath: ".openclaw/cron/jobs.json",
+    jobs: gatewayResult?.jobs ?? 0,
+    nextWakeAtMs: gatewayResult?.nextRunAtMs ?? null,
+  };
+}
+
+/** add: pick relevant fields from gateway CronJob response. */
+function transformAddResponse(gatewayResult: any): any {
+  return {
+    id: gatewayResult?.id,
+    name: gatewayResult?.name,
+    enabled: gatewayResult?.enabled,
+    description: gatewayResult?.payload?.message,
+    createdAtMs: gatewayResult?.createdAtMs,
+    updatedAtMs: gatewayResult?.updatedAtMs,
+    schedule: gatewayResult?.schedule,
+    sessionTarget: gatewayResult?.sessionTarget,
+    wakeMode: gatewayResult?.wakeMode,
+    payload: gatewayResult?.payload,
+    delivery: gatewayResult?.delivery,
+    state: {
+      nextRunAtMs: gatewayResult?.state?.nextRunAtMs ?? null,
+    },
+  };
+}
+
+/** update: same structure as add. */
+function transformUpdateResponse(gatewayResult: any): any {
+  return transformAddResponse(gatewayResult);
+}
+
+/** remove: wrap with ok flag. */
+function transformRemoveResponse(gatewayResult: any): any {
+  return {
+    ok: gatewayResult?.removed ?? false,
+    removed: gatewayResult?.removed ?? false,
+  };
+}
+
+/** run: map ran → enqueued. */
+function transformRunResponse(gatewayResult: any): any {
+  return {
+    ok: gatewayResult?.ok ?? false,
+    runId: gatewayResult?.runId ?? null,
+    enqueued: gatewayResult?.ran ?? false,
+    error: gatewayResult?.error ?? undefined,
+  };
+}
+
+// ============================================================================
+// Supporting functions
+// ============================================================================
+
+/**
+ * 从 cron.add 结果中提取 jobId，配合 sessionId 对应的 pushId 写入映射。
+ */
+async function persistCronPushMap(
+  sessionId: string | undefined,
+  result: unknown,
+): Promise<void> {
+  logger.log(
+    `[CRONMAP] cron-query persist: sessionId=${sessionId ?? "(none)"}, resultType=${typeof result}`,
+  );
+  if (!sessionId) {
+    logger.log(`[CRONMAP] cron-query skip: no sessionId in context`);
+    return;
+  }
+  let jobId: string | undefined;
+  if (result && typeof result === "object") {
+    const id = (result as { id?: unknown }).id;
+    if (typeof id === "string" && id.trim()) jobId = id.trim();
+  }
+  if (!jobId) {
+    const preview =
+      typeof result === "string"
+        ? result.slice(0, 200)
+        : JSON.stringify(result)?.slice(0, 200);
+    logger.log(
+      `[CRONMAP] cron-query skip: no jobId in result. preview=${preview ?? "(empty)"}`,
+    );
+    return;
+  }
+  const pushId = configManager.getPushId(sessionId);
+  if (!pushId) {
+    logger.log(
+      `[CRONMAP] cron-query skip: configManager has no pushId for sessionId=${sessionId}`,
+    );
+    return;
+  }
+  logger.log(
+    `[CRONMAP] cron-query writing map: jobId=${jobId}, pushId=${pushId.substring(0, 16)}...`,
+  );
+  await setJobPushId(jobId, { pushId, sessionId, source: "cron-query" });
+  logger.log(`[CRONMAP] cron-query map written OK`);
+}
+
+/**
+ * Query run history from the last 7 days from both local runs folder
+ * and the gateway's native cron.runs RPC, merged and grouped by date.
+ *
+ * Return format:
+ *   [ { "YYYY-MM-DD": [ { run record with .name }, ... ] }, ... ]
+ */
+async function queryTimeListFromGateway(
+  params: any,
+): Promise<Array<Record<string, Array<Record<string, any>>>>> {
+  // Fetch from local runs folder and gateway RPC in parallel
+  const [localEntries, rpcResult] = await Promise.all([
+    readAllLocalRunLogs().catch(() => [] as CronRunLogEntry[]),
+    callGatewayTool(
+      "cron.runs",
+      { timeoutMs: GATEWAY_TIMEOUT_MS },
+      {
+        scope: "all",
+        limit: 200,
+        sortDir: "desc",
+        ...(params ?? {}),
+      },
+    ).catch(() => ({ entries: [] as any[] })),
+  ]);
+
+  const gatewayEntries: any[] = (rpcResult as any)?.entries ?? [];
+
+  // Merge and deduplicate
+  const merged = mergeAndDedupeRunEntries(localEntries, gatewayEntries);
+  if (merged.length === 0) {
+    return [];
+  }
+
+  // Filter to last 7 days
+  const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+  const recent = merged.filter((e) => e.ts && e.ts >= sevenDaysAgo);
+
+  // Ensure .name is populated (gateway returns jobName; normalize to .name)
+  for (const run of recent) {
+    if (!run.name && run.jobName) {
+      run.name = run.jobName;
+    } else if (!run.name) {
+      run.name = run.jobId || "";
+    }
+  }
+
+  // Sort by ts ascending for chronological display
+  recent.sort((a: any, b: any) => a.ts - b.ts);
+
+  // Group by date (YYYY-MM-DD in local time)
+  const grouped = new Map<string, any[]>();
+  for (const run of recent) {
+    const d = new Date(run.ts);
+    const label = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    if (!grouped.has(label)) {
+      grouped.set(label, []);
+    }
+    grouped.get(label)!.push(run);
+  }
+
+  // Convert to ordered array of single-key objects
+  const result: Array<Record<string, Array<Record<string, any>>>> = [];
+  for (const [date, runs] of grouped) {
+    result.push({ [date]: runs });
+  }
+  return result;
+}
+
+// ============================================================================
+// Local run-log helpers — read legacy runs/*.jsonl files
+// ============================================================================
+
+/**
+ * Filename patterns that may contain legacy run-log data.
+ *
+ * After cron-recovery migration (gateway_start hook), .jsonl files are
+ * archived to .jsonl.migrated (or .migrated.2, .migrated.3, …).
+ * We must match all of these so that historical runs are still visible
+ * in queryTimeList after migration.
+ */
+const RUN_LOG_SUFFIXES = [
+  ".jsonl",           // active / pre-migration
+  ".jsonl.migrated",  // first migration
+];
+
+/**
+ * Check whether a filename looks like a run-log file (any generation).
+ */
+function isRunLogFile(name: string): boolean {
+  return RUN_LOG_SUFFIXES.some((suffix) => name.endsWith(suffix))
+    // Also catch .migrated.2, .migrated.3, …
+    || /\.jsonl\.migrated\.\d+$/.test(name);
+}
+
+/**
+ * Strip known run-log suffixes to extract the bare jobId from a filename.
+ * e.g. "abc123.jsonl.migrated.2" → "abc123"
+ */
+function extractJobIdFromRunLogName(name: string): string {
+  // Try each known suffix first
+  for (const suffix of RUN_LOG_SUFFIXES) {
+    if (name.endsWith(suffix)) {
+      return name.slice(0, -suffix.length);
+    }
+  }
+  // Fallback: strip .jsonl and everything after
+  const dotJsonl = name.indexOf(".jsonl");
+  if (dotJsonl >= 0) {
+    return name.slice(0, dotJsonl);
+  }
+  // Last resort: just use the basename without extension
+  return path.basename(name, path.extname(name));
+}
+
+/**
+ * Read local run-log entries for a single job from the legacy runs folder.
+ *
+ * Tries multiple filename suffixes (active + archived) since migration
+ * may have renamed the file to .jsonl.migrated.
+ */
+async function readLocalRunLogsForJob(jobId: string): Promise<CronRunLogEntry[]> {
+  // Try active file first, then archived variants
+  const candidates = [
+    `${jobId}.jsonl`,
+    `${jobId}.jsonl.migrated`,
+  ];
+
+  for (const candidate of candidates) {
+    const filePath = path.join(LEGACY_CRON_RUNS_DIR, candidate);
+    try {
+      const raw = await fsp.readFile(filePath, "utf-8");
+      if (raw.trim()) {
+        return parseCronRunLogEntriesFromJsonl(raw, { jobId });
+      }
+    } catch {
+      // Try next candidate
+    }
+  }
+
+  // Also scan for .migrated.N variants
+  try {
+    const dirEntries = await fsp.readdir(LEGACY_CRON_RUNS_DIR, { withFileTypes: true });
+    const migratedRe = new RegExp(`^${escapeRegex(jobId)}\\.jsonl\\.migrated\\.\\d+$`);
+    for (const entry of dirEntries) {
+      if (entry.isFile() && migratedRe.test(entry.name)) {
+        try {
+          const raw = await fsp.readFile(
+            path.join(LEGACY_CRON_RUNS_DIR, entry.name),
+            "utf-8",
+          );
+          if (raw.trim()) {
+            return parseCronRunLogEntriesFromJsonl(raw, { jobId });
+          }
+        } catch {
+          // Keep trying other candidates
+        }
+      }
+    }
+  } catch {
+    // Directory listing failed, give up
+  }
+
+  return [];
+}
+
+/**
+ * Read all local run-log entries from the legacy runs folder.
+ *
+ * Matches .jsonl files as well as post-migration archived copies
+ * (.jsonl.migrated, .jsonl.migrated.2, …).
+ */
+async function readAllLocalRunLogs(): Promise<CronRunLogEntry[]> {
+  try {
+    const entries = await fsp.readdir(LEGACY_CRON_RUNS_DIR, { withFileTypes: true });
+    const runLogFiles = entries.filter(
+      (e) => e.isFile() && isRunLogFile(e.name),
+    );
+
+    const allEntries: CronRunLogEntry[] = [];
+    for (const file of runLogFiles) {
+      const jobId = extractJobIdFromRunLogName(file.name);
+      try {
+        const raw = await fsp.readFile(
+          path.join(LEGACY_CRON_RUNS_DIR, file.name),
+          "utf-8",
+        );
+        const parsed = parseCronRunLogEntriesFromJsonl(raw, { jobId });
+        allEntries.push(...parsed);
+      } catch {
+        // Skip unreadable files
+      }
+    }
+    return allEntries;
+  } catch {
+    return [];
+  }
+}
+
+/** Escape special regex characters in a string. */
+function escapeRegex(s: string): string {
+  return s.replace(/[-\/\\^$*+?.()|[\]{}]/g, "\\$&");
+}
+
+/**
+ * Build a dedup key for a run-log entry.
+ */
+function makeRunEntryKey(entry: {
+  jobId: string;
+  ts: number;
+  runId?: string;
+  status?: string;
+  summary?: string;
+  error?: string;
+}): string {
+  return [
+    entry.jobId,
+    String(entry.ts),
+    entry.runId ?? "",
+    entry.status ?? "",
+    entry.summary ?? "",
+    entry.error ?? "",
+  ].join("\0");
+}
+
+/**
+ * Merge local and gateway run entries, deduplicate, and sort by ts descending.
+ * Gateway entries take precedence over local entries with the same key.
+ */
+function mergeAndDedupeRunEntries(
+  localEntries: CronRunLogEntry[],
+  gatewayEntries: any[],
+): any[] {
+  const seen = new Set<string>();
+  const merged: any[] = [];
+
+  // Add gateway entries first (they take precedence)
+  for (const entry of gatewayEntries) {
+    const key = makeRunEntryKey(entry);
+    if (!seen.has(key)) {
+      seen.add(key);
+      merged.push(entry);
+    }
+  }
+
+  // Add local entries that aren't already in gateway results
+  for (const entry of localEntries) {
+    const key = makeRunEntryKey(entry);
+    if (!seen.has(key)) {
+      seen.add(key);
+      merged.push(entry);
+    }
+  }
+
+  // Sort by ts descending (newest first)
+  merged.sort((a: any, b: any) => b.ts - a.ts);
+
+  return merged;
+}

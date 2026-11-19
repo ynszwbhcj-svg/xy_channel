@@ -1,0 +1,146 @@
+// Call Phone tool implementation
+import type { ChannelAgentTool } from "openclaw/plugin-sdk/channel-contract";
+import { getCachedXYWebSocketManager } from "../transport/client.js";
+import { sendCommand } from "../formatter.js";
+import type { SessionContext } from "./session-manager.js";
+import { getCurrentSessionContext } from './session-manager.js';
+
+import { logger } from "../utils/logger.js";
+import type { A2ADataEvent } from "../types.js";
+
+/**
+ * XY call phone tool - makes a phone call on user's device.
+ * Requires phoneNumber parameter and optional slotId (0 for primary SIM, 1 for secondary SIM).
+ */
+export const callPhoneTool = {
+  name: "call_phone",
+  label: "Call Phone",
+  description: `拨打电话。需要提供要拨打的电话号码。slotId参数可选，如果用户明确指定为主卡为0（主卡），如果用户明确要求使用副卡则设置为1，如果用户没有指定使用哪张卡，则此参数不填。注意:操作超时时间为60秒,请勿重复调用此工具,如果超时或失败,最多重试一次。回复约束：如果工具返回没有授权或者其他报错，只需要完整描述没有授权或者其他报错内容即可，不需要主动给用户提供解决方案，例如告诉用户如何授权，如何解决报错等都是不需要的，请严格遵守。
+  【安全要求1（必须遵守）】同一条短信给同一联系人重复发送多次的行为要提醒用户不符合行为规范，不予执行
+  `,
+  parameters: {
+    type: "object",
+    properties: {
+      phoneNumber: {
+        type: "string",
+        description: "要拨打的电话号码",
+      },
+      slotId: {
+        type: "number",
+        description: "SIM卡槽ID，仅当用户明确指定主卡/副卡时才设置，否则不传",
+      },
+    },
+    required: ["phoneNumber"],
+  },
+
+  async execute(toolCallId: string, params: any) {
+
+    const _c = getCurrentSessionContext();
+
+    const { config, sessionId, taskId, messageId } = _c;
+// Validate phoneNumber parameter
+    if (!params.phoneNumber || typeof params.phoneNumber !== "string" || params.phoneNumber.trim() === "") {
+      throw new Error("Missing required parameter: phoneNumber must be a non-empty string");
+    }
+
+    // Validate slotId if provided (must be 0 or 1)
+    if (params.slotId !== undefined && params.slotId !== null && params.slotId !== 0 && params.slotId !== 1) {
+      throw new Error("Invalid slotId: must be 0 (primary SIM) or 1 (secondary SIM)");
+    }
+
+
+    // Get WebSocket manager
+    const wsManager = getCachedXYWebSocketManager();
+
+    // Build StartCall command
+    const command = {
+      header: {
+        namespace: "Common",
+        name: "Action",
+      },
+      payload: {
+        cardParam: {},
+        executeParam: {
+          executeMode: "background",
+          intentName: "StartCall",
+          bundleName: "com.huawei.hmos.aidispatchservice",
+          dimension: "",
+          needUnlock: true,
+          actionResponse: true,
+          timeOut: 5,
+          intentParam: {
+            phoneNumber: params.phoneNumber.trim(),
+            ...(params.slotId !== undefined && params.slotId !== null ? { slotId: params.slotId } : {}),
+          },
+          permissionId: [],
+          achieveType: "INTENT",
+        },
+        responses: [
+          {
+            resultCode: "",
+            displayText: "",
+            ttsText: "",
+          },
+        ],
+        needUploadResult: true,
+        noHalfPage: false,
+        pageControlRelated: false,
+      },
+    };
+
+
+    // Send command and wait for response (60 second timeout)
+
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        wsManager.off("data-event", handler);
+        logger.error("超时: 拨打电话超时（60秒）", { toolCallId });
+        reject(new Error("拨打电话超时（60秒）"));
+      }, 60000);
+
+      // Listen for data events from WebSocket
+      const handler = (event: A2ADataEvent) => {
+
+        if (event.intentName === "StartCall") {
+
+          clearTimeout(timeout);
+          wsManager.off("data-event", handler);
+
+          if (event.status === "success" && event.outputs) {
+
+            resolve({
+              content: [
+                {
+                  type: "text",
+                  text: JSON.stringify(event.outputs),
+                },
+              ],
+            });
+          } else {
+            reject(new Error(`拨打电话失败: ${JSON.stringify(event.outputs)}`));
+          }
+        }
+      };
+
+      // Register event handler
+      wsManager.on("data-event", handler);
+
+      // Send the command
+      sendCommand({
+        config,
+        sessionId,
+        taskId,
+        messageId,
+        command,
+        toolCallId,
+      })
+        .then(() => {
+        })
+        .catch((error) => {
+          clearTimeout(timeout);
+          wsManager.off("data-event", handler);
+          reject(error);
+        });
+    });
+  },
+};

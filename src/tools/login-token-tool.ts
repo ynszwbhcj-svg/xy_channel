@@ -1,0 +1,156 @@
+// Login Token tool - 自动获取用户授权信息
+import { v4 as uuidv4 } from "uuid";
+import type { SessionContext } from "./session-manager.js";
+import { getCurrentSessionContext } from './session-manager.js';
+
+import { readFileSync, writeFileSync, existsSync } from "fs";
+import { logger } from "../utils/logger.js";
+import { sendWsFrame } from "../conversation/outbound-gateway.js";
+import { getCurrentStatusCardSeq } from "../utils/status-card-seq.js";
+import { peekLastSentStreamingTextId, getOrCreateStreamingTextId } from "../utils/streaming-text-id.js";
+import { isReasoningFinished as readReasoningFinished } from "../utils/reasoning-state.js";
+import { isLegacyAppVersion } from "../utils/app-version.js";
+
+const TOKEN_FILE_PATH = "/home/sandbox/.openclaw/.xiaoyitoken.json";
+const POLL_INTERVAL_MS = 5000; // 5 seconds
+const TIMEOUT_MS = 60000; // 1 minute
+const TOKEN_VALIDITY_MS = 5 * 60 * 1000; // 5 minutes
+
+/**
+ * huawei_id_tool 工具
+ * 当 skill 依赖用户获取鉴权信息时，此工具协助用户快速获取鉴权信息。
+ */
+export const loginTokenTool = {
+  name: "huawei_id_tool",
+  label: "Get Login Token",
+  description: "获取用户授权信息。当skill需要用户鉴权时调用此工具，工具会向用户端发送授权请求，等待用户完成授权后返回结果。请勿重复调用此工具。",
+  parameters: {
+    type: "object",
+    properties: {
+      clientId: {
+        type: "string",
+        description: "账号服务唯一标识，在执行具体skill过程中会提供",
+      },
+      skillName: {
+        type: "string",
+        description: "具体skill的名称",
+      },
+    },
+    required: ["clientId", "skillName"],
+  },
+
+  async execute(toolCallId: string, params: any) {
+    const _c = getCurrentSessionContext();
+    const { config, sessionId, taskId, messageId } = _c;
+const { clientId, skillName } = params;
+
+    if (!clientId || typeof clientId !== "string" || clientId.trim() === "") {
+      throw new Error("Missing required parameter: clientId must be a non-empty string");
+    }
+    if (!skillName || typeof skillName !== "string" || skillName.trim() === "") {
+      throw new Error("Missing required parameter: skillName must be a non-empty string");
+    }
+
+
+    // (1) Build and send getLoginToken artifact
+    // lastChunk=false：本帧是 getLoginToken 请求（非文本块终点）。
+    // 经 outbound-gateway 收口发送（统一信封 + A2A-OUT 日志覆盖、受开关控制）；
+    // 信封字段与其它出站帧对齐：taskUniqId/taskUniqIndexId 取当前状态卡序号，
+    // streamingTextId 跟随最后已发帧（命令类帧不引入端侧未见的新 id），
+    // isNew 按版本链路判定（原先硬编码 true，低版本链路会误标）。
+    const artifactId = uuidv4();
+    const payload = {
+      jsonrpc: "2.0",
+      id: messageId,
+      result: {
+        taskId,
+        taskUniqId: taskId,
+        taskUniqIndexId: getCurrentStatusCardSeq(taskId),
+        kind: "artifact-update",
+        isNew: !isLegacyAppVersion(taskId),
+        append: false,
+        lastChunk: false,
+        final: false,
+        streamingTextId: peekLastSentStreamingTextId(taskId) ?? getOrCreateStreamingTextId(taskId),
+        isReasoningFinished: readReasoningFinished(taskId),
+        artifact: {
+          artifactId,
+          parts: [
+            {
+              kind: "getLoginToken",
+              clientId: clientId.trim(),
+              skillName: skillName.trim(),
+            },
+          ],
+        },
+      },
+    };
+
+    logger.log(`[LOGIN_TOKEN] Sending getLoginToken artifact for clientId=${clientId}, skillName=${skillName}`);
+    await sendWsFrame({ config, sessionId, taskId, payload });
+    logger.log(`[LOGIN_TOKEN] Artifact sent successfully`);
+
+    // (2) Poll .xiaoyitoken.json every 5 seconds
+    const startTime = Date.now();
+    return new Promise((resolve) => {
+      const poll = () => {
+        const elapsed = Date.now() - startTime;
+        if (elapsed >= TIMEOUT_MS) {
+          // (4) Timeout after 1 minute
+          logger.log(`[LOGIN_TOKEN] Timeout: failed to get login token for clientId=${clientId}`);
+          resolve({
+            content: [
+              {
+                type: "text",
+                text: "获取用户授权失败",
+              },
+            ],
+          });
+          return;
+        }
+
+        try {
+          if (existsSync(TOKEN_FILE_PATH)) {
+            const content = readFileSync(TOKEN_FILE_PATH, "utf-8");
+            const tokens: Array<{ clientId: string; timestamp: string; code: string; message: string }> = JSON.parse(content);
+            const match = tokens.find((t) => t.clientId === clientId.trim());
+            if (match) {
+              const tokenTime = Number(match.timestamp);
+              const diff = Date.now() - tokenTime;
+              if (diff <= TOKEN_VALIDITY_MS) {
+                // (3) Found valid token
+                const code = match.code ?? "";
+                let resultText: string;
+                if (code === "0" || code === "") {
+                  resultText = "获取用户授权成功";
+                } else if (code === "400") {
+                  resultText = "小艺App版本较低，获取用户授权失败";
+                } else {
+                  resultText = "获取用户授权失败";
+                }
+                logger.log(`[LOGIN_TOKEN] Got login token for clientId=${clientId}, code=${code}`);
+                resolve({
+                  content: [
+                    {
+                      type: "text",
+                      text: resultText,
+                    },
+                  ],
+                });
+                return;
+              }
+            }
+          }
+        } catch (err) {
+          logger.log(`[LOGIN_TOKEN] Error reading token file: ${err}`);
+        }
+
+        // Not found or not valid, poll again after 5 seconds
+        setTimeout(poll, POLL_INTERVAL_MS);
+      };
+
+      // Start polling after 5 seconds
+      setTimeout(poll, POLL_INTERVAL_MS);
+    });
+  },
+};

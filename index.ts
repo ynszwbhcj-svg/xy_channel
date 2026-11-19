@@ -1,0 +1,739 @@
+// Plugin registration entry point
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/core";
+import { definePluginEntry, type OpenClawPluginDefinition } from "openclaw/plugin-sdk/core";
+import { xiaoyiProvider } from "./src/provider.js";
+import { xiaoyiCompactionProvider } from "./src/compaction-provider.js";
+import { xyPlugin } from "./src/channel.js";
+import registerSentinelHook from "./src/cspl/sentinel_hook.js";
+import registerSkillScopeHook from "./plugin-scope/skill_scope_hook.js";
+import { setXYRuntime } from "./src/runtime.js";
+import { markCronToolCall, clearCronToolCall, getCurrentSessionContext, setCronToolRunInfo, clearCronToolRunInfo, isCronActive } from "./src/tools/session-manager.js";
+import { parseCronJobIdFromSessionKey, registerCronToolGuard } from "./src/tools/cron-tool-guard.js";
+import { configManager } from "./src/utils/config-manager.js";
+import { setJobPushId } from "./src/utils/cron-push-map.js";
+import { getAllPushIds } from "./src/utils/pushid-manager.js";
+import { registerSelfEvolutionToolResultNudge } from "./src/self-evolution-tool-result-nudge.js";
+import { createBeforePromptBuildHandler } from "./src/skill-retriever/hooks.js";
+import { normalizeToolRetrieverConfig } from "./src/skill-retriever/config.js";
+import { registerCLIHook } from "./src/tools/hmos-cli.js";
+import { registerToolStatusHook } from "./src/tool-status-hook.js";
+import { registerStepInfoHook } from "./src/tools/step-info-tool.js";
+import { recoverCronState } from "./src/cron-recovery.js";
+import { registerSessionLockGuard } from "./src/session-lock-guard/integration.js";
+import type { CronRecoveryResult } from "./src/cron-recovery.js";
+import { syncScheduledTaskOnCronChanged } from "./src/cron-scheduled-tasks-sync.js";
+import { writeCronRunLog } from "./src/utils/cron-run-logger.js";
+import {
+  writeSkillUsage,
+  classifySkillMdReadPath,
+  markSkillMdRead,
+  suppressPendingSkillMdRead,
+  flushPendingSkillMdReads,
+} from "./src/utils/skills-logger.js";
+import {
+  markSubagentSpawned,
+  markSubagentEnded,
+  deliverSubagentFinalResult,
+} from "./src/conversation/conversation-manager.js";
+import { captureCronAssistantText, notifyCronAgentEnd } from "./src/conversation/cron-buffer.js";
+import { logger, setA2AOutLogEnabled } from "./src/utils/logger.js";
+
+/** A2A-OUT 出站帧日志开关：true 打印 / false 关闭（唯一开关位置，改这里）。
+ *  关闭后所有 [A2A-OUT] 日志被 writeLog 统一拦截丢弃，调用点同步跳过
+ *  组日志字符串的开销（见 src/utils/logger.ts、conversation/outbound-gateway.ts）。 */
+const A2A_OUT_LOG_ENABLED = true;
+setA2AOutLogEnabled(A2A_OUT_LOG_ENABLED);
+
+/** 从路径/文本中提取技能名：.../skills/<name> 或 .../core_skills/<name>。
+ *  与 pc 链路 stepinfo 的提取逻辑一致（dm 仓库 step-info-tool.ts 同款正则）。 */
+function extractSkillNameFromPathText(text: string): string | null {
+  const normalized = text.replace(/\\/g, "/");
+  const m = normalized.match(/(?:^|[/\s"';&|])(?:core_)?skills\/([^/'"\s;&|]+)/i);
+  return m ? m[1] : null;
+}
+
+/**
+ * Register the skills usage logging hook via before_tool_call.
+ *
+ * Detection paths (no dedup — N uses within one turn produce N lines):
+ *  1. read 工具读技能 md 文件：
+ *     - 顶层 SKILL.md：先记为待打点（markSkillMdRead）。同会话随后「exec/bash
+ *       命中该技能路径（进入技能目录执行脚本等）」或「读取该技能内其它 md
+ *       文件」时丢弃（避免与实际使用打点重复）；否则在 turn 结束
+ *       （agent_end / run lifecycle end / session_end）或 10min TTL 到期时
+ *       落盘一次（「查看技能」）。
+ *     - 技能内除顶层 SKILL.md 外的其它 .md：每次 read 立即打点一次，并丢弃
+ *       同会话同技能待打点的 SKILL.md 记录。
+ *  2. Device tool mapping: known device tools (incl. the call_device_tool
+ *     wrapper, resolved via params.toolName) map to their owning skill.
+ *  3. exec/bash command inspection: the command references a skill path
+ *     (.../skills/<name>/... or .../core_skills/<name>/...). `cd` into a
+ *     skill directory is covered by the same path match (the char before
+ *     "skills" is always a boundary: space, slash or quote). 命中的同时丢弃
+ *     同会话同技能的 SKILL.md 待打点。
+ */
+function registerSkillsDiagnosticHook(api: OpenClawPluginApi) {
+  // Skill name → tool names mapping for direct tool-based skill usage logging
+  const SKILL_TOOLS: Record<string, string[]> = {
+    GetCurrentLocation: ["get_user_location"],
+    Schedule: ["create_calendar_event", "search_calendar_event"],
+    memorandum: ["create_note", "search_notes", "modify_note"],
+    gallery: ["search_photo_gallery", "save_media_to_gallery"],
+    contact: ["search_contact"],
+    file: ["search_file", "upload_file", "save_file_to_file_manager"],
+    clock: ["create_alarm", "delete_alarm", "search_alarm", "modify_alarm"],
+    message: ["search_message", "send_message"],
+    phone: ["call_phone"],
+    "xiaoyi-collection": ["add_collection", "query_collection", "delete_collection"],
+    "xiaoyi-image-understanding": ["image_reading"],
+  };
+  // Inverted to tool name → skill name for lookup
+  const TOOL_SKILL_MAP: Record<string, string> = Object.fromEntries(
+    Object.entries(SKILL_TOOLS).flatMap(([skill, tools]) => tools.map((t) => [t, skill])),
+  );
+
+  // Resolve the actual tool name from call_device_tool wrapper.
+  // The model calls call_device_tool({ toolName: "...", arguments: {...} })
+  // — the real tool name is inside params, not event.toolName.
+  function resolveActualToolName(event: { toolName: string; params: Record<string, unknown> }): string {
+    if (event.toolName === "call_device_tool") {
+      const inner = event.params?.toolName;
+      if (typeof inner === "string" && inner.length > 0) return inner;
+    }
+    return event.toolName;
+  }
+
+  // Log skill usage on before_tool_call: read 工具技能 md（延迟/立即）、
+  // device tools via TOOL_SKILL_MAP、exec/bash via skill path detection。
+  api.on("before_tool_call", async (event, ctx) => {
+    const actualToolName = resolveActualToolName(event);
+
+    // 1. read 工具读技能 md 文件
+    if (actualToolName === "read") {
+      const classified = classifySkillMdReadPath(event.params?.path);
+      if (classified?.kind === "skillMd") {
+        // 顶层 SKILL.md：延迟打点，等待后续实际使用抑制或 turn 结束落盘
+        markSkillMdRead(ctx.sessionKey ?? "", classified.skillName);
+      } else if (classified?.kind === "otherSkillMd") {
+        // 技能内其它 md：每次 read 立即打点，并抑制同技能 SKILL.md 待打点
+        writeSkillUsage(classified.skillName);
+        suppressPendingSkillMdRead(ctx.sessionKey ?? "", classified.skillName);
+      }
+      return;
+    }
+
+    // 2. Device tool → owning skill
+    const mappedSkill = TOOL_SKILL_MAP[actualToolName];
+    if (mappedSkill) {
+      writeSkillUsage(mappedSkill);
+      return;
+    }
+
+    // 3. exec/bash command references a skill path (incl. cd into skill dir)
+    if (actualToolName === "exec" || actualToolName === "bash") {
+      const command = event.params?.command;
+      if (typeof command !== "string" || command.length === 0) return;
+      const skillName = extractSkillNameFromPathText(command);
+      if (skillName) {
+        writeSkillUsage(skillName);
+        // 读 SKILL.md 后的实际使用：抑制同会话同技能的 SKILL.md 待打点
+        suppressPendingSkillMdRead(ctx.sessionKey ?? "", skillName);
+      }
+    }
+  });
+
+  // SKILL.md 待打点的落盘时机：agent_end（仅 dispatch-from-config 路径触发；
+  // cron isolated run 不触发它，故同时订阅 embedded run 的 lifecycle 事件，
+  // phase=end 按 sessionKey flush——两条信号幂等）+ session_end / gateway_stop
+  // 兜底；再久无信号的由 skills-logger 内 10min TTL 兜底。
+  api.on("agent_end", async (_event, ctx) => {
+    try {
+      if (ctx.sessionKey) flushPendingSkillMdReads(ctx.sessionKey);
+    } catch (err) {
+      logger.error("[XY-SKILLS-LOG] agent_end flush failed:", err);
+    }
+  });
+
+  api.on("session_end", async (_event, ctx) => {
+    try {
+      if (ctx.sessionKey) flushPendingSkillMdReads(ctx.sessionKey);
+    } catch (err) {
+      logger.error("[XY-SKILLS-LOG] session_end flush failed:", err);
+    }
+  });
+
+  api.on("gateway_stop", async () => {
+    try {
+      flushPendingSkillMdReads();
+    } catch (err) {
+      logger.error("[XY-SKILLS-LOG] gateway_stop flush failed:", err);
+    }
+  });
+
+  api.agent.events.registerAgentEventSubscription({
+    id: "xy-skills-usage-flush",
+    description: "Flush deferred SKILL.md read usage records on run lifecycle end",
+    streams: ["lifecycle"],
+    handle: (event) => {
+      try {
+        if (event.stream !== "lifecycle" || event?.data?.phase !== "end") return;
+        const sessionKey = event?.sessionKey ?? "";
+        if (sessionKey) flushPendingSkillMdReads(sessionKey);
+      } catch (err) {
+        logger.error("[XY-SKILLS-LOG] lifecycle-end flush failed:", err);
+      }
+    },
+  });
+}
+
+/**
+ * Register the cron detection hook.
+ *
+ * When openclaw's cron runner triggers a tool call, the sessionKey has the
+ * format "cron:<jobId>"（或 agent 展开后的 `agent:<id>:cron:<jobId>:run:<ts>`）。
+ * We use this to mark the toolCallId in a global Map
+ * so that sendCommand() can route the command through the push channel
+ * instead of the (non-existent) WebSocket session.
+ */
+function registerCronDetectionHook(api: OpenClawPluginApi) {
+  api.on("before_tool_call", async (event, ctx) => {
+    // sessionKey 前缀依赖 openclaw 版本行为，不一定可靠；isCronActive(jobId)
+    // 按 jobId 精确判断（provider 已从消息 [cron:...] 标记过该 job），替代
+    // 原先的全局 120s 时间戳，避免把普通对话/其它 job 的工具调用误判为 cron。
+    const sessionKey = ctx.sessionKey ?? "";
+    const sessionJobId = parseCronJobIdFromSessionKey(sessionKey);
+    if ((sessionKey.includes("cron:") || isCronActive(sessionJobId)) && event.toolCallId) {
+      markCronToolCall(event.toolCallId);
+      // 存储 runId，供 call_device_tool 在 ALS 缺失时构造合成 SessionContext
+      if (event.runId) {
+        setCronToolRunInfo(event.toolCallId, event.runId);
+      }
+    }
+  });
+
+  api.on("after_tool_call", async (event, ctx) => {
+    if (event.toolCallId) {
+      clearCronToolCall(event.toolCallId);
+      clearCronToolRunInfo(event.toolCallId);
+    }
+    // 捕获对话创建的 cron job：agent 调 cron(add) 后，从 result 拿 jobId，
+    // 配合当前会话的 pushId，写入 jobId↔pushId 映射，供 fire 时反查设备。
+    await captureCronAddMapping(event, ctx).catch((err) => {
+      // 捕获失败不影响工具结果
+      console.error("[xy] captureCronAddMapping failed:", err);
+    });
+  });
+}
+
+/** 从 cron add 工具结果中提取 jobId 并写入 pushId 映射。 */
+async function captureCronAddMapping(
+  event: { toolName?: string; params?: Record<string, unknown>; result?: unknown },
+  ctx: { sessionKey?: string },
+): Promise<void> {
+  // 两条创建路径都要捕获：
+  //   1) cron agent 工具：toolName==="cron", params.action==="add"
+  //   2) exec 跑 CLI：toolName==="exec", params.command 含 "cron add"
+  //      （agent 实际用的是这条：openclaw cron add --name ... --cron ... --message ...）
+  const isCronAddTool =
+    event.toolName === "cron" &&
+    (event.params?.action === "add" || event.params?.action === "create");
+  const isExecCronAdd =
+    event.toolName === "exec" && isExecCronAddCommand(event.params?.command);
+
+  if (!isCronAddTool && !isExecCronAdd) return;
+
+  console.log(
+    `[CRONMAP] after_tool_call path=${event.toolName}, resultType=${typeof event.result}`,
+  );
+
+  const jobId = readJobIdFromResult(event.result);
+  if (!jobId) {
+    console.log(`[CRONMAP] skip: could not extract jobId. preview=${preview(event.result)}`);
+    return;
+  }
+  console.log(`[CRONMAP] extracted jobId=${jobId}`);
+
+  const sessionCtx = getCurrentSessionContext();
+  const sessionId = sessionCtx?.sessionId;
+  if (!sessionId) {
+    console.log(`[CRONMAP] skip: no sessionId in ALS scope (ctxFound=${!!sessionCtx})`);
+    return;
+  }
+
+  const pushId = await resolvePushId(sessionId);
+  if (!pushId) {
+    console.log(`[CRONMAP] skip: no pushId available for sessionId=${sessionId} (no session match, no global, no file)`);
+    return;
+  }
+
+  console.log(`[CRONMAP] writing map: jobId=${jobId}, sessionId=${sessionId}, pushId=${pushId.substring(0, 16)}...`);
+  await setJobPushId(jobId, {
+    pushId,
+    sessionId,
+    deviceType: sessionCtx?.deviceType,
+    source: event.toolName === "exec" ? "exec-cli" : "conversation",
+  });
+  console.log(`[CRONMAP] map written OK`);
+}
+
+/** 回退链取 pushId：当前会话 → 全局兜底 → 本地文件首个（保底）。 */
+async function resolvePushId(sessionId: string): Promise<string | null> {
+  // 1. 同会话
+  const session = configManager.getPushId(sessionId);
+  if (session) return session;
+  // 2. 全局（任何会话注册过的）
+  const global = configManager.getPushId();
+  if (global) return global;
+  // 3. 文件兜底
+  try {
+    const all = await getAllPushIds();
+    if (all.length > 0) return all[0];
+  } catch {
+    // ignore
+  }
+  return null;
+}
+
+/** 判断 exec 命令是否为 cron add（匹配 "openclaw cron add" 或裸 "cron add"，排除 list/remove 等）。 */
+function isExecCronAddCommand(command: unknown): boolean {
+  if (typeof command !== "string") return false;
+  return /\bcron\s+add\b/.test(command);
+}
+
+/** 取结果的短预览，用于诊断。 */
+function preview(value: unknown): string {
+  if (value == null) return String(value);
+  const s = typeof value === "string" ? value : JSON.stringify(value);
+  return s.length > 200 ? s.slice(0, 200) + "…" : s;
+}
+
+/** 防御性地从 cron add 结果中取 job id。
+ *  覆盖：裸 job 对象、JSON 字符串、exec 输出文本、
+ *  {content:[{text}]} / {stdout} / data/result/job 嵌套。 */
+function readJobIdFromResult(result: unknown): string | undefined {
+  if (!result) return undefined;
+
+  // {content: [{type:"text", text: "..."}]} — exec 工具的输出信封
+  if (result && typeof result === "object") {
+    const contentArr = (result as { content?: unknown }).content;
+    if (Array.isArray(contentArr)) {
+      for (const item of contentArr) {
+        if (item && typeof item === "object") {
+          const text = (item as { text?: unknown }).text;
+          if (typeof text === "string" && text.trim()) {
+            const fromContent = readJobIdFromResult(text);
+            if (fromContent) return fromContent;
+          }
+        }
+      }
+    }
+  }
+
+  // {stdout} — 备选 exec 输出信封
+  if (result && typeof result === "object") {
+    const stdout = (result as { stdout?: unknown }).stdout;
+    if (typeof stdout === "string" && stdout.trim()) {
+      const fromStdout = readJobIdFromResult(stdout);
+      if (fromStdout) return fromStdout;
+    }
+  }
+
+  let obj: unknown = result;
+  if (typeof result === "string") {
+    try {
+      obj = JSON.parse(result);
+    } catch {
+      // 纯文本：可能含 stderr 前缀行 + JSON。用正则抓 "id":"..."。
+      const m = result.match(/"id"\s*:\s*"([^"]+)"/);
+      if (m) return m[1];
+      return undefined;
+    }
+  }
+  if (obj && typeof obj === "object") {
+    const id = (obj as { id?: unknown }).id;
+    if (typeof id === "string" && id.trim()) return id.trim();
+    for (const k of ["data", "result", "job"] as const) {
+      const inner = (obj as Record<string, unknown>)[k];
+      if (inner && typeof inner === "object") {
+        const innerId = (inner as { id?: unknown }).id;
+        if (typeof innerId === "string" && innerId.trim()) return innerId.trim();
+      }
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Register the cron run logging hook.
+ *
+ * Gateway 的 CronService 在 job 生命周期变化时触发 cron_changed 插件 hook；
+ * 仅 action === "finished" 携带本次执行的结果字段（status/durationMs/
+ * runAtMs/nextRunAtMs/sessionId/model），added/updated/removed/started 不记。
+ * 每个执行结束的 run 写一行到 /tmp/openclaw/cron-YYYYMMDD.log。
+ */
+function registerCronRunLogHook(api: OpenClawPluginApi) {
+  api.on("cron_changed", async (event) => {
+    try {
+      if (event.action !== "finished") return;
+      writeCronRunLog({
+        jobId: event.jobId,
+        name: event.job?.name ?? null,
+        createdAtMs: event.job?.createdAtMs ?? null,
+        status: event.status ?? null,
+        durationMs: event.durationMs ?? null,
+        runAtMs: event.runAtMs ?? null,
+        nextRunMs: event.nextRunAtMs ?? null,
+        sessionId: event.sessionId ?? null,
+        model: event.model ?? null,
+        error: event.error ?? null,
+      });
+    } catch (err) {
+      logger.error(`[XY-CRON-LOG] Error in cron_changed run-log hook:`, err);
+    }
+  });
+}
+
+// ── Gateway startup: cron state recovery ────────────────────────────────────
+
+/**
+ * Register the gateway_start hook for cron state recovery.
+ *
+ * On gateway startup, checks .openclaw/cron/ for legacy JSON/JSONL files
+ * and migrates them into the SQLite state database:
+ *  - Reads legacy jobs.json + jobs-state.json → imports into cron_jobs table
+ *  - Reads legacy runs/*.jsonl → imports into cron_run_logs table
+ *  - Archives migrated files with .migrated suffix
+ *
+ * Pattern follows legacy-store-migration.ts and legacy-run-log-migration.ts:
+ * check → load → import into SQLite → archive old files.
+ */
+function registerCronRecoveryHook(api: OpenClawPluginApi): void {
+  api.on("gateway_start", async (_event: unknown, _ctx: unknown) => {
+    const logTag = "[CRON-RECOVERY-HOOK]";
+    const startTime = Date.now();
+    logger.log(`${logTag} ═══════════════════════════════════════════`);
+    logger.log(`${logTag} gateway_start fired — checking for legacy cron files`);
+    logger.log(`${logTag} Timestamp: ${new Date().toISOString()}`);
+    logger.log(`${logTag} Plugin registration mode: ${api.registrationMode ?? "unknown"}`);
+
+    let result: CronRecoveryResult;
+    try {
+      result = await recoverCronState();
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      const errStack = err instanceof Error ? err.stack : undefined;
+      logger.error(`${logTag} cron state recovery threw: ${errMsg}`);
+      if (errStack) logger.error(`${logTag} Stack: ${errStack}`);
+      // Don't let a recovery failure block gateway startup.
+      logger.log(
+        `${logTag} Recovery failed after ${Date.now() - startTime}ms — gateway startup continues`,
+      );
+      return;
+    }
+
+    const elapsed = Date.now() - startTime;
+
+    if (result.recovered) {
+      logger.log(
+        `${logTag} ✅ Migration performed successfully in ${elapsed}ms:` +
+          ` storeMigrated=${result.storeMigrated}, ` +
+          ` runLogFilesImported=${result.runLogFilesImported}`,
+      );
+    } else {
+      logger.log(
+        `${logTag} ℹ️ No legacy cron files migrated in ${elapsed}ms ` +
+          `(nothing to migrate or database unavailable)`,
+      );
+    }
+
+    // Log diagnostics summary
+    const warnings = result.diagnostics.filter((d) =>
+      d.includes("skipping") || d.includes("locked") || d.includes("unavailable"),
+    );
+    const errors = result.diagnostics.filter((d) =>
+      d.includes("error") || d.includes("failed") || d.includes("Failed"),
+    );
+
+    if (warnings.length > 0) {
+      logger.warn(
+        `${logTag} ${warnings.length} warning(s) from migration:`,
+      );
+      for (const w of warnings) {
+        logger.warn(`${logTag}   ⚠ ${w}`);
+      }
+    }
+
+    if (errors.length > 0) {
+      logger.error(
+        `${logTag} ${errors.length} error(s) from migration:`,
+      );
+      for (const e of errors) {
+        logger.error(`${logTag}   ✗ ${e}`);
+      }
+    }
+
+    if (warnings.length === 0 && errors.length === 0) {
+      logger.log(`${logTag} All diagnostics clean, no warnings or errors`);
+    }
+
+    logger.log(`${logTag} ═══════════════════════════════════════════`);
+  });
+}
+
+// ── Cron lifecycle: cron_changed hook ──────────────────────────────────────
+
+/**
+ * Register the cron_changed hook.
+ *
+ * openclaw 的 gateway 在 cron 任务生命周期变化（added/updated/removed/
+ * started/finished）时发射该钩子。这里只保留任务变更云端同步；执行结果
+ * 打点由 registerCronRunLogHook（cron-YYYYMMDD.log）承担，全量上下文
+ * dump 日志已移除（过于啰嗦，排查价值被精简打点覆盖）。
+ */
+function registerCronChangedHook(api: OpenClawPluginApi): void {
+  api.on("cron_changed", async (event, _ctx) => {
+    // 任务变更同步到云端（added/updated/removed/finished；内部全 try/catch）
+    await syncScheduledTaskOnCronChanged(event);
+  });
+}
+
+/**
+ * 从 sessions_spawn 工具结果中提取 ACP child sessionKey。
+ * 兼容三种 result 形态：{status, childSessionKey} 直返、JSON 字符串、
+ * {content:[{text: "<json>"}], details:{...}} 工具信封。
+ * 仅接受 status="accepted" 且 key 形如 agent:<id>:acp:<uuid> 的结果。
+ */
+function extractAcceptedAcpChildSessionKey(result: unknown): string | null {
+  const pick = (obj: unknown): string | null => {
+    if (!obj || typeof obj !== "object") return null;
+    const record = obj as Record<string, unknown>;
+    if (record.status !== "accepted") return null;
+    const key = record.childSessionKey;
+    return typeof key === "string" && key.includes(":acp:") ? key : null;
+  };
+
+  const direct = pick(result);
+  if (direct) return direct;
+
+  const envelope = result as { details?: unknown; content?: Array<{ text?: unknown }> } | null;
+  const fromDetails = pick(envelope?.details);
+  if (fromDetails) return fromDetails;
+
+  if (Array.isArray(envelope?.content)) {
+    for (const item of envelope.content) {
+      if (typeof item?.text !== "string") continue;
+      try {
+        const fromText = pick(JSON.parse(item.text));
+        if (fromText) return fromText;
+      } catch {
+        // 非 JSON 文本，忽略
+      }
+    }
+  }
+
+  if (typeof result === "string") {
+    try {
+      return pick(JSON.parse(result));
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+function registerSubagentHooks(api: OpenClawPluginApi) {
+  // subagent_spawned: fires after a subagent run is successfully registered.
+  // We increment the expected completion count so that onIdle knows to wait.
+  api.on("subagent_spawned", async (_event, ctx) => {
+    const requesterSessionKey = ctx?.requesterSessionKey;
+    if (!requesterSessionKey) return;
+    const count = markSubagentSpawned(requesterSessionKey);
+    if (count > 0) {
+      logger.log(`[XY-SUBAGENT] spawned, requesterSessionKey=${requesterSessionKey.slice(0, 30)}, expected=${count}`);
+    }
+  });
+
+  // ACP SPAWN TRACKING: openclaw 的 subagent_spawned hook 仅由内嵌 subagent
+  // 路径（subagent-spawn.ts）发射；acp-spawn.ts（runtime="acp"，如 Claude Code）
+  // 不发射 —— 实测 ACP run 仅在结束时经 run registry 触发 subagent_ended，
+  // 导致等待态从未建立、父 turn onIdle 直接发 final 结束对话。
+  // 因此在 after_tool_call 补记：sessions_spawn 成功且 childSessionKey 为 ACP
+  // 形态时递增等待计数。内嵌 subagent 的 childKey 形如 agent:<id>:subagent:<id>，
+  // 不命中此分支，仍由 subagent_spawned hook 负责，不会重复计数。
+  api.on("after_tool_call", async (event, ctx) => {
+    try {
+      if (event?.toolName !== "sessions_spawn" || event?.error) return;
+      const childKey = extractAcceptedAcpChildSessionKey(event?.result);
+      if (!childKey) return;
+      const sessionKey = ctx?.sessionKey;
+      if (!sessionKey) return;
+      const count = markSubagentSpawned(sessionKey);
+      if (count > 0) {
+        logger.log(`[XY-SUBAGENT] ACP spawned, childSessionKey=${childKey.slice(0, 40)}, expected=${count}`);
+      }
+    } catch (err) {
+      logger.error(`[XY-SUBAGENT] Error tracking ACP spawn:`, err);
+    }
+  });
+
+  // subagent_ended: fires when a subagent run terminates (complete/error/killed).
+  // This is the PRIMARY delivery tracking mechanism. When all expected
+  // subagents have ended and parent has settled, we finalize the A2A session.
+  api.on("subagent_ended", async (event, ctx) => {
+    try {
+      const requesterSessionKey = ctx?.requesterSessionKey;
+      if (!requesterSessionKey) {
+        logger.log(`[XY-SUBAGENT-END] no requesterSessionKey in ctx`);
+        return;
+      }
+      const transition = markSubagentEnded(requesterSessionKey);
+      logger.log(`[XY-SUBAGENT-END] ended, targetSessionKey=${event?.targetSessionKey?.slice(0, 30)}, outcome=${event?.outcome}, complete=${transition?.isComplete ?? false}, shouldFinalize=${transition?.shouldFinalize ?? false}, transition=${!!transition}`);
+
+      if (transition?.shouldFinalize) {
+        logger.log(`[XY-SUBAGENT-END] Starting finalization...`);
+        // Grace: announce 投递的 sendText 与 subagent_ended hook 并发到达
+        // （实测 sendText 可能先于 hook 约 1s，也可能晚于 hook；长文本还会
+        // 被 textChunkLimit 分片成多次 sendText）。捕获窗口直到
+        // finalDeliveryStarted 才关闭，此处的等待直接扩大迟到来片的入窗机会。
+        await new Promise((r) => setTimeout(r, 3000));
+        // 最终交付由对话管理层统一负责（含 config 解析、final 帧、清理）
+        await deliverSubagentFinalResult({
+          state: transition.state,
+          reason: "all-subagents-ended-after-parent-settled",
+        });
+        logger.log(`[XY-SUBAGENT-END] Finalized A2A session after all subagents ended`);
+      }
+    } catch (err) {
+      logger.error(`[XY-SUBAGENT-END] Error in subagent_ended hook:`, err);
+    }
+  });
+}
+
+function registerFullHooks(api: OpenClawPluginApi) {
+  // SUBAGENT HOOKS: track subagent spawn/end lifecycle for session keep-alive
+  registerSubagentHooks(api);
+
+  // CRON AGGREGATION: 通过 agent 事件总线收集 cron isolated run 的每轮
+  // assistant 正文并感知结束。announce 只携带最后一条 assistant 文本，正文后
+  // 若还有工具调用/补充说明，仅监听 sendText 会丢失前序正文。
+  // 注意：agent_end 插件 hook 只在 dispatch-from-config 路径触发，cron
+  // isolated run 不会触发它；embedded run 的 lifecycle 事件才是可靠信号。
+  api.agent.events.registerAgentEventSubscription({
+    id: "xy-cron-turn-tracker",
+    description: "Aggregate cron assistant text and track run completion",
+    streams: ["lifecycle", "assistant"],
+    handle: (event) => {
+      try {
+        const sessionKey = event?.sessionKey ?? "";
+        // 从 sessionKey（agent:<id>:cron:<jobId>:run:<ts>）解析 jobId，只处理
+        // 该 job 的 turn；isCronActive(jobId) 作为无 cron 前缀版本的兜底（按
+        // jobId 精确判断，普通对话的 assistant/lifecycle 不会命中）。
+        const cronJobId = parseCronJobIdFromSessionKey(sessionKey);
+        if (!sessionKey.includes("cron:") && !sessionKey.startsWith("cron:") && !isCronActive(cronJobId)) return;
+
+        if (event.stream === "assistant") {
+          captureCronAssistantText(
+            cronJobId,
+            typeof event.data?.text === "string" ? event.data.text : undefined,
+            event.data?.replace === true,
+          );
+          return;
+        }
+
+        // 仅 phase=end 是 run 级终态信号；phase=error 可能是单次模型调用
+        // 失败（后续还有重试/start），不能据此放行 announce。
+        // 真正失败的 run（无 end）由 120s 安全超时兜底 flush 缓冲文本。
+        if (event.stream !== "lifecycle" || event?.data?.phase !== "end") return;
+        logger.log(`[XY-CRON] Cron run lifecycle end, sessionKey=${sessionKey || "unknown"}, jobId=${cronJobId ?? "-"}`);
+        notifyCronAgentEnd(cronJobId);
+      } catch (err) {
+        logger.error(`[XY-CRON] Error in cron event subscription:`, err);
+      }
+    },
+  });
+
+  // SKILL RETRIEVER HOOK: before_prompt_build hook
+  const pluginConfig = (api as { pluginConfig?: unknown }).pluginConfig as Record<string, unknown> || {};
+  const skillRetrieverConfig = normalizeToolRetrieverConfig({
+    enabled: pluginConfig.skillRetrieverEnabled ?? true,
+    maxTools: pluginConfig.skillRetrieverMaxTools ?? 6,
+    includeUninstalledOnly: true,
+    envFilePath: "~/.openclaw/.xiaoyienv",
+    timeoutMs: pluginConfig.skillRetrieverTimeoutMs ?? 10000,
+  });
+  const beforePromptBuildHandler = createBeforePromptBuildHandler(skillRetrieverConfig);
+  api.on("before_prompt_build", async (event, ctx) => {
+    logger.log(`[BEFORE_PROMPT_BUILD] hook fired, sessionKey=${ctx.sessionKey || "undefined"}, sessionId=${ctx.sessionId || "undefined"}`);
+    return beforePromptBuildHandler(event, ctx);
+  });
+  registerSelfEvolutionToolResultNudge(api);
+
+  // SESSION LOCK GUARD: 旁路订阅 lifecycle 错误事件，识别会话写锁泄漏并借
+  // supervisord 重启 gateway。不进入 dispatch 主链路，不影响任何响应帧。
+  registerSessionLockGuard(api);
+}
+
+const plugin: OpenClawPluginDefinition = definePluginEntry({
+  id: "xiaoyi-channel",
+  name: "Xiaoyi Channel",
+  description: "Xiaoyi channel plugin - Xiaoyi A2A protocol integration",
+  register(api: OpenClawPluginApi) {
+    // Always register the provider so wrapStreamFn/prepareExtraParams work
+    // in ALL registration modes (not just "full").
+    api.registerProvider(xiaoyiProvider);
+
+    // Register the compaction provider so openclaw's safeguard hook uses
+    // our summarization path (which injects x-hag-trace-id) instead of the
+    // built-in LLM path that bypasses wrapStreamFn.
+    api.registerCompactionProvider(xiaoyiCompactionProvider);
+
+    if (api.registrationMode === "cli-metadata") {
+      return;
+    }
+
+    if (api.registrationMode === "tool-discovery") {
+      registerFullHooks(api);
+      return;
+    }
+
+    // Register channel plugin and set runtime
+    api.registerChannel({ plugin: xyPlugin });
+    setXYRuntime(api.runtime);
+
+    if (api.registrationMode === "discovery") {
+      return;
+    }
+
+    if (api.registrationMode === "full") {
+      registerFullHooks(api);
+      // CSPL sentinel hook: before_tool_call + after_tool_call security scanning
+      registerSentinelHook(api);
+      // Skill scope hook: before_install 云端安全扫描（skill/plugin 安装前预检，
+      // 扫描 REJECT 阻断；扫描异常 skill 放行、plugin 阻断；内核侧对 hook 异常 fail-closed）
+      registerSkillScopeHook(api);
+      // Cron tool guard: rejects unsupported tools before they can produce side effects
+      registerCronToolGuard(api);
+      // Cron detection hook: marks toolCallIds from cron sessions
+      registerCronDetectionHook(api);
+      // CLI exec hook: intercepts built-in exec for HarmonyOS CLI skill tools
+      registerCLIHook(api);
+      // Cron recovery hook: prunes stale cron-push-map and pushData on gateway startup
+      registerCronRecoveryHook(api);
+      // Cron lifecycle hook: sync scheduled-task changes to cloud on cron_changed
+      registerCronChangedHook(api);
+      // Cron run log hook: write one line per finished cron run to /tmp/openclaw/cron-*.log
+      registerCronRunLogHook(api);
+      // Skills usage logging hook: device tool mapping + exec/bash skill path detection
+      registerSkillsDiagnosticHook(api);
+      // Tool status hook: push 「正在使用工具：xxx」status-update frame on every tool call
+      registerToolStatusHook(api);
+      // Step-info hook (skill usage merged in): push Common/StepInfo command on
+      // every classified tool call/result (tool_call 带 arguments,
+      // tool_result 带 success+result), and Common/Skill skill commands on
+      // cd-into-skill-dir / SKILL.md reads (查看技能/使用技能)
+      registerStepInfoHook(api);
+    }
+  },
+});
+
+export default plugin;

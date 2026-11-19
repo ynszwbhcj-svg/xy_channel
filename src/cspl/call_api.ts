@@ -1,0 +1,151 @@
+/*
+ * 版权所有 (c) 华为技术有限公司 2026-2026
+ */
+
+import https from 'https';
+import http from 'http';
+import crypto from 'crypto';
+import {URL} from 'url';
+
+import type {OpenClawPluginApi} from 'openclaw/plugin-sdk/core';
+
+import {getConfig} from './config.js';
+import { logger } from '../utils/logger.js';
+import {
+    ApiResponse,
+    HttpHeaders,
+    DEFAULT_HTTPS_PORT,
+    DEFAULT_HTTP_PORT,
+    HTTP_STATUS_BAD_REQUEST,
+    API_URL_SUFFIX,
+    MAX_TRACE_ID_LENGTH
+} from './constants.js';
+
+// 安全扫描接口 trace-id：sessionId 非空时按新接口约定以 '_' 拼接毫秒时间戳保证唯一性，
+// sessionId 为空时降级为 uuid，超过 MAX_TRACE_ID_LENGTH 截断
+export function buildTraceId(sessionId: string): string {
+    const traceId = sessionId ? `${sessionId}_${Date.now()}` : crypto.randomUUID();
+    return traceId.length > MAX_TRACE_ID_LENGTH ? traceId.substring(0, MAX_TRACE_ID_LENGTH) : traceId;
+}
+
+function buildHeadersForCelia(config: { uid: string; apiKey: string; skillId: string; requestFrom: string }, sessionId: string, interactionId?: string): HttpHeaders {
+    if (!config.uid || !config.apiKey || !config.skillId || !config.requestFrom) {
+        throw new Error('[SENTINEL HOOK] Missing required configuration: uid, apiKey, skillId, or requestFrom is not defined');
+    }
+    // requestId = {x-session-id}_{x-interaction-id}，同时作为 x-hag-trace-id；
+    // 无 interactionId 时（如 skill 安装扫描）按原规则生成兜底 trace-id
+    const requestId = interactionId ? `${sessionId}_${interactionId}` : buildTraceId(sessionId);
+    // 每次请求打印 requestId 日志
+    logger.log(`[SENTINEL HOOK] requestId:${requestId}`);
+    return {
+        'x-hag-trace-id': requestId.length > MAX_TRACE_ID_LENGTH ? requestId.substring(0, MAX_TRACE_ID_LENGTH) : requestId,
+        'x-uid': config.uid,
+        'x-api-key': config.apiKey,
+        'x-request-from': config.requestFrom,
+        'x-skill-id': config.skillId,
+        'X-businessid': 'XIAOYI_CLAW',
+        'x-session-id': sessionId,
+        ...(interactionId ? { 'x-interaction-id': interactionId } : {}),
+        'content-type': 'application/json'
+    };
+}
+
+function buildRequestOptions(url: string, headers: HttpHeaders, timeout: number) {
+    const urlObj = new URL(url);
+    return {
+        hostname: urlObj.hostname,
+        port: urlObj.port || (urlObj.protocol === 'https:' ? DEFAULT_HTTPS_PORT : DEFAULT_HTTP_PORT),
+        path: urlObj.pathname,
+        method: "POST",
+        headers: headers,
+        timeout: timeout
+    };
+}
+
+function checkHttpStatus(res: http.IncomingMessage): void {
+    if (res.statusCode && res.statusCode >= HTTP_STATUS_BAD_REQUEST) {
+        throw new Error(`HTTP error! status: ${res.statusCode}`);
+    }
+}
+
+function parseResponseData(data: string): ApiResponse | string {
+    try {
+        if (data === undefined || data === null || data.trim() === '') {
+            throw new Error('API response data is empty or invalid');
+        }
+        const jsonData = JSON.parse(data);
+
+        if (jsonData.retCode && jsonData.retCode !== "0") {
+            const errorMsg = jsonData.retMsg || 'Unknown API error';
+            throw new Error(`API error: ${errorMsg}`);
+        }
+
+        if (!jsonData.retCode && jsonData.code) {
+            const errorMsg = jsonData.desc || 'Unknown backend error';
+            throw new Error(`Backend error: ${errorMsg}`);
+        }
+
+        return jsonData;
+    } catch (e) {
+        if (e instanceof Error) {
+            throw new Error(`[SENTINEL HOOK] Failed to parse response：${e.message}`);
+        }
+        return data;
+    }
+}
+
+function handleResponse(
+    res: http.IncomingMessage, resolve: (value: ApiResponse | string) => void, reject: (reason?: any) => void): void {
+    let data = '';
+
+    try {
+        checkHttpStatus(res);
+    } catch (e) {
+        reject(e)
+    }
+
+    res.on('data', (chunk) => {
+        data += chunk;
+    });
+
+    res.on('end', () => {
+        try {
+            const result = parseResponseData(data);
+            resolve(result);
+        } catch (e) {
+            reject(e);
+        }
+    });
+}
+
+// 风控 IF1 接口请求体（扁平结构，由 payload 构建函数完整组装，callApi 不再注入额外字段）
+// interactionId：本轮交互标识（taskId 第一个&和第二个&之间的值），作为 x-interaction-id 头
+export async function callApi(payload: object, api: OpenClawPluginApi, sessionId: string, interactionId?: string): Promise<ApiResponse> {
+    const config = getConfig(api);
+
+    const headersForCelia = buildHeadersForCelia(config, sessionId, interactionId);
+
+    const httpBody = JSON.stringify(payload);
+
+    const apiUrl = `${config.api.url}${API_URL_SUFFIX}`;
+
+    return new Promise((resolve, reject) => {
+        const options = buildRequestOptions(apiUrl, headersForCelia as HttpHeaders, config.api.timeout);
+        const protocol = apiUrl.startsWith('https://') ? https : http;
+        const req = protocol.request(options, (res) => {
+            handleResponse(res, resolve, reject);
+        });
+
+        req.on('error', (error) => {
+            reject(error);
+        });
+
+        req.on('timeout', () => {
+            req.destroy();
+            reject(new Error('[SENTINEL HOOK] Request timeout'));
+        });
+
+        req.write(httpBody);
+        req.end();
+    });
+}
