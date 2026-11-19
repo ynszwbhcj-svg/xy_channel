@@ -21,6 +21,7 @@ import {
 } from "../conversation/conversation-manager.js";
 import { startLegacyStatusHeartbeat, stopLegacyStatusHeartbeat, deliverLegacySubagentFinalResult } from "./keepalive.js";
 import { StreamAssembler } from "../conversation/stream-assembler.js";
+import { computeBodyDelta, computeReasoningDelta, releaseDeltaTextTracker } from "../utils/delta-text-tracker.js";
 
 // ⚙️ 前缀是 openclaw 系统消息稳定标记（infra/system-message.ts SYSTEM_MARK）。
 // ACP 绑定会话 turn 结束会以 kind=final 尾随投递系统诊断通知（如
@@ -345,24 +346,27 @@ export function createLegacyReplyDispatcher(params: CreateXYReplyDispatcherParam
           hasSentResponse = true;
 
           // 非流式回退路径（onPartialReply 未触发时，如 ACP 绑定会话），
-          // 同样经出站队列保序；与流式帧同 coalesceKey，可被后续全量帧合并。
+          // 同样经出站队列保序。低版本链路增量下发：帧只携带相对已下发
+          // 内容的新增部分（append 恒 true，见 utils/delta-text-tracker）。
           const deliverTaskId = getActiveTaskId();
           const deliverMessageId = getActiveMessageId();
-          outboundQueue.enqueue({
-            taskId: deliverTaskId,
-            label: "deliver-fallback",
-            coalesceKey: `partial:${deliverTaskId}`,
-            send: () =>
-              sendA2AResponse({
-                config,
-                sessionId,
-                taskId: deliverTaskId,
-                messageId: deliverMessageId,
-                text,
-                append: false,
-                final: false,
-              }),
-          });
+          const delta = computeBodyDelta(sessionId, text);
+          if (delta.length > 0) {
+            outboundQueue.enqueue({
+              taskId: deliverTaskId,
+              label: "deliver-fallback",
+              send: () =>
+                sendA2AResponse({
+                  config,
+                  sessionId,
+                  taskId: deliverTaskId,
+                  messageId: deliverMessageId,
+                  text: delta,
+                  append: true,
+                  final: false,
+                }),
+            });
+          }
         } catch (deliverError) {
           scopedLog().error(`Failed to deliver message:`, deliverError);
         }
@@ -550,51 +554,38 @@ export function createLegacyReplyDispatcher(params: CreateXYReplyDispatcherParam
                   }),
               });
 
-              // 🔑 最终帧携带权威全文本（append:false 整体替换）—— 流式期间
-              // 缺失的尾部在此补齐。空文本属异常路径，回退旧的空帧语义
-              // （append:true 仅标记流结束），避免把客户端已展示内容刷空。
-              if (fullFinalText) {
-                outboundQueue.enqueue({
-                  taskId: terminalTaskId,
-                  label: "terminal-final",
-                  delayMs: terminalFrameDelayMs,
-                  send: () =>
-                    sendA2AResponse({
-                      config,
-                      sessionId,
-                      taskId: terminalTaskId,
-                      messageId: terminalMessageId,
-                      text: fullFinalText,
-                      append: false,
-                      final: true,
-                    }),
-                });
-              } else {
-                outboundQueue.enqueue({
-                  taskId: terminalTaskId,
-                  label: "terminal-final-empty",
-                  delayMs: terminalFrameDelayMs,
-                  send: () =>
-                    sendA2AResponse({
-                      config,
-                      sessionId,
-                      taskId: terminalTaskId,
-                      messageId: terminalMessageId,
-                      text: "",
-                      append: true,
-                      final: true,
-                    }),
-                });
-              }
+              // 🔑 合并终帧（append:true, final:true）：增量下发语义 —— 帧
+              // 只携带相对已下发内容的尾段（流式缺尾在此补齐，思考和正文同
+              // turn 叠加展示，见 utils/delta-text-tracker）；已发完时为空载
+              // 终帧（仅标记流结束）。异常空文本同样落为空增量。
+              const finalDelta = fullFinalText
+                ? computeBodyDelta(sessionId, fullFinalText)
+                : "";
+              outboundQueue.enqueue({
+                taskId: terminalTaskId,
+                label: "terminal-final",
+                delayMs: terminalFrameDelayMs,
+                send: () =>
+                  sendA2AResponse({
+                    config,
+                    sessionId,
+                    taskId: terminalTaskId,
+                    messageId: terminalMessageId,
+                    text: finalDelta,
+                    append: true,
+                    final: true,
+                  }),
+              });
 
               await outboundQueue.whenIdle();
               finalSent = true;
+              releaseDeltaTextTracker(sessionId);
               if (waitState) {
                 clearWaitState(sessionId, "main-final-delivered", taskId);
               }
               setSessionState(sessionId, "completed");
               scopedLog().log(
-                `[ON-IDLE] Sent final response (${fullFinalText ? `append=false, full text length=${fullFinalText.length}` : "append=true, empty stream-end"})`,
+                `[ON-IDLE] Sent final response (append=true, finalDelta.length=${finalDelta.length})`,
               );
             } catch (err) {
               scopedLog().error(`[ON-IDLE] Failed to send final response:`, err);
@@ -648,7 +639,7 @@ export function createLegacyReplyDispatcher(params: CreateXYReplyDispatcherParam
                     taskId: failureTaskId,
                     messageId: failureMessageId,
                     text: "任务执行异常，请重试~",
-                    append: false,
+                    append: true,
                     final: true,
                     errorCode: 99921111,
                     errorMessage: "任务执行异常，请重试",
@@ -657,6 +648,7 @@ export function createLegacyReplyDispatcher(params: CreateXYReplyDispatcherParam
 
               await outboundQueue.whenIdle();
               finalSent = true;
+              releaseDeltaTextTracker(sessionId);
               setSessionState(sessionId, "failed");
               scopedLog().log(`[ON-IDLE] Sent error response, code=99921111`);
             } catch (err) {
@@ -767,6 +759,10 @@ export function createLegacyReplyDispatcher(params: CreateXYReplyDispatcherParam
         try {
           if (text.length > 0) {
             const reasoningTaskId = getActiveTaskId();
+            // 低版本链路增量下发：SDK 推送思考块级全量快照，帧只携带延伸段
+            // （append 恒 true，同 turn 思考叠加展示，见 utils/delta-text-tracker）
+            const delta = computeReasoningDelta(sessionId, text);
+            if (delta.length === 0) return;
             outboundQueue.enqueue({
               taskId: reasoningTaskId,
               label: "reasoning-stream",
@@ -776,8 +772,8 @@ export function createLegacyReplyDispatcher(params: CreateXYReplyDispatcherParam
                   sessionId,
                   taskId: reasoningTaskId,
                   messageId: getActiveMessageId(),
-                  text,
-                  append: false,
+                  text: delta,
+                  append: true,
                 }),
             });
           }
@@ -811,18 +807,23 @@ export function createLegacyReplyDispatcher(params: CreateXYReplyDispatcherParam
           const partialTaskId = getActiveTaskId();
           const partialMessageId = getActiveMessageId();
 
+          // 低版本链路增量下发：帧只携带相对已下发内容的新增部分
+          // （append 恒 true；增量帧互不相同，不设 coalesceKey 合并 ——
+          // 合并丢帧会丢内容，见 utils/delta-text-tracker）
+          const delta = computeBodyDelta(sessionId, fullText);
+          if (delta.length === 0) return;
+
           outboundQueue.enqueue({
             taskId: partialTaskId,
             label: "partial",
-            coalesceKey: `partial:${partialTaskId}`,
             send: () =>
               sendA2AResponse({
                 config,
                 sessionId,
                 taskId: partialTaskId,
                 messageId: partialMessageId,
-                text: fullText,
-                append: false,
+                text: delta,
+                append: true,
                 final: false,
                 log: false,
               }),

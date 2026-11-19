@@ -15,6 +15,7 @@ import { handleLoginTokenEvent } from "../login-token-handler.js";
 import { handleCronQueryEvent } from "../cron-query-handler.js";
 import { handleMemoryQueryEvent } from "../memory-query-handler.js";
 import { handleUpdateTaskConvIdEvent } from "../update-task-conv-id-handler.js";
+import { handleAgentTopicDeleteEvent } from "../agent-topic-delete-handler.js";
 import { cleanupStaleTempFiles } from "./reply-dispatcher.js";
 import { logger } from "../utils/logger.js";
 
@@ -300,6 +301,13 @@ export async function monitorXYProvider(opts: MonitorXYOpts = {}): Promise<void>
       });
     };
 
+    const agentTopicDeleteEventHandler = (context: any) => {
+      logger.log(`[MONITOR] Received agent-topic-delete-event, dispatching to handler...`);
+      handleAgentTopicDeleteEvent(context, cfg, accountId).catch((err) => {
+        logger.error(`[MONITOR] Failed to handle agent-topic-delete-event:`, err);
+      });
+    };
+
     const cleanup = () => {
       stopped = true;
       logger.log("XY gateway: cleaning up...");
@@ -327,6 +335,7 @@ export async function monitorXYProvider(opts: MonitorXYOpts = {}): Promise<void>
       wsManager.off("cron-query-event", cronQueryEventHandler);
       wsManager.off("memory-query-event", memoryQueryEventHandler);
       wsManager.off("update-task-conv-id-event", updateTaskConvIdEventHandler);
+      wsManager.off("agent-topic-delete-event", agentTopicDeleteEventHandler);
 
       // ✅ Disconnect the wsManager to prevent connection leaks
       // This is safe because each gateway lifecycle should have clean connections
@@ -408,6 +417,7 @@ export async function monitorXYProvider(opts: MonitorXYOpts = {}): Promise<void>
     wsManager.on("cron-query-event", cronQueryEventHandler);
     wsManager.on("memory-query-event", memoryQueryEventHandler);
     wsManager.on("update-task-conv-id-event", updateTaskConvIdEventHandler);
+    wsManager.on("agent-topic-delete-event", agentTopicDeleteEventHandler);
 
     // Start periodic health check (every 6 hours)
     logger.log("Starting periodic health check (every 6 hours)...");

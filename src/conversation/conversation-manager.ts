@@ -28,6 +28,7 @@ import {
 import { sendStatusUpdate, sendA2AResponse, sendDisplayTaskCardData, sendExecuteStatusCard, sendReasoningTextUpdate, sendReference, sendFileArtifacts } from "../formatter.js";
 import { drainPendingReferences, releasePendingReferences } from "../utils/pending-references.js";
 import { drainPendingFiles, releasePendingFiles } from "../utils/pending-files.js";
+import { releaseDeltaTextTracker } from "../utils/delta-text-tracker.js";
 import type { XYChannelConfig } from "../types.js";
 import {
   ConversationSession,
@@ -88,6 +89,7 @@ export function deleteSession(sessionId: string): void {
     releasePendingFiles(entry.taskId);
     releaseBodyRoundCards(entry.taskId);
   }
+  releaseDeltaTextTracker(sessionId);
   sessions.delete(sessionId);
 }
 
@@ -146,6 +148,7 @@ export function completeTask(sessionId: string, expectedTaskId?: string): void {
       releasePendingFiles(entry.taskId);
       releaseBodyRoundCards(entry.taskId);
     }
+    releaseDeltaTextTracker(sessionId);
     session.tasks = [];
     return;
   }
