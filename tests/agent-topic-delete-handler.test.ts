@@ -10,8 +10,7 @@ import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
-  archiveSessionFilesByConvId,
-  formatTopicArchiveTimestamp,
+  deleteSessionFilesByConvId,
   validateTopicDeleteConvId,
 } from "../src/agent-topic-delete-handler.js";
 
@@ -43,23 +42,11 @@ describe("validateTopicDeleteConvId", () => {
   it("rejects control characters", () => {
     expect(validateTopicDeleteConvId("abc" + String.fromCharCode(7) + "def")).toBeNull();
     expect(validateTopicDeleteConvId("abc" + String.fromCharCode(31) + "def")).toBeNull();
-    expect(validateTopicDeleteConvId("abc\u007fdef")).toBeNull();
+    expect(validateTopicDeleteConvId("abc" + String.fromCharCode(127) + "def")).toBeNull();
   });
 });
 
-describe("formatTopicArchiveTimestamp", () => {
-  it("formats as yyyyMMddHHmmss", () => {
-    const d = new Date(2026, 10, 18, 10, 30, 5); // local time 2026-11-18 10:30:05
-    expect(formatTopicArchiveTimestamp(d)).toBe("20261118103005");
-  });
-
-  it("pads single-digit fields", () => {
-    const d = new Date(2026, 0, 2, 3, 4, 5); // 2026-01-02 03:04:05
-    expect(formatTopicArchiveTimestamp(d)).toBe("20260102030405");
-  });
-});
-
-describe("archiveSessionFilesByConvId", () => {
+describe("deleteSessionFilesByConvId", () => {
   let sessionsDir: string;
 
   beforeEach(() => {
@@ -70,22 +57,24 @@ describe("archiveSessionFilesByConvId", () => {
     rmSync(sessionsDir, { recursive: true, force: true });
   });
 
-  it("archives files matching <conv_id>.* with .deleted.<ts> suffix", () => {
+  it("permanently deletes files matching <conv_id>.* leaving no copy on disk", () => {
     const convId = "00000000-1a2b3c";
     writeFileSync(join(sessionsDir, `${convId}.jsonl`), "line1\n");
     writeFileSync(join(sessionsDir, `${convId}.jsonl.reset.20260101000000`), "old\n");
     writeFileSync(join(sessionsDir, `other-session.jsonl`), "keep\n");
 
-    const archived = archiveSessionFilesByConvId(convId, sessionsDir);
+    const deleted = deleteSessionFilesByConvId(convId, sessionsDir);
 
-    expect(archived).toHaveLength(2);
-    for (const p of archived) {
-      expect(p).toMatch(/\.deleted\.\d{14}$/);
-      expect(existsSync(p)).toBe(true);
+    expect(deleted).toHaveLength(2);
+    for (const p of deleted) {
+      // 返回的是被删文件的原始绝对路径，且磁盘上已不存在
+      expect(p).toBe(join(sessionsDir, p.split(/[\\/]/).pop()!));
+      expect(existsSync(p)).toBe(false);
     }
-    // 原文件名已不存在（对设备而言即“删除”）
+    // 原始文件名与任何改后缀副本都不存在（彻底删除，无归档残留）
     expect(existsSync(join(sessionsDir, `${convId}.jsonl`))).toBe(false);
     expect(existsSync(join(sessionsDir, `${convId}.jsonl.reset.20260101000000`))).toBe(false);
+    expect(readdirSync(sessionsDir).some((n) => n.includes(convId))).toBe(false);
     // 不相关文件不受影响
     expect(existsSync(join(sessionsDir, `other-session.jsonl`))).toBe(true);
     expect(readdirSync(sessionsDir).some((n) => n.startsWith("other-session"))).toBe(true);
@@ -95,20 +84,20 @@ describe("archiveSessionFilesByConvId", () => {
     const convId = "abc";
     writeFileSync(join(sessionsDir, `abcdef.jsonl`), "nope\n");
 
-    const archived = archiveSessionFilesByConvId(convId, sessionsDir);
+    const deleted = deleteSessionFilesByConvId(convId, sessionsDir);
 
-    expect(archived).toHaveLength(0);
+    expect(deleted).toHaveLength(0);
     expect(existsSync(join(sessionsDir, `abcdef.jsonl`))).toBe(true);
   });
 
   it("returns empty array when the sessions dir does not exist", () => {
     const missing = join(sessionsDir, "no-such-dir");
-    expect(archiveSessionFilesByConvId("conv-x", missing)).toEqual([]);
+    expect(deleteSessionFilesByConvId("conv-x", missing)).toEqual([]);
   });
 
   it("returns empty array when nothing matches", () => {
     writeFileSync(join(sessionsDir, "unrelated.jsonl"), "x\n");
-    expect(archiveSessionFilesByConvId("conv-y", sessionsDir)).toEqual([]);
+    expect(deleteSessionFilesByConvId("conv-y", sessionsDir)).toEqual([]);
     expect(existsSync(join(sessionsDir, "unrelated.jsonl"))).toBe(true);
   });
 
@@ -116,9 +105,9 @@ describe("archiveSessionFilesByConvId", () => {
     const convId = "conv-dir";
     mkdirSync(join(sessionsDir, `${convId}.jsonl`));
 
-    const archived = archiveSessionFilesByConvId(convId, sessionsDir);
+    const deleted = deleteSessionFilesByConvId(convId, sessionsDir);
 
-    expect(archived).toHaveLength(0);
+    expect(deleted).toHaveLength(0);
     expect(existsSync(join(sessionsDir, `${convId}.jsonl`))).toBe(true);
   });
 });

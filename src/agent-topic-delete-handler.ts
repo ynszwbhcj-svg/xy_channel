@@ -6,15 +6,18 @@
 // Flow:
 //   1. Resolve the openclaw sessionKey for conv_id via the same routing
 //      derivation normal messages use (agent:<agentId>:...:<convId>).
-//   2. Call gateway RPC sessions.delete: removes the session-store entry,
-//      aborts an in-flight run, and archives the transcript
-//      (<file>.jsonl -> <file>.jsonl.deleted.<ts>).
-//   3. Archive leftover session files named <conv_id>.* under
-//      ~/.openclaw/agents/<agentId>/sessions/ (same .deleted.<ts> suffix),
-//      covering transcripts keyed directly by conv_id.
+//   2. Call gateway RPC sessions.delete: removes the session-store entry and
+//      aborts an in-flight run. The gateway itself ARCHIVES the transcript
+//      (<file>.jsonl -> <file>.jsonl.deleted.<ts>); since topic deletion must
+//      leave no recoverable copy on disk, we unlink those archived paths
+//      immediately after the RPC returns.
+//   3. Permanently delete leftover session files named <conv_id>.* under
+//      ~/.openclaw/agents/<agentId>/sessions/, covering transcripts keyed
+//      directly by conv_id.
 //   4. Reply with a command whose header reuses the upstream header and
 //      whose payload is { action: "delete", status, ans: { conv_id,
-//      deleted, wasRunning, archived } }.
+//      deleted, wasRunning, archived } } (archived 字段为兼容保留，内容是被
+//      彻底删除的文件路径列表).
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -37,19 +40,6 @@ import { logger } from "./utils/logger.js";
 
 /** sessions.delete 内部 abort 在途 run 可能耗时数秒，RPC 超时给足余量。 */
 const GATEWAY_TIMEOUT_MS = 25_000;
-
-/** 归档后缀时间戳：yyyyMMddHHmmss（本地时间），与下行 ans.archived 命名合同一致。 */
-export function formatTopicArchiveTimestamp(now: Date = new Date()): string {
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return (
-    String(now.getFullYear()) +
-    pad(now.getMonth() + 1) +
-    pad(now.getDate()) +
-    pad(now.getHours()) +
-    pad(now.getMinutes()) +
-    pad(now.getSeconds())
-  );
-}
 
 /**
  * conv_id 校验：非空字符串，且不含路径分隔符/遍历片段/控制字符
@@ -76,38 +66,49 @@ export function validateTopicDeleteConvId(value: unknown): string | null {
 }
 
 /**
- * Archive every file named `<convId>.*` beneath sessionsDir by renaming it
- * with an appended `.deleted.<yyyyMMddHHmmss>` suffix — openclaw-style soft
- * delete: the file disappears from its active name but stays recoverable on
- * disk (same semantics as the gateway's own transcript archiving).
+ * Permanently delete every file named `<convId>.*` beneath sessionsDir —
+ * hard delete, no recoverable copy left on disk (topic deletion must not
+ * leave residue the way the gateway's own transcript archiving does).
  *
- * Returns the archived absolute paths. Missing directory / unreadable
+ * Returns the deleted absolute paths. Missing directory / unreadable
  * entries are skipped (best effort).
  */
-export function archiveSessionFilesByConvId(convId: string, sessionsDir: string): string[] {
-  const archived: string[] = [];
+export function deleteSessionFilesByConvId(convId: string, sessionsDir: string): string[] {
+  const deleted: string[] = [];
   let entries: fs.Dirent[];
   try {
     entries = fs.readdirSync(sessionsDir, { withFileTypes: true });
   } catch {
-    return archived; // 目录不存在：没有可清理的文件
+    return deleted; // 目录不存在：没有可清理的文件
   }
 
   const prefix = `${convId}.`;
-  const timestamp = formatTopicArchiveTimestamp();
   for (const entry of entries) {
     if (!entry.isFile()) continue;
     if (entry.name !== convId && !entry.name.startsWith(prefix)) continue;
-    const sourcePath = path.join(sessionsDir, entry.name);
-    const archivedPath = `${sourcePath}.deleted.${timestamp}`;
+    const filePath = path.join(sessionsDir, entry.name);
     try {
-      fs.renameSync(sourcePath, archivedPath);
-      archived.push(archivedPath);
+      fs.rmSync(filePath, { force: true });
+      deleted.push(filePath);
     } catch (err) {
-      logger.error(`[TOPIC-DELETE] Failed to archive session file ${sourcePath}:`, err);
+      logger.error(`[TOPIC-DELETE] Failed to delete session file ${filePath}:`, err);
     }
   }
-  return archived;
+  return deleted;
+}
+
+/**
+ * 彻底删除单个文件（用于清理 gateway sessions.delete 归档出的
+ * <file>.jsonl.deleted.<ts> transcript 副本）。成功返回 true。
+ */
+function deleteFileOnDisk(filePath: string): boolean {
+  try {
+    fs.rmSync(filePath, { force: true });
+    return true;
+  } catch (err) {
+    logger.error(`[TOPIC-DELETE] Failed to delete archived transcript ${filePath}:`, err);
+    return false;
+  }
 }
 
 export async function handleAgentTopicDeleteEvent(
@@ -154,8 +155,9 @@ export async function handleAgentTopicDeleteEvent(
         // best effort：判定失败不影响删除流程
       }
 
-      // gateway sessions.delete：删 session-store 条目、abort 在途 run、
-      // 归档 transcript（<file>.jsonl -> <file>.jsonl.deleted.<ts>）。
+      // gateway sessions.delete：删 session-store 条目、abort 在途 run。
+      // gateway 自身只会“归档”transcript（<file>.jsonl -> .deleted.<ts>），
+      // 归档副本仍落盘可读；话题删除要求不留痕迹，这里把归档文件彻底删掉。
       const gatewayResult: any = await callGatewayTool(
         "sessions.delete",
         { timeoutMs: GATEWAY_TIMEOUT_MS },
@@ -164,21 +166,22 @@ export async function handleAgentTopicDeleteEvent(
       deleted = gatewayResult?.deleted === true;
       if (Array.isArray(gatewayResult?.archived)) {
         for (const p of gatewayResult.archived) {
-          if (typeof p === "string" && p && !archived.includes(p)) archived.push(p);
+          if (typeof p !== "string" || !p) continue;
+          if (deleteFileOnDisk(p) && !archived.includes(p)) archived.push(p);
         }
       }
       log.log(
-        `[TOPIC-DELETE] sessions.delete done: deleted=${deleted}, gatewayArchived=${archived.length}`,
+        `[TOPIC-DELETE] sessions.delete done: deleted=${deleted}, gatewayArchivedPurged=${archived.length}`,
       );
 
-      // 归档 agents/<agentId>/sessions/<conv_id>.* 的对应 session 文件
+      // 彻底删除 agents/<agentId>/sessions/<conv_id>.* 的对应 session 文件
       const sessionsDir = path.join(os.homedir(), ".openclaw", "agents", agentId, "sessions");
-      const fileArchived = archiveSessionFilesByConvId(convId, sessionsDir);
-      for (const p of fileArchived) {
+      const fileDeleted = deleteSessionFilesByConvId(convId, sessionsDir);
+      for (const p of fileDeleted) {
         if (!archived.includes(p)) archived.push(p);
       }
-      if (fileArchived.length > 0) {
-        log.log(`[TOPIC-DELETE] Archived ${fileArchived.length} session file(s) under ${sessionsDir}`);
+      if (fileDeleted.length > 0) {
+        log.log(`[TOPIC-DELETE] Deleted ${fileDeleted.length} session file(s) under ${sessionsDir}`);
         // store 里没有条目但磁盘文件确实存在并被清掉：视为删除成功
         if (!deleted) deleted = true;
       }
