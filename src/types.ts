@@ -1,4 +1,5 @@
 // Type definitions for XY Channel - A2A protocol and configuration
+import type { MemoryMcpConfig } from "./memory/config.js";
 
 // ============================================================================
 // Configuration Types
@@ -12,6 +13,8 @@ export interface XYChannelConfig {
   agentId: string;
   apiId: string;
   pushId: string;
+  /** Explicit MCP opt-in; endpoint/token file come from platform environment. */
+  memory?: MemoryMcpConfig;
   fileUploadUrl: string;
   pushUrl?: string;
   defaultSessionId?: string;

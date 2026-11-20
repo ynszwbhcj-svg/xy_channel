@@ -7,6 +7,8 @@ dist/
 
 # Documentation
 *.md
+!docs/memory-mcp-interface.md
+!docs/memory-mcp-design.md
 
 # IDE
 .claude/
