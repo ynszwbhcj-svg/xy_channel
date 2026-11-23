@@ -242,7 +242,7 @@ describe("send_file_to_user tool deferral", () => {
   });
 
   it("sends immediately on the legacy link (final frame carries full text)", async () => {
-    markAppVersion(taskId, "11.7.8.100"); // 低版本链路（< 11.7.10.300）
+    markAppVersion(taskId, "11.7.8.100"); // 低版本链路（< 11.7.10.212）
 
     const result = await sendFileToUserTool.execute("tc-2", { fileLocalUrls: ["/tmp/a.pdf"] });
 
