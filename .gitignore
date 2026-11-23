@@ -17,3 +17,6 @@ Thumbs.db
 
 # Python
 __pycache__/
+
+# 打包产物不入库
+*.tgz

@@ -774,6 +774,15 @@ export class XYWebSocketManager extends EventEmitter {
                   taskId: a2aRequest.params?.id,
                   messageId: a2aRequest.id,
                 });
+              } else if (item.header?.namespace === "AgentEvent" && item.header?.name === "AgentTopicDelete") {
+                log.log("[XY] AgentEvent.AgentTopicDelete detected, emitting agent-topic-delete-event");
+                this.emit("agent-topic-delete-event", {
+                  ...(item.payload ?? {}),
+                  header: item.header,
+                  sessionId,
+                  taskId: a2aRequest.params?.id,
+                  messageId: a2aRequest.id,
+                });
               } else if (item.header?.namespace === "System" && item.header?.name === "ExecuteAgentAsSkillResponse") {
                 log.log("[XY] ExecuteAgentAsSkillResponse detected, emitting agent-as-skill-response");
                 this.emit("agent-as-skill-response", item);
@@ -892,6 +901,15 @@ export class XYWebSocketManager extends EventEmitter {
                   log.log("[XY] AgentEvent.MemoryQuery detected (wrapped format), emitting memory-query-event");
                   this.emit("memory-query-event", {
                     ...(item.payload ?? {}),
+                    sessionId: inboundMsg.sessionId || a2aRequest.params?.sessionId,
+                    taskId: inboundMsg.taskId || a2aRequest.params?.id,
+                    messageId: a2aRequest.id,
+                  });
+                } else if (item.header?.namespace === "AgentEvent" && item.header?.name === "AgentTopicDelete") {
+                  log.log("[XY] AgentEvent.AgentTopicDelete detected (wrapped format), emitting agent-topic-delete-event");
+                  this.emit("agent-topic-delete-event", {
+                    ...(item.payload ?? {}),
+                    header: item.header,
                     sessionId: inboundMsg.sessionId || a2aRequest.params?.sessionId,
                     taskId: inboundMsg.taskId || a2aRequest.params?.id,
                     messageId: a2aRequest.id,

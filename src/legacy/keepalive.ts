@@ -20,6 +20,7 @@ import {
 } from "../conversation/conversation-manager.js";
 import type { SubagentWaitState } from "../conversation/conversation-session.js";
 import { sendStatusUpdate, sendA2AResponse } from "./formatter.js";
+import { computeBodyDelta, releaseDeltaTextTracker } from "../utils/delta-text-tracker.js";
 import type { XYChannelConfig } from "./types.js";
 
 // ─── 30s 状态心跳（e6a3aa1 原样） ──────────────────────────────
@@ -66,7 +67,8 @@ function legacyHasInflightTurn(sessionId: string): boolean {
 
 /**
  * 低版本链路的 subagent 最终交付（e6a3aa1 原样）：
- * completed 状态帧（"任务处理已完成~"）→ final:true 全文本帧。
+ * completed 状态帧（"任务处理已完成~"）→ final:true 增量帧
+ * （append 恒 true，只携带相对已下发内容的尾段，见 utils/delta-text-tracker）。
  */
 export async function deliverLegacySubagentFinalResult(params: {
   state: SubagentWaitState;
@@ -123,8 +125,8 @@ export async function deliverLegacySubagentFinalResult(params: {
       sessionId: state.sessionId,
       taskId: effectiveTaskId,
       messageId: effectiveMessageId,
-      text: finalText,
-      append: false,
+      text: computeBodyDelta(state.sessionId, finalText),
+      append: true,
       final: true,
     });
   if (session) {
@@ -147,6 +149,7 @@ export async function deliverLegacySubagentFinalResult(params: {
   }
 
   clearWaitState(state.sessionId, reason ?? "all-subagent-results-delivered", state.taskId);
+  releaseDeltaTextTracker(state.sessionId);
   completeTask(state.sessionId);
   setSessionState(state.sessionId, "completed");
   log.log(`[SUBAGENT-FINAL] Subagent final delivered (legacy), reason=${reason}, effectiveTaskId=${effectiveTaskId}`);

@@ -12,6 +12,8 @@ import { logger } from "./utils/logger.js";
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 import { getCurrentSessionContext, setCurrentCronJobId, markCronDetected } from "./tools/session-manager.js";
 import { notifyCronDetected } from "./conversation/cron-buffer.js";
+import { getCurrentTask } from "./conversation/conversation-manager.js";
+import { trackEntitlementFailure } from "./utils/entitlement-failure.js";
 import { selfEvolutionManager } from "./utils/self-evolution-manager.js";
 import { setCompactionConfig, setCompactionSessionSnapshot } from "./compaction-provider.js";
 import { sendStatusUpdate } from "./formatter.js";
@@ -237,6 +239,8 @@ interface RetryingStreamOptions {
    * i.e. the model is confirmed healthy again, not merely attempted.
    */
   onFirstContent?: () => void;
+  /** Observe the terminal result sent to OpenClaw, after any retries or fallback. */
+  onResult?: ReturnType<typeof trackEntitlementFailure>;
 }
 
 function createRetryingStream(
@@ -244,8 +248,12 @@ function createRetryingStream(
   options: RetryingStreamOptions,
 ): any {
   const { cronJob, retryOnAnyError = false, fallbackCreateStream, onFallback, onFallbackDone, onFirstContent } = options;
-  let resultResolve: (value: any) => void;
-  const resultPromise = new Promise<any>(resolve => { resultResolve = resolve; });
+  let resolveResult: (value: any) => void;
+  const resultPromise = new Promise<any>(resolve => { resolveResult = resolve; });
+  const resultResolve = (result: any) => {
+    options.onResult?.(result);
+    resolveResult(result);
+  };
 
   const CONTENT_EVENT_TYPES = new Set([
     "text_start", "text_delta", "text_end",
@@ -639,7 +647,7 @@ const GUI_AGENT_SAFETY_RULES = `
 3. 不得基于模型推断、上下文猜测、默认意图或历史信息直接执行任何敏感操作。
 4. 如操作对象、范围、参数、执行方式或预期结果存在任何不确定性，必须先向用户确认，不得自行补全、修改或假设。
 5. 在用户完成二次明确确认之前，禁止调用 \`xiaoyi_gui_agent\` 发起任何实际操作。
-6. 如果用户二次确认的信息不包含明确指令，也是模糊不确定的（例如：你看着办，你来决定吧，你帮我决定吧，你随便选吧），也要严禁直接执行，必须获取用户明确的指令
+6. 如果用户二次确认的信息不包含明确指令，也是模糊不确定的（例如：你看着办，你来决定吧，你帮我决定吧，你随便选吧，你帮我操作），也要严禁直接执行，必须获取用户明确确认或者拒绝的指令
 7. 如果用户询问设备应用安装列表，严禁通过xiaoyi_gui_agent工具进行查询
 8. 如果最终确认要调用xiaoyi_gui_agent，工具入参只需要把用户的诉求完整转述即可，严禁自行将用户诉求的操作步骤自行详细展开后作为xiaoyi_gui_agent的工具入参
 
@@ -1192,8 +1200,11 @@ export const xiaoyiProvider: ProviderPlugin = {
           ? sessionCtx.sessionId
           : undefined;
 
+      const activeTask = sessionCtx && !cronJob ? getCurrentTask(sessionCtx.sessionId) : null;
+      const requestTaskId = extractedTaskId ?? sessionCtx?.taskId;
       return createRetryingStream(makeStream, {
         cronJob,
+        onResult: activeTask && activeTask.taskId === requestTaskId ? trackEntitlementFailure(activeTask) : undefined,
         retryOnAnyError: isKimiK3,
         fallbackCreateStream: canUseKimiFallback
           ? () => underlying({ ...model, id: KIMI_K3_FALLBACK_MODEL_ID, name: KIMI_K3_FALLBACK_MODEL_ID,
