@@ -5,6 +5,14 @@ import { logger } from "../utils/logger.js";
 import { configManager } from "../utils/config-manager.js";
 import type { XYChannelConfig } from "../types.js";
 
+const PUSH_RETRY_DELAYS_MS = [2_000, 3_000, 4_000];
+const PUSH_MAX_ATTEMPTS = PUSH_RETRY_DELAYS_MS.length + 1;
+const PUSH_RETRYABLE_STATUSES = new Set([408, 425, 429, 500, 502, 503, 504]);
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 /**
  * JSON-RPC 2.0 Push Request (outbound to user)
  */
@@ -155,45 +163,58 @@ export class XYPushService {
         },
       };
 
-      const response = await fetch(pushUrl, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Accept": "application/json",
-          "x-hag-trace-id": traceId,
-          "x-uid": this.config.uid,
-          "x-api-key": this.config.apiKey,
-          "x-request-from": this.REQUEST_FROM,
-        },
-        body: JSON.stringify(requestBody),
-      });
+      for (let attempt = 1; attempt <= PUSH_MAX_ATTEMPTS; attempt++) {
+        const response = await fetch(pushUrl, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "x-hag-trace-id": traceId,
+            "x-uid": this.config.uid,
+            "x-api-key": this.config.apiKey,
+            "x-request-from": this.REQUEST_FROM,
+          },
+          body: JSON.stringify(requestBody),
+        });
 
-      // Log response status and headers
-      logger.log(`[PUSH] Response received, HTTP Status: ${response.status} ${response.statusText}`);
+        // Log response status and attempt number. The request body and trace ID
+        // stay unchanged across retries so the server can correlate duplicates.
+        logger.log(`[PUSH] Response received, HTTP Status: ${response.status} ${response.statusText}, attempt ${attempt}/${PUSH_MAX_ATTEMPTS}`);
 
-      if (!response.ok) {
-        const errorText = await response.text();
-        logger.error(`[PUSH] Push request failed, HTTP Status: ${response.status}`);
-        throw new Error(`Push failed: HTTP ${response.status} - ${errorText}`);
-      }
+        if (!response.ok) {
+          const errorText = await response.text();
+          const canRetry = PUSH_RETRYABLE_STATUSES.has(response.status) && attempt < PUSH_MAX_ATTEMPTS;
 
-      // Try to parse JSON response with detailed error handling
-      let result;
-      try {
-        const responseText = await response.text();
+          if (!canRetry) {
+            logger.error(`[PUSH] Push request failed after ${attempt} attempt(s), HTTP Status: ${response.status}`);
+            throw new Error(`Push failed after ${attempt} attempt(s): HTTP ${response.status} - ${errorText}`);
+          }
 
-        if (!responseText || responseText.trim() === '') {
-          logger.error(`[PUSH] Received empty response body`);
-          result = {};
-        } else {
-          result = JSON.parse(responseText);
+          const delayMs = PUSH_RETRY_DELAYS_MS[attempt - 1];
+          logger.log(`[PUSH] HTTP ${response.status} on attempt ${attempt}/${PUSH_MAX_ATTEMPTS}, retrying in ${delayMs}ms, Trace ID: ${traceId}`);
+          await sleep(delayMs);
+          continue;
         }
-      } catch (parseError) {
-        logger.error(`[PUSH] Failed to parse JSON response: ${parseError instanceof Error ? parseError.message : String(parseError)}`);
-        throw new Error(`Invalid JSON response from push service: ${parseError instanceof Error ? parseError.message : String(parseError)}`);
-      }
 
-      logger.log(`[PUSH] Push message sent successfully, Trace ID: ${traceId}`);
+        // Try to parse JSON response with detailed error handling
+        let result;
+        try {
+          const responseText = await response.text();
+
+          if (!responseText || responseText.trim() === '') {
+            logger.error(`[PUSH] Received empty response body`);
+            result = {};
+          } else {
+            result = JSON.parse(responseText);
+          }
+        } catch (parseError) {
+          logger.error(`[PUSH] Failed to parse JSON response: ${parseError instanceof Error ? parseError.message : String(parseError)}`);
+          throw new Error(`Invalid JSON response from push service: ${parseError instanceof Error ? parseError.message : String(parseError)}`);
+        }
+
+        logger.log(`[PUSH] Push message sent successfully on attempt ${attempt}/${PUSH_MAX_ATTEMPTS}, Trace ID: ${traceId}`);
+        return;
+      }
     } catch (error) {
       if (error instanceof Error) {
         logger.error(`[PUSH] Failed to send push message: ${error.name} - ${error.message}`);
