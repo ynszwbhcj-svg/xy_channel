@@ -1,7 +1,7 @@
 // 低版本链路（legacy）增量文本下发跟踪器。
 //
 // 高版本链路正文/思考帧为 append:false 全量快照（端侧整体替换，含
-// canonical 权威补齐）；低版本链路（app_ver < 11.7.10.300，见
+// canonical 权威补齐）；低版本链路（app_ver < 11.7.10.212，见
 // legacy/reply-dispatcher）改为 append:true 增量帧：思考和正文在同一
 // turn 内叠加展示 —— 模型回 3 轮时最终文本 = A+B+C，每帧只携带相对
 // 上一帧的新增部分。本模块按 session 跟踪"已下发文本"，计算下一帧的
