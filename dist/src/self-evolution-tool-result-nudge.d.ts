@@ -1,0 +1,3 @@
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
+export declare const SELF_EVOLUTION_TOOL_COUNT_NUDGE_MESSAGE = "[\u7CFB\u7EDF\u6D88\u606F] \u5F53\u524D\u4EFB\u52A1\u5DF2\u7ECF\u8C03\u7528\u4E86\u8F83\u591A\u6B21\u6570\u7684\u5DE5\u5177\u3002\u8BF7\u5728\u5B8C\u6210\u4EFB\u52A1\u540E\uFF0C\u5224\u65AD\u662F\u5426\u6709\u7A33\u5B9A\u3001\u901A\u7528\u3001\u53EF\u590D\u7528\u7684\u6D41\u7A0B\u3001\u6392\u9519\u7ECF\u9A8C\u6216\u8E29\u5751\u70B9\uFF0C\u5E76\u8003\u8651\u9605\u8BFB xiaoyi-self-evolution skill \u542F\u52A8\u81EA\u8FDB\u5316\u3002";
+export declare function registerSelfEvolutionToolResultNudge(api: OpenClawPluginApi): void;

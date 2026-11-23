@@ -260,7 +260,7 @@ export async function handleXYMessage(params) {
                 unregisterSession(route.sessionKey);
                 log(`[BOT] ✅ Cleanup completed`);
             },
-            run: () => 
+            run: () =>
             // 🔐 Use AsyncLocalStorage to provide session context to tools
             runWithSessionContext(sessionContext, () => core.channel.reply.dispatchReplyFromConfig({
                 ctx: ctxPayload,

@@ -1,0 +1,192 @@
+export interface XYChannelConfig {
+    enabled: boolean;
+    wsUrl: string;
+    apiKey: string;
+    uid: string;
+    agentId: string;
+    apiId: string;
+    pushId: string;
+    fileUploadUrl: string;
+    pushUrl?: string;
+    defaultSessionId?: string;
+    terminalFrameDelayMs?: number;
+    /**
+     * 固定 A2A sessionId 列表（如 ["00000000"]）。这些会话的 sessionId 永不变化，
+     * clearContext 无法靠客户端换 sessionId 天然隔离，因此 channel 会在收到
+     * clearContext 时显式调用 gateway sessions.reset 轮换 openclaw 侧会话。
+     * 显式配置为空数组可禁用该行为。
+     */
+    pinnedSessionIds: string[];
+}
+export interface A2AJsonRpcRequest {
+    jsonrpc: "2.0";
+    method: string;
+    params?: A2ARequestParams;
+    id: string;
+    /** Top-level sessionId for clearContext/tasks/cancel (no params field) */
+    sessionId?: string;
+}
+export interface A2AJsonRpcResponse {
+    jsonrpc: "2.0";
+    id: string;
+    result: A2ATaskArtifactUpdateEvent | A2ATaskStatusUpdateEvent;
+    error?: A2AJsonRpcError;
+}
+export interface A2AJsonRpcError {
+    code: number;
+    message: string;
+    data?: any;
+}
+export interface A2ARequestParams {
+    id: string;
+    sessionId: string;
+    agentLoginSessionId: string;
+    message: A2AMessage;
+}
+export interface A2AMessage {
+    role: "user" | "assistant" | "system";
+    parts: A2AMessagePart[];
+}
+export type A2AMessagePart = A2ATextPart | A2AFilePart | A2ADataPart;
+export interface A2ATextPart {
+    kind: "text";
+    text: string;
+}
+export interface A2AFilePart {
+    kind: "file";
+    file: {
+        name: string;
+        mimeType: string;
+        uri: string;
+    };
+}
+export interface A2ADataPart {
+    kind: "data";
+    data: {
+        event?: A2ADataEvent;
+        [key: string]: any;
+    };
+}
+export interface A2ADataEvent {
+    intentName: string;
+    outputs: Record<string, any>;
+    status: "success" | "failed";
+}
+export interface CrossDeviceTaskResultEvent {
+    sessionId: string;
+    code: string;
+    message: string;
+    sentFiles: SentFileCard[];
+    status: "success" | "failed";
+    rawEvent: any;
+}
+export interface RunCrossTaskContext {
+    agentId: string;
+    sessionId: string;
+    isDistributed: boolean;
+    networkId: string;
+    isSupportAgent: boolean;
+    sentFiles: SentFileCard[];
+    rawContext: any;
+}
+export interface SentFileCard {
+    fileName: string;
+    fileId: string;
+    mimeType?: string;
+}
+export interface A2ATaskArtifactUpdateEvent {
+    taskId: string;
+    kind: "artifact-update";
+    append: boolean;
+    lastChunk: boolean;
+    final: boolean;
+    artifact: A2AArtifact;
+}
+export interface A2AArtifact {
+    artifactId: string;
+    parts: A2AArtifactPart[];
+}
+export interface A2AReasoningTextPart {
+    kind: "reasoningText";
+    reasoningText: string;
+}
+export type A2AArtifactPart = A2ATextPart | A2ADataPart | A2ACommandPart | A2AReasoningTextPart;
+export interface A2ACommandPart {
+    kind: "command";
+    command: A2ACommand;
+}
+export interface A2ACommand {
+    header: {
+        namespace: string;
+        name: string;
+    };
+    payload: Record<string, any>;
+}
+export interface A2ATaskStatusUpdateEvent {
+    taskId: string;
+    kind: "status-update";
+    final: boolean;
+    status: {
+        message: {
+            role: "agent";
+            parts: Array<{
+                kind: "text";
+                text: string;
+            }>;
+        };
+        state: "submitted" | "working" | "input-required" | "completed" | "canceled" | "cleared" | "failed" | "unknown";
+    };
+}
+export interface InboundWebSocketMessage {
+    msgType: "message" | "stream" | "clearContext" | "data" | "heartbeat";
+    agentId: string;
+    sessionId: string;
+    taskId: string;
+    msgDetail: string;
+}
+export interface OutboundWebSocketMessage {
+    msgType: "agent_response" | "clawd_bot_init";
+    agentId: string;
+    sessionId?: string;
+    taskId?: string;
+    msgDetail: string;
+}
+export interface ServerConnectionState {
+    connected: boolean;
+    ready: boolean;
+    lastHeartbeat: number;
+    reconnectAttempts: number;
+}
+export interface FileUploadPrepareRequest {
+    objectType: string;
+    fileName: string;
+    fileSha256: string;
+    fileSize: number;
+    fileOwnerInfo: {
+        uid: string;
+        teamId: string;
+    };
+    useEdge: boolean;
+}
+export interface FileUploadPrepareResponse {
+    code: string;
+    desc: string;
+    objectId: string;
+    draftId: string;
+    uploadInfos: Array<{
+        url: string;
+        method: string;
+        headers: Record<string, string>;
+        partId: string | null;
+        partObjectId: string | null;
+        required: boolean;
+        type: string | null;
+    }>;
+}
+export interface FileUploadCompleteRequest {
+    objectId: string;
+    draftId: string;
+}
+export interface FileUploadCompleteResponse {
+    fileId: string;
+}
