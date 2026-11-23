@@ -12,6 +12,8 @@ import { logger } from "./utils/logger.js";
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 import { getCurrentSessionContext, setCurrentCronJobId, markCronDetected } from "./tools/session-manager.js";
 import { notifyCronDetected } from "./conversation/cron-buffer.js";
+import { getCurrentTask } from "./conversation/conversation-manager.js";
+import { trackEntitlementFailure } from "./utils/entitlement-failure.js";
 import { selfEvolutionManager } from "./utils/self-evolution-manager.js";
 import { setCompactionConfig, setCompactionSessionSnapshot } from "./compaction-provider.js";
 import { sendStatusUpdate } from "./formatter.js";
@@ -237,6 +239,8 @@ interface RetryingStreamOptions {
    * i.e. the model is confirmed healthy again, not merely attempted.
    */
   onFirstContent?: () => void;
+  /** Observe the terminal result sent to OpenClaw, after any retries or fallback. */
+  onResult?: ReturnType<typeof trackEntitlementFailure>;
 }
 
 function createRetryingStream(
@@ -244,8 +248,12 @@ function createRetryingStream(
   options: RetryingStreamOptions,
 ): any {
   const { cronJob, retryOnAnyError = false, fallbackCreateStream, onFallback, onFallbackDone, onFirstContent } = options;
-  let resultResolve: (value: any) => void;
-  const resultPromise = new Promise<any>(resolve => { resultResolve = resolve; });
+  let resolveResult: (value: any) => void;
+  const resultPromise = new Promise<any>(resolve => { resolveResult = resolve; });
+  const resultResolve = (result: any) => {
+    options.onResult?.(result);
+    resolveResult(result);
+  };
 
   const CONTENT_EVENT_TYPES = new Set([
     "text_start", "text_delta", "text_end",
@@ -1191,8 +1199,11 @@ export const xiaoyiProvider: ProviderPlugin = {
           ? sessionCtx.sessionId
           : undefined;
 
+      const activeTask = sessionCtx && !cronJob ? getCurrentTask(sessionCtx.sessionId) : null;
+      const requestTaskId = extractedTaskId ?? sessionCtx?.taskId;
       return createRetryingStream(makeStream, {
         cronJob,
+        onResult: activeTask && activeTask.taskId === requestTaskId ? trackEntitlementFailure(activeTask) : undefined,
         retryOnAnyError: isKimiK3,
         fallbackCreateStream: canUseKimiFallback
           ? () => underlying({ ...model, id: KIMI_K3_FALLBACK_MODEL_ID, name: KIMI_K3_FALLBACK_MODEL_ID,
