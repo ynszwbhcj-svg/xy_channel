@@ -1,113 +1,121 @@
 #!/usr/bin/env bash
-# =============================================================================
-# 更新 xiaoyi-channel 插件脚本
-#   1) 从 ~/.openclaw/openclaw.json 的 plugins.entries 中移除 "xiaoyi-channel"
-#   2) 删除 ~/.openclaw/extensions/xiaoyi-channel 目录
-#   3) 安装 package 目录下的 tgz 包
-#   4) 重启 openclaw-gateway
-#
-# 用法：bash update-xiaoyi-channel.sh
-# 说明：脚本为幂等设计，可重复执行；所有改动前均自动备份。
-# =============================================================================
+# 重新安装 xiaoyi-channel 插件。
+# 用法：bash update-xiaoyi-channel.sh xxxxx.tgz
+# 注意：xxxxx.tgz 必须与本脚本位于同一目录。
 
 set -euo pipefail
 
-CONFIG_FILE="$HOME/.openclaw/openclaw.json"
 PLUGIN_NAME="xiaoyi-channel"
+CONFIG_FILE="$HOME/.openclaw/openclaw.json"
 PLUGIN_DIR="$HOME/.openclaw/extensions/$PLUGIN_NAME"
-TGZ_NAME="ynhcj-xiaoyi-channel-0.0.18.tgz"
-
+PLUGIN_LOAD_PATH="/home/sandbox/.openclaw/extensions/$PLUGIN_NAME"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-TGZ_PATH="$SCRIPT_DIR/$TGZ_NAME"
 
-BACKUP_DIR="$HOME/.openclaw/backup/$(date +%Y%m%d_%H%M%S)"
+log() {
+    echo "[INFO] $*"
+}
 
-log()  { echo -e "\033[1;34m[INFO]\033[0m $*"; }
-warn() { echo -e "\033[1;33m[WARN]\033[0m $*"; }
-die()  { echo -e "\033[1;31m[ERROR]\033[0m $*" >&2; exit 1; }
+die() {
+    echo "[ERROR] $*" >&2
+    exit 1
+}
 
-# ---------------------------------------------------------------------------
-# 0. 前置检查
-# ---------------------------------------------------------------------------
-log "步骤 0/4：环境检查"
-command -v python3 >/dev/null 2>&1 || die "未找到 python3"
-[ -f "$CONFIG_FILE" ] || die "配置文件不存在：$CONFIG_FILE"
-[ -f "$TGZ_PATH" ]    || die "安装包不存在：$TGZ_PATH"
-
-mkdir -p "$BACKUP_DIR"
-log "备份目录：$BACKUP_DIR"
-
-# ---------------------------------------------------------------------------
-# 1. 从 openclaw.json 的 plugins.entries 中移除 xiaoyi-channel
-# ---------------------------------------------------------------------------
-log "步骤 1/4：从配置中移除 plugins.entries.\"$PLUGIN_NAME\""
-
-cp -a "$CONFIG_FILE" "$BACKUP_DIR/openclaw.json.bak"
-log "已备份配置 -> $BACKUP_DIR/openclaw.json.bak"
-
-python3 - "$CONFIG_FILE" "$PLUGIN_NAME" <<'PY'
-import json, sys, os, tempfile
-
-cfg_path, name = sys.argv[1], sys.argv[2]
-
-with open(cfg_path, "r", encoding="utf-8") as f:
-    data = json.load(f)
-
-entries = data.get("plugins", {}).get("entries", {})
-if name in entries:
-    del entries[name]
-    # 原子写入：先写临时文件再替换
-    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(cfg_path) or ".", suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
-            f.write("\n")
-        os.replace(tmp, cfg_path)
-    finally:
-        if os.path.exists(tmp):
-            os.remove(tmp)
-    print(f"[OK] 已移除 plugins.entries.{name}")
-else:
-    print(f"[SKIP] plugins.entries 中不存在 {name}，无需移除")
-
-# 校验 JSON 合法
-with open(cfg_path, "r", encoding="utf-8") as f:
-    json.load(f)
-print("[OK] 配置 JSON 校验通过")
-PY
-
-# ---------------------------------------------------------------------------
-# 2. 删除 extensions/xiaoyi-channel 目录（先备份再删除）
-# ---------------------------------------------------------------------------
-log "步骤 2/4：删除插件目录 $PLUGIN_DIR"
-
-if [ -d "$PLUGIN_DIR" ]; then
-    cp -a "$PLUGIN_DIR" "$BACKUP_DIR/xiaoyi-channel-ext.bak"
-    log "已备份旧插件目录 -> $BACKUP_DIR/xiaoyi-channel-ext.bak"
-    if command -v trash >/dev/null 2>&1; then
-        trash "$PLUGIN_DIR" && log "已移入回收站：$PLUGIN_DIR"
-    else
-        rm -rf "$PLUGIN_DIR" && log "已删除：$PLUGIN_DIR"
-    fi
-else
-    warn "插件目录不存在，跳过：$PLUGIN_DIR"
+if [ "$#" -ne 1 ]; then
+    die "用法：bash $(basename "$0") xxxxx.tgz（安装包必须与脚本位于同一目录）"
 fi
 
-# ---------------------------------------------------------------------------
-# 3. 安装新包
-# ---------------------------------------------------------------------------
-log "步骤 3/4：安装 $TGZ_NAME"
+TGZ_NAME="$1"
+TGZ_PATH="$SCRIPT_DIR/$TGZ_NAME"
+CONFIG_BACKUP="$CONFIG_FILE.bak.$(date +%Y%m%d_%H%M%S)"
 
-cd "$SCRIPT_DIR"
-openclaw plugins install "$TGZ_NAME"
+# 前置检查，避免修改配置后才发现安装条件不满足。
+command -v python3 >/dev/null 2>&1 || die "未找到 python3"
+command -v openclaw >/dev/null 2>&1 || die "未找到 openclaw 命令"
+[ -f "$CONFIG_FILE" ] || die "配置文件不存在：$CONFIG_FILE"
+[ -f "$TGZ_PATH" ] || die "安装包不存在：$TGZ_PATH"
 
-# ---------------------------------------------------------------------------
-# 4. 重启 openclaw-gateway
-# ---------------------------------------------------------------------------
-log "步骤 4/4：Gateway即将重启，正在重启 openclaw-gateway"
+# 1. 读取配置；2～4. 删除指定配置；5. 原子保存配置。
+log "读取并更新配置：$CONFIG_FILE"
+cp -a "$CONFIG_FILE" "$CONFIG_BACKUP"
+log "原配置已备份到：$CONFIG_BACKUP"
+
+python3 - "$CONFIG_FILE" "$PLUGIN_NAME" "$PLUGIN_LOAD_PATH" <<'PY'
+import json
+import os
+import stat
+import sys
+import tempfile
+
+config_path, plugin_name, plugin_load_path = sys.argv[1:4]
+
+with open(config_path, "r", encoding="utf-8") as file:
+    config = json.load(file)
+
+plugins = config.get("plugins", {})
+
+entries = plugins.get("entries", {})
+if plugin_name in entries:
+    del entries[plugin_name]
+    print(f"[INFO] 已删除 plugins.entries.{plugin_name}")
+else:
+    print(f"[INFO] plugins.entries.{plugin_name} 不存在，跳过")
+
+load = plugins.get("load", {})
+paths = load.get("paths", [])
+new_paths = [path for path in paths if path != plugin_load_path]
+if len(new_paths) != len(paths):
+    load["paths"] = new_paths
+    print(f"[INFO] 已从 plugins.load.paths 删除：{plugin_load_path}")
+else:
+    print(f"[INFO] plugins.load.paths 中不存在目标路径，跳过")
+
+installs = plugins.get("installs", {})
+if plugin_name in installs:
+    del installs[plugin_name]
+    print(f"[INFO] 已删除 plugins.installs.{plugin_name}")
+else:
+    print(f"[INFO] plugins.installs.{plugin_name} 不存在，跳过")
+
+# 先写同目录临时文件，再替换原文件，避免写入中断损坏配置。
+config_dir = os.path.dirname(config_path) or "."
+original_mode = stat.S_IMODE(os.stat(config_path).st_mode)
+fd, temp_path = tempfile.mkstemp(prefix=".openclaw.json.", suffix=".tmp", dir=config_dir)
+try:
+    with os.fdopen(fd, "w", encoding="utf-8") as file:
+        json.dump(config, file, ensure_ascii=False, indent=2)
+        file.write("\n")
+        file.flush()
+        os.fsync(file.fileno())
+    os.chmod(temp_path, original_mode)
+    os.replace(temp_path, config_path)
+finally:
+    if os.path.exists(temp_path):
+        os.remove(temp_path)
+
+# 回读并校验保存后的 JSON。
+with open(config_path, "r", encoding="utf-8") as file:
+    json.load(file)
+print("[INFO] openclaw.json 已保存并通过 JSON 校验")
+PY
+
+# 6. 删除旧插件目录。
+if [ -e "$PLUGIN_DIR" ] || [ -L "$PLUGIN_DIR" ]; then
+    rm -rf -- "$PLUGIN_DIR"
+    log "已删除插件目录：$PLUGIN_DIR"
+else
+    log "插件目录不存在，跳过：$PLUGIN_DIR"
+fi
+
+# 7. 安装脚本同目录下的新插件包。
+log "开始安装插件包：$TGZ_NAME"
+(
+    cd "$SCRIPT_DIR"
+    openclaw plugins installs "$TGZ_NAME"
+)
+
+# 8. 重启 openclaw-gateway。
+log "正在重启 openclaw-gateway"
 python3 -m supervisor.supervisorctl restart openclaw-gateway
 
-log "全部完成 ✅"
-log "如需回滚："
-log "  配置：cp $BACKUP_DIR/openclaw.json.bak $CONFIG_FILE"
-log "  目录：cp -a $BACKUP_DIR/xiaoyi-channel-ext.bak $PLUGIN_DIR"
+# 9. 结束。
+log "xiaoyi-channel 插件更新完成"
