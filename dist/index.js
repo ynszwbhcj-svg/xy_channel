@@ -1188,7 +1188,7 @@ var require_atomic_sleep = __commonJS({
   "node_modules/atomic-sleep/index.js"(exports, module) {
     "use strict";
     if (typeof SharedArrayBuffer !== "undefined" && typeof Atomics !== "undefined") {
-      let sleep3 = function(ms) {
+      let sleep4 = function(ms) {
         const valid = ms > 0 && ms < Infinity;
         if (valid === false) {
           if (typeof ms !== "number" && typeof ms !== "bigint") {
@@ -1199,9 +1199,9 @@ var require_atomic_sleep = __commonJS({
         Atomics.wait(nil, 0, 0, Number(ms));
       };
       const nil = new Int32Array(new SharedArrayBuffer(4));
-      module.exports = sleep3;
+      module.exports = sleep4;
     } else {
-      let sleep3 = function(ms) {
+      let sleep4 = function(ms) {
         const valid = ms > 0 && ms < Infinity;
         if (valid === false) {
           if (typeof ms !== "number" && typeof ms !== "bigint") {
@@ -1213,7 +1213,7 @@ var require_atomic_sleep = __commonJS({
         while (target > Date.now()) {
         }
       };
-      module.exports = sleep3;
+      module.exports = sleep4;
     }
   }
 });
@@ -1226,7 +1226,7 @@ var require_sonic_boom = __commonJS({
     var EventEmitter2 = __require("events");
     var inherits = __require("util").inherits;
     var path23 = __require("path");
-    var sleep3 = require_atomic_sleep();
+    var sleep4 = require_atomic_sleep();
     var assert = __require("assert");
     var BUSY_WRITE_TIMEOUT = 100;
     var kEmptyBuffer = Buffer.allocUnsafe(0);
@@ -1372,7 +1372,7 @@ var require_sonic_boom = __commonJS({
           if ((err.code === "EAGAIN" || err.code === "EBUSY") && this.retryEAGAIN(err, this._writingBuf.length, this._len - this._writingBuf.length)) {
             if (this.sync) {
               try {
-                sleep3(BUSY_WRITE_TIMEOUT);
+                sleep4(BUSY_WRITE_TIMEOUT);
                 this.release(void 0, 0);
               } catch (err2) {
                 this.release(err2);
@@ -1685,7 +1685,7 @@ var require_sonic_boom = __commonJS({
           if (shouldRetry && !this.retryEAGAIN(err, buf.length, this._len - buf.length)) {
             throw err;
           }
-          sleep3(BUSY_WRITE_TIMEOUT);
+          sleep4(BUSY_WRITE_TIMEOUT);
         }
       }
       try {
@@ -1722,7 +1722,7 @@ var require_sonic_boom = __commonJS({
           if (shouldRetry && !this.retryEAGAIN(err, buf.length, this._len - buf.length)) {
             throw err;
           }
-          sleep3(BUSY_WRITE_TIMEOUT);
+          sleep4(BUSY_WRITE_TIMEOUT);
         }
       }
     }
@@ -2540,7 +2540,7 @@ var require_transport = __commonJS({
     var getCallers = require_caller();
     var { join: join8, isAbsolute: isAbsolute2, sep: sep2 } = __require("node:path");
     var { fileURLToPath: fileURLToPath2 } = __require("node:url");
-    var sleep3 = require_atomic_sleep();
+    var sleep4 = require_atomic_sleep();
     var onExit = require_on_exit_leak_free();
     var ThreadStream = require_thread_stream();
     function setupOnExit(stream) {
@@ -2663,7 +2663,7 @@ var require_transport = __commonJS({
           return;
         }
         stream.flushSync();
-        sleep3(100);
+        sleep4(100);
         stream.end();
       }
       return stream;
@@ -16123,11 +16123,17 @@ var init_src = __esm({
 
 // src/transport/push.ts
 import { randomUUID } from "crypto";
-var XYPushService;
+function sleep(ms) {
+  return new Promise((resolve2) => setTimeout(resolve2, ms));
+}
+var PUSH_RETRY_DELAYS_MS, PUSH_MAX_ATTEMPTS, PUSH_RETRYABLE_STATUSES, XYPushService;
 var init_push = __esm({
   "src/transport/push.ts"() {
     init_src();
     init_logger();
+    PUSH_RETRY_DELAYS_MS = [2e3, 3e3, 4e3];
+    PUSH_MAX_ATTEMPTS = PUSH_RETRY_DELAYS_MS.length + 1;
+    PUSH_RETRYABLE_STATUSES = /* @__PURE__ */ new Set([408, 425, 429, 500, 502, 503, 504]);
     XYPushService = class {
       constructor(config) {
         this.config = config;
@@ -16211,38 +16217,48 @@ var init_push = __esm({
               ]
             }
           };
-          const response = await fetch2(pushUrl, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "Accept": "application/json",
-              "x-hag-trace-id": traceId,
-              "x-uid": this.config.uid,
-              "x-api-key": this.config.apiKey,
-              "x-request-from": this.REQUEST_FROM
-            },
-            body: JSON.stringify(requestBody)
-          });
-          logger.log(`[PUSH] Response received, HTTP Status: ${response.status} ${response.statusText}`);
-          if (!response.ok) {
-            const errorText = await response.text();
-            logger.error(`[PUSH] Push request failed, HTTP Status: ${response.status}`);
-            throw new Error(`Push failed: HTTP ${response.status} - ${errorText}`);
-          }
-          let result;
-          try {
-            const responseText = await response.text();
-            if (!responseText || responseText.trim() === "") {
-              logger.error(`[PUSH] Received empty response body`);
-              result = {};
-            } else {
-              result = JSON.parse(responseText);
+          for (let attempt = 1; attempt <= PUSH_MAX_ATTEMPTS; attempt++) {
+            const response = await fetch2(pushUrl, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+                "x-hag-trace-id": traceId,
+                "x-uid": this.config.uid,
+                "x-api-key": this.config.apiKey,
+                "x-request-from": this.REQUEST_FROM
+              },
+              body: JSON.stringify(requestBody)
+            });
+            logger.log(`[PUSH] Response received, HTTP Status: ${response.status} ${response.statusText}, attempt ${attempt}/${PUSH_MAX_ATTEMPTS}`);
+            if (!response.ok) {
+              const errorText = await response.text();
+              const canRetry = PUSH_RETRYABLE_STATUSES.has(response.status) && attempt < PUSH_MAX_ATTEMPTS;
+              if (!canRetry) {
+                logger.error(`[PUSH] Push request failed after ${attempt} attempt(s), HTTP Status: ${response.status}`);
+                throw new Error(`Push failed after ${attempt} attempt(s): HTTP ${response.status} - ${errorText}`);
+              }
+              const delayMs = PUSH_RETRY_DELAYS_MS[attempt - 1];
+              logger.log(`[PUSH] HTTP ${response.status} on attempt ${attempt}/${PUSH_MAX_ATTEMPTS}, retrying in ${delayMs}ms, Trace ID: ${traceId}`);
+              await sleep(delayMs);
+              continue;
             }
-          } catch (parseError) {
-            logger.error(`[PUSH] Failed to parse JSON response: ${parseError instanceof Error ? parseError.message : String(parseError)}`);
-            throw new Error(`Invalid JSON response from push service: ${parseError instanceof Error ? parseError.message : String(parseError)}`);
+            let result;
+            try {
+              const responseText = await response.text();
+              if (!responseText || responseText.trim() === "") {
+                logger.error(`[PUSH] Received empty response body`);
+                result = {};
+              } else {
+                result = JSON.parse(responseText);
+              }
+            } catch (parseError) {
+              logger.error(`[PUSH] Failed to parse JSON response: ${parseError instanceof Error ? parseError.message : String(parseError)}`);
+              throw new Error(`Invalid JSON response from push service: ${parseError instanceof Error ? parseError.message : String(parseError)}`);
+            }
+            logger.log(`[PUSH] Push message sent successfully on attempt ${attempt}/${PUSH_MAX_ATTEMPTS}, Trace ID: ${traceId}`);
+            return;
           }
-          logger.log(`[PUSH] Push message sent successfully, Trace ID: ${traceId}`);
         } catch (error) {
           if (error instanceof Error) {
             logger.error(`[PUSH] Failed to send push message: ${error.name} - ${error.message}`);
@@ -18000,7 +18016,7 @@ var init_delta_text_tracker = __esm({
 });
 
 // src/conversation/outbound-queue.ts
-function sleep(ms) {
+function sleep2(ms) {
   return new Promise((resolve2) => setTimeout(resolve2, ms));
 }
 var OutboundQueue;
@@ -18065,7 +18081,7 @@ var init_outbound_queue = __esm({
             }
             if (frame.delayMs && frame.delayMs > 0) {
               log.log(`[OUTBOUND-QUEUE] Delaying frame by ${frame.delayMs}ms: ${frame.label}`);
-              await sleep(frame.delayMs);
+              await sleep2(frame.delayMs);
             }
             try {
               await frame.send();
@@ -24832,7 +24848,7 @@ function getRetryDelayMs(attempt, isCron = false) {
   const jitter = Math.floor(Math.random() * 1e4);
   return base + jitter;
 }
-function sleep2(ms) {
+function sleep3(ms) {
   return new Promise((resolve2) => setTimeout(resolve2, ms));
 }
 function createRetryingStream(createStream, options) {
@@ -24928,7 +24944,7 @@ function createRetryingStream(createStream, options) {
           logger.log(
             `[xiaoyiprovider] retryable error (attempt ${attempt + 1}/${MAX_RETRY_ATTEMPTS}): ${errorResult.errorMessage} \u2014 retrying in ${delayMs}ms`
           );
-          await sleep2(delayMs);
+          await sleep3(delayMs);
           continue;
         }
         logger.log(`[xiaoyiprovider] all ${MAX_RETRY_ATTEMPTS} retries exhausted`);

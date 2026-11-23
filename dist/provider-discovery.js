@@ -1188,7 +1188,7 @@ var require_atomic_sleep = __commonJS({
   "node_modules/atomic-sleep/index.js"(exports, module) {
     "use strict";
     if (typeof SharedArrayBuffer !== "undefined" && typeof Atomics !== "undefined") {
-      let sleep2 = function(ms) {
+      let sleep3 = function(ms) {
         const valid = ms > 0 && ms < Infinity;
         if (valid === false) {
           if (typeof ms !== "number" && typeof ms !== "bigint") {
@@ -1199,9 +1199,9 @@ var require_atomic_sleep = __commonJS({
         Atomics.wait(nil, 0, 0, Number(ms));
       };
       const nil = new Int32Array(new SharedArrayBuffer(4));
-      module.exports = sleep2;
+      module.exports = sleep3;
     } else {
-      let sleep2 = function(ms) {
+      let sleep3 = function(ms) {
         const valid = ms > 0 && ms < Infinity;
         if (valid === false) {
           if (typeof ms !== "number" && typeof ms !== "bigint") {
@@ -1213,7 +1213,7 @@ var require_atomic_sleep = __commonJS({
         while (target > Date.now()) {
         }
       };
-      module.exports = sleep2;
+      module.exports = sleep3;
     }
   }
 });
@@ -1226,7 +1226,7 @@ var require_sonic_boom = __commonJS({
     var EventEmitter2 = __require("events");
     var inherits = __require("util").inherits;
     var path5 = __require("path");
-    var sleep2 = require_atomic_sleep();
+    var sleep3 = require_atomic_sleep();
     var assert = __require("assert");
     var BUSY_WRITE_TIMEOUT = 100;
     var kEmptyBuffer = Buffer.allocUnsafe(0);
@@ -1372,7 +1372,7 @@ var require_sonic_boom = __commonJS({
           if ((err.code === "EAGAIN" || err.code === "EBUSY") && this.retryEAGAIN(err, this._writingBuf.length, this._len - this._writingBuf.length)) {
             if (this.sync) {
               try {
-                sleep2(BUSY_WRITE_TIMEOUT);
+                sleep3(BUSY_WRITE_TIMEOUT);
                 this.release(void 0, 0);
               } catch (err2) {
                 this.release(err2);
@@ -1685,7 +1685,7 @@ var require_sonic_boom = __commonJS({
           if (shouldRetry && !this.retryEAGAIN(err, buf.length, this._len - buf.length)) {
             throw err;
           }
-          sleep2(BUSY_WRITE_TIMEOUT);
+          sleep3(BUSY_WRITE_TIMEOUT);
         }
       }
       try {
@@ -1722,7 +1722,7 @@ var require_sonic_boom = __commonJS({
           if (shouldRetry && !this.retryEAGAIN(err, buf.length, this._len - buf.length)) {
             throw err;
           }
-          sleep2(BUSY_WRITE_TIMEOUT);
+          sleep3(BUSY_WRITE_TIMEOUT);
         }
       }
     }
@@ -2540,7 +2540,7 @@ var require_transport = __commonJS({
     var getCallers = require_caller();
     var { join: join2, isAbsolute, sep } = __require("node:path");
     var { fileURLToPath } = __require("node:url");
-    var sleep2 = require_atomic_sleep();
+    var sleep3 = require_atomic_sleep();
     var onExit = require_on_exit_leak_free();
     var ThreadStream = require_thread_stream();
     function setupOnExit(stream) {
@@ -2663,7 +2663,7 @@ var require_transport = __commonJS({
           return;
         }
         stream.flushSync();
-        sleep2(100);
+        sleep3(100);
         stream.end();
       }
       return stream;
@@ -15702,6 +15702,12 @@ function fixResponseChunkedTransferBadEnding(request, errorCallback) {
 
 // src/transport/push.ts
 import { randomUUID } from "crypto";
+var PUSH_RETRY_DELAYS_MS = [2e3, 3e3, 4e3];
+var PUSH_MAX_ATTEMPTS = PUSH_RETRY_DELAYS_MS.length + 1;
+var PUSH_RETRYABLE_STATUSES = /* @__PURE__ */ new Set([408, 425, 429, 500, 502, 503, 504]);
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 var XYPushService = class {
   constructor(config) {
     this.config = config;
@@ -15785,38 +15791,48 @@ var XYPushService = class {
           ]
         }
       };
-      const response = await fetch2(pushUrl, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Accept": "application/json",
-          "x-hag-trace-id": traceId,
-          "x-uid": this.config.uid,
-          "x-api-key": this.config.apiKey,
-          "x-request-from": this.REQUEST_FROM
-        },
-        body: JSON.stringify(requestBody)
-      });
-      logger.log(`[PUSH] Response received, HTTP Status: ${response.status} ${response.statusText}`);
-      if (!response.ok) {
-        const errorText = await response.text();
-        logger.error(`[PUSH] Push request failed, HTTP Status: ${response.status}`);
-        throw new Error(`Push failed: HTTP ${response.status} - ${errorText}`);
-      }
-      let result;
-      try {
-        const responseText = await response.text();
-        if (!responseText || responseText.trim() === "") {
-          logger.error(`[PUSH] Received empty response body`);
-          result = {};
-        } else {
-          result = JSON.parse(responseText);
+      for (let attempt = 1; attempt <= PUSH_MAX_ATTEMPTS; attempt++) {
+        const response = await fetch2(pushUrl, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "x-hag-trace-id": traceId,
+            "x-uid": this.config.uid,
+            "x-api-key": this.config.apiKey,
+            "x-request-from": this.REQUEST_FROM
+          },
+          body: JSON.stringify(requestBody)
+        });
+        logger.log(`[PUSH] Response received, HTTP Status: ${response.status} ${response.statusText}, attempt ${attempt}/${PUSH_MAX_ATTEMPTS}`);
+        if (!response.ok) {
+          const errorText = await response.text();
+          const canRetry = PUSH_RETRYABLE_STATUSES.has(response.status) && attempt < PUSH_MAX_ATTEMPTS;
+          if (!canRetry) {
+            logger.error(`[PUSH] Push request failed after ${attempt} attempt(s), HTTP Status: ${response.status}`);
+            throw new Error(`Push failed after ${attempt} attempt(s): HTTP ${response.status} - ${errorText}`);
+          }
+          const delayMs = PUSH_RETRY_DELAYS_MS[attempt - 1];
+          logger.log(`[PUSH] HTTP ${response.status} on attempt ${attempt}/${PUSH_MAX_ATTEMPTS}, retrying in ${delayMs}ms, Trace ID: ${traceId}`);
+          await sleep(delayMs);
+          continue;
         }
-      } catch (parseError) {
-        logger.error(`[PUSH] Failed to parse JSON response: ${parseError instanceof Error ? parseError.message : String(parseError)}`);
-        throw new Error(`Invalid JSON response from push service: ${parseError instanceof Error ? parseError.message : String(parseError)}`);
+        let result;
+        try {
+          const responseText = await response.text();
+          if (!responseText || responseText.trim() === "") {
+            logger.error(`[PUSH] Received empty response body`);
+            result = {};
+          } else {
+            result = JSON.parse(responseText);
+          }
+        } catch (parseError) {
+          logger.error(`[PUSH] Failed to parse JSON response: ${parseError instanceof Error ? parseError.message : String(parseError)}`);
+          throw new Error(`Invalid JSON response from push service: ${parseError instanceof Error ? parseError.message : String(parseError)}`);
+        }
+        logger.log(`[PUSH] Push message sent successfully on attempt ${attempt}/${PUSH_MAX_ATTEMPTS}, Trace ID: ${traceId}`);
+        return;
       }
-      logger.log(`[PUSH] Push message sent successfully, Trace ID: ${traceId}`);
     } catch (error) {
       if (error instanceof Error) {
         logger.error(`[PUSH] Failed to send push message: ${error.name} - ${error.message}`);
@@ -17303,7 +17319,7 @@ function getRetryDelayMs(attempt, isCron = false) {
   const jitter = Math.floor(Math.random() * 1e4);
   return base + jitter;
 }
-function sleep(ms) {
+function sleep2(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 function createRetryingStream(createStream, options) {
@@ -17399,7 +17415,7 @@ function createRetryingStream(createStream, options) {
           logger.log(
             `[xiaoyiprovider] retryable error (attempt ${attempt + 1}/${MAX_RETRY_ATTEMPTS}): ${errorResult.errorMessage} \u2014 retrying in ${delayMs}ms`
           );
-          await sleep(delayMs);
+          await sleep2(delayMs);
           continue;
         }
         logger.log(`[xiaoyiprovider] all ${MAX_RETRY_ATTEMPTS} retries exhausted`);
