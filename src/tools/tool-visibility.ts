@@ -1,6 +1,6 @@
 import { isBelowLegacyAppVersion } from "../utils/app-version.js";
 
-/** 仅在支持 stepinfo 的 App 版本（>= 11.7.10.300）中可见的工具。 */
+/** 仅在支持 stepinfo 的 App 版本（>= 11.7.10.212）中可见的工具。 */
 const STEPINFO_VERSION_GATED_TOOLS = new Set(["ask_user"]);
 
 /**

@@ -25,9 +25,9 @@ describe("xyPlugin ask_user registration", () => {
 
   it.each([
     ["11.7.9.330", false],
-    ["11.7.10.299", false],
-    ["11.7.10.300", true],
-    ["11.7.10.301", true],
+    ["11.7.10.211", false],
+    ["11.7.10.212", true],
+    ["11.7.10.213", true],
     [undefined, false],
   ])("applies appVersion visibility to the model-facing tool list", (appVer, visible) => {
     mocks.getCurrentSessionContext.mockReturnValue({
