@@ -8,9 +8,11 @@ import { clearRunCrossTaskSentFiles, getCurrentSessionContext } from "../tools/s
 import fs from "fs/promises";
 import path from "path";
 import { logger } from "../utils/logger.js";
+import { rewriteEntitlementFailureText } from "../utils/entitlement-failure.js";
 import {
   getWaitState,
   clearWaitState,
+  getCurrentTask,
   getCurrentTaskId,
   getCurrentMessageId,
   getOrCreateSession,
@@ -320,6 +322,9 @@ export function createLegacyReplyDispatcher(params: CreateXYReplyDispatcherParam
 
         // ⚠️ 将 openclaw 技术性英文失败文案替换为中文兜底提示（见 rewriteOpenclawFailureText）
         text = rewriteOpenclawFailureText(text);
+        if (info?.kind === "final" && payload.isError) {
+          text = rewriteEntitlementFailureText(text, getCurrentTask(sessionId));
+        }
 
         scopedLog().log(`[DELIVER] kind=${info?.kind}, text.length=${text.length}`);
 
