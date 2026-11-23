@@ -13,7 +13,7 @@ import type { A2ADataEvent } from "../types.js";
  * Returns local mediaUri strings that can be used with upload_photo tool.
  *
  * IMPORTANT: The returned mediaUris are LOCAL URIs that cannot be downloaded directly.
- * To get publicly accessible URLs, use the upload_photo tool with these URIs.
+ * To get OpenClaw-local file paths, use the upload_photo tool with these URIs.
  */
 export const searchPhotoGalleryTool = {
   name: "search_photo_gallery",
@@ -24,7 +24,7 @@ export const searchPhotoGalleryTool = {
 
   工具输入输出简介：
   a. 根据图像描述语料检索匹配的照片,返回照片在手机本地的 mediaUri以及thumbnailUri。
-  b. 返回的 mediaUri以及thumbnailUri 是本地路径,无法直接下载或访问。如果需要下载、查看、使用或展示照片,请使用 upload_photo 工具将 mediaUri或者thumbnailUri 转换为可访问的公网 URL。
+  b. 返回的 mediaUri以及thumbnailUri 是设备本地路径,无法直接下载或访问。如果需要下载、查看、使用或展示照片,请使用 upload_photo 工具将 mediaUri或者thumbnailUri 转换为 OpenClaw 运行环境的本地临时文件路径 imagePaths。
   c. mediaUri代表手机相册中的图片原图路径，图片大小比较大，清晰度比较高
   d. thumbnailUri代表手机相册中的图片缩略图路径，图片大小比较小，清晰度适中，建议在upload_photo 工具的入参中优先使用此路径，不容易引起上传超时等问题
 

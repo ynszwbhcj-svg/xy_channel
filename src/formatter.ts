@@ -635,86 +635,6 @@ export async function sendExecuteStatusCard(params: SendExecuteStatusCardParams)
 }
 
 /**
- * Parameters for sending a card (e.g., HTML H5 card).
- */
-export interface SendCardParams {
-  config: XYChannelConfig;
-  sessionId: string;
-  taskId: string;
-  messageId: string;
-  /** toolCallId from the tool's execute() — used for cron detection via hook-set Map. */
-  toolCallId?: string;
-  /** When true, the artifact-update is sent with final=true. Default: false. */
-  final?: boolean;
-  /** 标识一段流式文本是否结束。卡片帧不是文本流终点，默认 false。 */
-  lastChunk?: boolean;
-  /** Array of card data objects to send. */
-  cardsInfo: CardDataObject[];
-}
-
-/**
- * Card data object for sending display cards.
- */
-export interface CardDataObject {
-  cardName: string;
-  cardData: Record<string, any>;
-  displayType: string;
-}
-
-/**
- * Send a card (e.g., HTML H5 card) as an artifact update (final=false).
- *
- * Cron-aware: same routing logic as sendCommand.
- */
-export async function sendCard(params: SendCardParams): Promise<void> {
-  const { config, sessionId, taskId, messageId, toolCallId } = params;
-
-  // ── Cron mode: route through push channel ──────────────────────
-  if (sessionId.startsWith("cron-") || isCronToolCall(toolCallId)) {
-    throw new Error("sendCard does not support cron mode");
-  }
-
-  // ── Normal mode: WebSocket ─────────────────────────────────────
-  const log = logger.withContext(sessionId, taskId);
-
-  // Build artifact update with cardsInfo as data
-  const artifact: A2ATaskArtifactUpdateEvent = {
-    taskId,
-    taskUniqId: taskId,
-    taskUniqIndexId: getCurrentStatusCardSeq(taskId),
-    kind: "artifact-update",
-    isNew: !isLegacyAppVersion(taskId),
-    append: false,
-    lastChunk: params.lastChunk ?? false,
-    final: params.final ?? false,
-    streamingTextId: getOrCreateStreamingTextId(taskId),
-    isReasoningFinished: readReasoningFinished(taskId),
-    artifact: {
-      artifactId: uuidv4(),
-      parts: [
-        {
-          kind: "data",
-          data: {
-            cardsInfo: params.cardsInfo,
-          },
-        },
-      ],
-    },
-  };
-
-  // Build JSON-RPC response
-  const jsonRpcResponse = {
-    jsonrpc: "2.0",
-    id: messageId,
-    result: artifact,
-  };
-
-  log.log(`[A2A_CARD] Sending card`);
-  await sendWsFrame({ config, sessionId, taskId, payload: jsonRpcResponse });
-  log.log(`[A2A_CARD] Card sent successfully`);
-}
-
-/**
  * Parameters for sending reference data as an artifact update.
  */
 export interface SendReferenceParams {
@@ -749,9 +669,8 @@ export interface ReferenceDataItem {
 /**
  * Send reference/citation data as an artifact update (final=false).
  *
- * Follows the same pattern as sendCard: builds a data part with the
- * "reference" key containing ReferenceDataObject items, wraps in JSON-RPC,
- * and sends via WebSocket.
+ * Builds a data part with the "reference" key containing ReferenceDataObject
+ * items, wraps in JSON-RPC, and sends via WebSocket.
  *
  * streamingTextId 跟随本 turn 最后一个正文帧（与 command 帧同一 last-sent
  * 规则）：引用帧在最后一个正文之后下发（高版本链路经 utils/pending-references

@@ -24,8 +24,7 @@ const DEVICE_TOOL_POLICY: Partial<Record<DeviceType, DeviceToolPolicy>> = {
       "send_message",
       "search_message",
       "search_contact",
-      "get_contact_tool_schema",
-      "send_html_card"
+      "get_contact_tool_schema"
     ],
   },
   "web": {
@@ -43,7 +42,7 @@ const DEVICE_TOOL_POLICY: Partial<Record<DeviceType, DeviceToolPolicy>> = {
   // call_device_tool + get_*_tool_schema 是备忘录/日历/闹钟/联系人/图库/文件/收藏等
   // 全部端工具的调度与 schema 入口，屏蔽后即覆盖整个端工具注册表（deviceToolRegistry）；
   // xiaoyi_gui_agent / get_user_location / 跨设备工具 / check_plugin_privilege 均需端侧
-  // 执行 intent；卡片展示类（send_html_card、display-a2ui-card-bypath）winpc 不支持渲染。
+  // 执行 intent；display-a2ui-card-bypath 在 winpc 不支持渲染。
   // 云侧接口工具（send_file_to_user、image_reading、invoke 云侧分发等）保留。
   "winpc": {
     allowlist: false,
@@ -64,7 +63,6 @@ const DEVICE_TOOL_POLICY: Partial<Record<DeviceType, DeviceToolPolicy>> = {
       "send_cross_device_task",
       "check_plugin_privilege",
       // 卡片展示类（winpc 不支持渲染）
-      "send_html_card",
       "display-a2ui-card-bypath",
     ],
   },
@@ -87,7 +85,6 @@ const DEVICE_TOOL_POLICY: Partial<Record<DeviceType, DeviceToolPolicy>> = {
       "send_cross_device_task",
       "check_plugin_privilege",
       // 卡片展示类（wearable 不支持渲染）
-      "send_html_card",
       "display-a2ui-card-bypath",
     ],
   },

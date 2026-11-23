@@ -14,7 +14,6 @@ import { logger } from "./utils/logger.js";
 import { locationTool } from "./tools/location-tool.js";
 import { xiaoyiGuiTool } from "./tools/xiaoyi-gui-tool.js";
 import { sendFileToUserTool } from "./tools/send-file-to-user-tool.js";
-import { sendHtmlCardTool } from "./tools/send-html-card-tool.js";
 import { viewPushResultTool } from "./tools/view-push-result-tool.js";
 import { imageReadingTool } from "./tools/image-reading-tool.js";
 import { timestampToUtc8Tool } from "./tools/timestamp-to-utc8-tool.js";
@@ -50,7 +49,6 @@ const ALL_TOOLS: any[] = [
   getAlarmToolSchemaTool,
   getCollectionToolSchemaTool,
   sendFileToUserTool,
-  sendHtmlCardTool,
   viewPushResultTool,
   imageReadingTool,
   timestampToUtc8Tool,

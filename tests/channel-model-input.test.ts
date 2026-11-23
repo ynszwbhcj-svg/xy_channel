@@ -78,4 +78,13 @@ describe("request-scoped image tool visibility", () => {
     expect(nativeNames).not.toContain("image_reading");
     expect(legacyNames).toContain("image_reading");
   });
+
+  it("does not register the removed HTML card tool", async () => {
+    expect(toolNames()).not.toContain("send_html_card");
+    for (const deviceType of ["phone", "web", "winpc", "2in1", "smartWatch"]) {
+      await runWithSessionContext(context(deviceType, ["text"]), async () => {
+        expect(toolNames()).not.toContain("send_html_card");
+      });
+    }
+  });
 });
