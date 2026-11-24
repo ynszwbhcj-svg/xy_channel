@@ -8,6 +8,28 @@ import type { XYChannelConfig } from "../types.js";
 const PUSH_RETRY_DELAYS_MS = [2_000, 3_000, 4_000];
 const PUSH_MAX_ATTEMPTS = PUSH_RETRY_DELAYS_MS.length + 1;
 const PUSH_RETRYABLE_STATUSES = new Set([408, 425, 429, 500, 502, 503, 504]);
+const PUSH_RATE_LIMIT_STATUS = 429;
+const PUSH_MAX_RATE_LIMIT_RETRIES = 2;
+const PUSH_RATE_LIMIT_DELAY_MS = 13_000;
+const PUSH_RATE_LIMIT_JITTER_MS = 2_000;
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
+
+function getRateLimitRetryDelayMs(retryAfter: string | null): number {
+  const value = retryAfter?.trim() ?? "";
+  if (/^\d+$/.test(value)) {
+    return Number(value) * 1_000;
+  }
+
+  // HTTP dates start with a weekday. Avoid accepting malformed delays as dates.
+  if (/^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)/i.test(value)) {
+    const retryAt = Date.parse(value);
+    if (Number.isFinite(retryAt)) {
+      return Math.max(0, retryAt - Date.now());
+    }
+  }
+
+  return PUSH_RATE_LIMIT_DELAY_MS + Math.floor(Math.random() * (PUSH_RATE_LIMIT_JITTER_MS + 1));
+}
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -163,6 +185,8 @@ export class XYPushService {
         },
       };
 
+      let rateLimitRetries = 0;
+      let transientRetries = 0;
       for (let attempt = 1; attempt <= PUSH_MAX_ATTEMPTS; attempt++) {
         const response = await fetch(pushUrl, {
           method: "POST",
@@ -183,14 +207,30 @@ export class XYPushService {
 
         if (!response.ok) {
           const errorText = await response.text();
-          const canRetry = PUSH_RETRYABLE_STATUSES.has(response.status) && attempt < PUSH_MAX_ATTEMPTS;
+          const isRateLimited = response.status === PUSH_RATE_LIMIT_STATUS;
+          const canRetry = PUSH_RETRYABLE_STATUSES.has(response.status) &&
+            attempt < PUSH_MAX_ATTEMPTS &&
+            (!isRateLimited || rateLimitRetries < PUSH_MAX_RATE_LIMIT_RETRIES);
+          const delayMs = canRetry
+            ? isRateLimited
+              ? getRateLimitRetryDelayMs(response.headers.get("retry-after"))
+              : PUSH_RETRY_DELAYS_MS[transientRetries]
+            : undefined;
 
-          if (!canRetry) {
+          if (delayMs === undefined || delayMs > MAX_TIMER_DELAY_MS) {
+            // Node fires an out-of-range timer almost immediately.
+            if (delayMs !== undefined) {
+              logger.log(`[PUSH] Retry-After exceeds the supported timer range, Trace ID: ${traceId}`);
+            }
             logger.error(`[PUSH] Push request failed after ${attempt} attempt(s), HTTP Status: ${response.status}`);
             throw new Error(`Push failed after ${attempt} attempt(s): HTTP ${response.status} - ${errorText}`);
           }
 
-          const delayMs = PUSH_RETRY_DELAYS_MS[attempt - 1];
+          if (isRateLimited) {
+            rateLimitRetries++;
+          } else {
+            transientRetries++;
+          }
           logger.log(`[PUSH] HTTP ${response.status} on attempt ${attempt}/${PUSH_MAX_ATTEMPTS}, retrying in ${delayMs}ms, Trace ID: ${traceId}`);
           await sleep(delayMs);
           continue;
