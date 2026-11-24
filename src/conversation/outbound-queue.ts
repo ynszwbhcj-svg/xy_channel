@@ -30,6 +30,7 @@ export interface OutboundFrame {
   delayMs?: number;
   /** 实际发送闭包（帧应在入队前完成组帧与上下文捕获）。 */
   send: () => Promise<void>;
+  isStale?: () => boolean;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -44,6 +45,14 @@ export class OutboundQueue {
   private destroyed = false;
 
   constructor(private readonly sessionId: string) {}
+
+  /** Check the dispatcher owner after any queue delay, just before transport. */
+  forDispatcher(isStale: () => boolean) {
+    return {
+      enqueue: (frame: OutboundFrame) => this.enqueue({ ...frame, isStale }),
+      whenIdle: () => this.whenIdle(),
+    };
+  }
 
   enqueue(frame: OutboundFrame): void {
     if (this.destroyed) {
@@ -104,7 +113,7 @@ export class OutboundQueue {
           await sleep(frame.delayMs);
         }
         try {
-          await frame.send();
+          if (!frame.isStale?.()) await frame.send();
         } catch (err) {
           logger.withContext(this.sessionId, frame.taskId).error(
             `[OUTBOUND-QUEUE] Frame send failed: ${frame.label}`,

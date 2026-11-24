@@ -128,6 +128,32 @@ describe("reply dispatcher turn ownership", () => {
     expect(mocks.sendStatusUpdate).not.toHaveBeenCalled();
   });
 
+  it("drops a terminal frame canceled during its send delay", async () => {
+    vi.useFakeTimers();
+    try {
+      const sessionId = "sess-delayed-final";
+      registerTask(sessionId, "old", "old-message");
+      const { dispatcher } = createDispatcher(sessionId, "old", "old-message");
+      await dispatcher.deliver({ text: "old answer" }, { kind: "final" });
+      const queue = getOrCreateSession(sessionId).outboundQueue;
+      await queue.whenIdle();
+      // Every dispatcher frame has a guard, including a frame already removed from the FIFO.
+      const enqueue = queue.enqueue.bind(queue);
+      vi.spyOn(queue, "enqueue").mockImplementation(frame => {
+        enqueue(frame.label === "terminal-final" ? { ...frame, delayMs: 300 } : frame);
+      });
+      const settling = dispatcher.onIdle();
+      await vi.advanceTimersByTimeAsync(100);
+      markTurnCanceled(sessionId, "old");
+      queue.purge("old");
+      await vi.advanceTimersByTimeAsync(300);
+      await settling;
+      expect(mocks.sendA2AResponse.mock.calls.some(([frame]) => frame.final)).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("superseded failure cannot truncate the replacement turn's full final text", async () => {
     const sessionId = "sess-superseded-final";
     registerTask(sessionId, "task-old", "message-old");

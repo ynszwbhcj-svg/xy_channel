@@ -264,29 +264,25 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
       const log = logger.withContext(sessionId, taskId);
       log.log(`[BOT] Tasks cancel request`);
 
-      // 让"停止"真正停止：abort 当前活跃 run，避免在途上一轮完整吐到端侧。
-      // 通过 conversation-manager 的 getSession 拿到 openclaw sessionKey，再解析活跃 run。
-      const sessionKey = getSession(sessionId)?.sessionKey;
-      if (!sessionKey) {
-        log.warn(`[TASKS_CANCEL] No sessionKey bound for sessionId, cannot abort active run`);
-      } else {
-        const activeRun = resolveActiveEmbeddedRunSessionId(sessionKey);
-        if (activeRun) {
-          const ownerTaskId = getCurrentDispatchTaskId(sessionId) ?? getCurrentTaskId(sessionId) ?? taskId;
-          const aborted = abortAgentHarnessRun(activeRun);
-          log.log(`[TASKS_CANCEL] aborted active run=${activeRun} result=${aborted}`);
-          if (aborted) {
-            // tasks/cancel 已有 canceled 终态响应；旧 turn 后续不得再发失败/正文帧。
-            // 该标记只控制输出生命周期，绝不修改下一条消息的上下文。
-            markTurnCanceled(sessionId, ownerTaskId);
-            const session = getSession(sessionId);
-            for (const entry of session?.tasks ?? []) {
-              session?.outboundQueue.purge(entry.taskId);
-            }
+      const session = getSession(sessionId);
+      const currentTaskId = getCurrentTaskId(sessionId);
+      if (session && currentTaskId === taskId) {
+        // A successful direct steer changes the device task but keeps the dispatcher owner.
+        const ownerTaskId = getCurrentDispatchTaskId(sessionId) ?? taskId;
+        markTurnCanceled(sessionId, ownerTaskId);
+        session.outboundQueue.purge(taskId);
+        if (ownerTaskId !== taskId) session.outboundQueue.purge(ownerTaskId);
+        try {
+          const activeRun = session.sessionKey && resolveActiveEmbeddedRunSessionId(session.sessionKey);
+          if (activeRun) {
+            const aborted = abortAgentHarnessRun(activeRun);
+            log.log(`[TASKS_CANCEL] aborted active run=${activeRun} result=${aborted}`);
           }
-        } else {
-          log.log(`[TASKS_CANCEL] No active embedded run for sessionKey, nothing to abort`);
+        } catch (err) {
+          log.warn(`[TASKS_CANCEL] SDK abort failed for canceled turn: ${String(err)}`);
         }
+      } else {
+        log.log(`[TASKS_CANCEL] Ignoring stale cancel for output ownership, currentTaskId=${currentTaskId}`);
       }
 
       const config = resolveXYConfig(cfg);
@@ -565,7 +561,9 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
     if (isUpdate && route.sessionKey) {
       const previousTaskId = getCurrentTaskId(parsed.sessionId);
       const previousMessageId = getCurrentMessageId(parsed.sessionId);
-      const steerResult = requiresNewTurn
+      const previousOwner = getCurrentDispatchTaskId(parsed.sessionId) ?? previousTaskId;
+      const ownerCanceled = previousOwner !== null && isTurnCanceled(parsed.sessionId, previousOwner);
+      const steerResult = requiresNewTurn || ownerCanceled
         ? { ok: false as const, reason: "new-turn-required" }
         : tryDirectSteer({
             sessionId: parsed.sessionId,
@@ -574,6 +572,7 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
             source: "user",
           });
       if (steerResult.ok) {
+        registerTask(parsed.sessionId, parsed.taskId, parsed.messageId);
         if (previousTaskId && previousMessageId) {
           // Preserve upstream #81: close the previous device task without
           // canceling the embedded run receiving this text steer.
@@ -591,7 +590,6 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
             log.error(`[BOT-STEER] Failed to close previous device task:`, err);
           }
         }
-        registerTask(parsed.sessionId, parsed.taskId, parsed.messageId);
         log.log(`[BOT-STEER] Direct steer succeeded — message injected into active run`);
         // Steer message taskId stays in the binding so getActiveTaskId()
         // resolves to the latest taskId for onPartialReply replies.
@@ -599,7 +597,7 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
         // completeTask(sessionId) which removes the entire binding.
         return;
       }
-      steerFailReason = (steerResult as { reason: string }).reason;
+      steerFailReason = ownerCanceled ? "owner-canceled" : (steerResult as { reason: string }).reason;
       log.log(`[BOT-STEER] Direct steer failed (${steerFailReason}), waiting for previous turn before re-dispatch`);
       // 队列关闭或 run 已消失时，旧 dispatch 仍可能持有 session 写锁。
       // 等它完成收尾再开新 turn，避免并发写锁竞争和 60s 超时。
@@ -629,6 +627,8 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
       }
     }
 
+    // Publish the independent dispatcher owner in the same tick as its A2A identity.
+    markTurnInflight(parsed.sessionId, parsed.taskId);
     registerTask(parsed.sessionId, parsed.taskId, parsed.messageId);
     if (!isUpdate || ((steerFailReason === "no-active-run" || strictFullTurn) &&
         !hasWaitState(parsed.sessionId))) {
@@ -687,6 +687,14 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
       }
     }
 
+    const lostOutputOwnership = () => isTurnCanceled(parsed.sessionId, parsed.taskId) ||
+      isTurnSuperseded(parsed.sessionId, parsed.taskId);
+    if (lostOutputOwnership()) {
+      clearTurnInflight(parsed.sessionId, parsed.taskId);
+      completeTask(parsed.sessionId, parsed.taskId);
+      return;
+    }
+
     let dispatchCfg = cfg;
     if (modelCapabilities.supportsNativeImages) {
       dispatchCfg = {
@@ -700,7 +708,7 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
         },
       };
     }
-    if (requiresNewTurn) {
+    if (requiresNewTurn || steerFailReason === "owner-canceled") {
       // Runtime queue resolution accepts plugin channel ids as overrides.
       const byChannel = { ...dispatchCfg.messages?.queue?.byChannel };
       byChannel["xiaoyi-channel"] = "followup";
@@ -834,11 +842,6 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
 
     log.log(`[BOT-DISPATCH] withReplyDispatcher starting, sessionKey=${route.sessionKey}`);
 
-    // 🔑 登记本 turn 在途（onIdle 入口 / onSettled 兜底清除）：subagent 终态
-    // 帧的时机门控据此判断"session 内仍有 turn 在流式输出"，防止 final:true
-    // 提前截断在途回复。steer 直接注入成功的路径在上方已 return，不会登记。
-    markTurnInflight(parsed.sessionId, parsed.taskId);
-
     await core.channel.reply.withReplyDispatcher({
       dispatcher,
       onSettled: async () => {
@@ -906,6 +909,7 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
           ? await params.acquireDispatchInitGate()
           : () => {};
         try {
+          if (lostOutputOwnership()) return;
           // 仅在 dispatch 初始化期间持有全局门；长任务执行与 steer 回退等待不占门。
           const dispatchPromise = runWithSessionContext(sessionContext, async () => {
             log.log(`[ALS-PROOF] bot entered dispatch scope sessionId=${(sessionContext as any).sessionId} taskId=${(sessionContext as any).taskId} isSteer=${isUpdate}`);

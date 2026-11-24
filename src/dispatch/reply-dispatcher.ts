@@ -293,7 +293,9 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
   const session = getOrCreateSession(sessionId);
   const assembler = new StreamAssembler();
   session.assembler = assembler;
-  const outboundQueue = session.outboundQueue;
+  const isOutputStale = (): boolean =>
+    isTurnCanceled(sessionId, taskId) || isTurnSuperseded(sessionId, taskId);
+  const outboundQueue = session.outboundQueue.forDispatcher(isOutputStale);
   // 终态帧延迟：正文 artifact 与终态帧几乎同一毫秒发出，下游服务端对长正文
   // 走慢速管道会把正文延迟到最后投递，导致微服务先收到终态帧（0 关闭）。
   const terminalFrameDelayMs = config.terminalFrameDelayMs ?? 0;
@@ -320,9 +322,6 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
   const stopStatusInterval = () => {
     stopStatusHeartbeat(sessionId);
   };
-
-  const isOutputStale = (): boolean =>
-    isTurnCanceled(sessionId, taskId) || isTurnSuperseded(sessionId, taskId);
 
   const finishIdle = async (preserveHeartbeat: boolean): Promise<void> => {
     if (!preserveHeartbeat) {
@@ -782,6 +781,7 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
               });
 
               await outboundQueue.whenIdle();
+              if (isOutputStale()) return;
               finalSent = true;
               if (waitState) {
                 clearWaitState(sessionId, "main-final-delivered", taskId);
@@ -908,6 +908,7 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
               });
 
               await outboundQueue.whenIdle();
+              if (isOutputStale()) return;
               finalSent = true;
               setSessionState(sessionId, "failed");
               scopedLog().log(`[ON-IDLE] Sent error response, code=99921111`);
