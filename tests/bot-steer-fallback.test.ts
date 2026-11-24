@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
+  cancelAck: vi.fn(),
+  abortRun: vi.fn(),
+  extractAppVer: vi.fn(),
   tryDirectSteer: vi.fn(),
   createXYReplyDispatcher: vi.fn(),
   dispatchReplyFromConfig: vi.fn(),
@@ -23,7 +26,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("openclaw/plugin-sdk/agent-harness-runtime", () => ({
   callGatewayTool: vi.fn(),
   resolveActiveEmbeddedRunSessionId: mocks.resolveActiveEmbeddedRunSessionId,
-  abortAgentHarnessRun: vi.fn(),
+  abortAgentHarnessRun: mocks.abortRun,
 }));
 
 vi.mock("openclaw/plugin-sdk/conversation-runtime", () => ({
@@ -46,6 +49,8 @@ vi.mock("../src/runtime.js", () => ({
         }),
       },
       reply: {
+        createReplyDispatcherWithTyping: (options) => ({ dispatcher: options, replyOptions: {}, markDispatchIdle: vi.fn() }),
+        resolveHumanDelayConfig: () => undefined,
         resolveEnvelopeFormatOptions: () => ({}),
         formatAgentEnvelope: ({ body }) => body,
         finalizeInboundContext: (ctx) => ctx,
@@ -71,7 +76,7 @@ vi.mock("../src/parser.js", () => ({
   extractFileParts: mocks.extractFileParts,
   extractPushId: () => undefined,
   extractDeviceType: () => "winpc",
-  extractAppVer: () => undefined,
+  extractAppVer: mocks.extractAppVer,
   extractSdkApiVersion: () => undefined,
   extractModelName: mocks.extractModelName,
   extractModelInput: mocks.extractModelInput,
@@ -98,12 +103,18 @@ vi.mock("../src/config.js", () => ({
 vi.mock("../src/formatter.js", () => ({
   sendStatusUpdate: mocks.sendStatusUpdate,
   sendClearContextResponse: vi.fn(),
-  sendTasksCancelResponse: vi.fn(),
+  sendTasksCancelResponse: mocks.cancelAck,
   sendA2AResponse: mocks.sendA2AResponse,
   sendDisplayTaskCardData: mocks.sendDisplayTaskCardData,
   sendFileArtifacts: vi.fn(),
 }));
 
+vi.mock("../src/legacy/formatter.js", () => ({
+  sendA2AResponse: mocks.sendA2AResponse,
+  sendStatusUpdate: mocks.sendStatusUpdate,
+  sendReasoningTextUpdate: vi.fn(),
+  sendCommand: vi.fn(),
+}));
 vi.mock("../src/self-evolution-keyword.js", () => ({
   appendSelfEvolutionKeywordNudge: (text) => ({ text, appended: false }),
   shouldNudgeForSelfEvolutionKeyword: () => false,
@@ -111,6 +122,7 @@ vi.mock("../src/self-evolution-keyword.js", () => ({
 
 vi.mock("../src/tools/session-manager.js", () => ({
   runWithSessionContext: mocks.runWithSessionContext,
+  getCurrentSessionContext: () => undefined,
 }));
 
 vi.mock("../src/utils/config-manager.js", () => ({
@@ -144,6 +156,9 @@ import {
   bindSessionKey,
   deleteSession,
   getCurrentTaskId,
+  isTurnCanceled,
+  isTurnSuperseded,
+  markTurnInflight,
   listSessions,
   markTurnCanceled,
   registerTask,
@@ -162,6 +177,7 @@ const message = {
 describe("bot steer fallback sequencing", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.extractAppVer.mockReturnValue(undefined);
     // 默认无上游活跃 run：P1 的就绪等待立即放行，既有顺序断言保持不变。
     mocks.resolveActiveEmbeddedRunSessionId.mockReturnValue(undefined);
     mocks.extractModelInput.mockReturnValue({ input: ["text"], supportsNativeImages: false, source: "missing" });
@@ -189,6 +205,65 @@ describe("bot steer fallback sequencing", () => {
     for (const session of listSessions()) {
       deleteSession(session.sessionId);
     }
+  });
+
+  function cancelTask(taskId: string) {
+    return handleXYMessage({
+      cfg: {}, runtime: { error: mocks.error }, accountId: "default",
+      message: { method: "tasks/cancel", id: "cancel-request", params: { sessionId: "session-steer", id: taskId } } as any,
+    });
+  }
+
+  it("ignores a late cancel addressed to the previous device task", async () => {
+    markTurnInflight("session-steer", "task-new");
+    registerTask("session-steer", "task-new", "message-new");
+    mocks.resolveActiveEmbeddedRunSessionId.mockReturnValue("new-run");
+
+    await cancelTask("task-old");
+
+    expect(mocks.cancelAck).toHaveBeenCalledOnce();
+    expect(mocks.abortRun).not.toHaveBeenCalled();
+    expect(isTurnCanceled("session-steer", "task-new")).toBe(false);
+  });
+
+  it("blocks a canceled legacy dispatcher's late error and delivers one replacement final", async () => {
+    const sessionId = "session-steer";
+    const { createLegacyReplyDispatcher } = await import("../src/legacy/reply-dispatcher.js");
+    const oldTurn = createLegacyReplyDispatcher({
+      cfg: {}, runtime: {}, sessionId, taskId: "task-old", messageId: "message-old", accountId: "default",
+    });
+    markTurnInflight(sessionId, "task-old");
+    mocks.resolveActiveEmbeddedRunSessionId.mockReturnValue("old-run");
+    mocks.abortRun.mockReturnValue(false);
+    await cancelTask("task-old");
+    expect(mocks.cancelAck).toHaveBeenCalledOnce();
+    expect(mocks.abortRun).toHaveBeenCalledWith("old-run");
+    expect(isTurnCanceled(sessionId, "task-old")).toBe(true);
+
+    mocks.extractAppVer.mockReturnValue("11.7.9.300");
+    mocks.extractModelName.mockReturnValue("Auto-Model");
+    mocks.updateSessionStoreEntry.mockImplementationOnce(async () => {
+      // The replacement identity has been published, but its dispatcher is still initializing.
+      await oldTurn.dispatcher.deliver({ text: "LLM request failed.", isError: true }, { kind: "final" });
+      await oldTurn.dispatcher.onIdle();
+      return {};
+    });
+    mocks.dispatchReplyFromConfig.mockImplementationOnce(async ({ dispatcher, cfg }) => {
+      expect(cfg.messages.queue.byChannel["xiaoyi-channel"]).toBe("followup");
+      await dispatcher.deliver({ text: "MateX7 正常回答" }, { kind: "final" });
+      await dispatcher.onIdle();
+      return { queuedFinal: true };
+    });
+    await handleXYMessage({
+      cfg: {}, runtime: { error: mocks.error }, accountId: "default", message,
+      waitForPreviousTurn: async () => {},
+    });
+
+    expect(mocks.tryDirectSteer).not.toHaveBeenCalled();
+    expect(mocks.sendA2AResponse.mock.calls.map(([p]) => [p.taskId, p.messageId, p.text, p.final])).toEqual([
+      ["task-new", "message-new", "MateX7 正常回答", false],
+      ["task-new", "message-new", "", true],
+    ]);
   });
 
   it("queue rejection waits for the old turn before dispatching unmodified user text", async () => {
@@ -302,6 +377,32 @@ describe("bot steer fallback sequencing", () => {
       }
     } finally {
       vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it("supersedes the old owner before asynchronous model setup after the 70s fallback", async () => {
+    vi.useFakeTimers();
+    try {
+      markTurnInflight("session-steer", "task-old");
+      mocks.tryDirectSteer.mockReturnValue({ ok: false, reason: "queue-rejected" });
+      mocks.extractModelName.mockReturnValue("Auto-Model");
+      let ownerAtModelSetup: boolean | undefined;
+      mocks.updateSessionStoreEntry.mockImplementationOnce(async () => {
+        ownerAtModelSetup = isTurnSuperseded("session-steer", "task-old");
+        return {};
+      });
+      const pending = handleXYMessage({
+        cfg: {}, runtime: { error: mocks.error }, message, accountId: "default",
+        waitForPreviousTurn: () => new Promise<void>(() => {}),
+      });
+      await vi.advanceTimersByTimeAsync(70_000);
+      await pending;
+
+      expect(ownerAtModelSetup).toBe(true);
+      expect(getCurrentTaskId("session-steer")).toBe("task-new");
+      expect(mocks.dispatchReplyFromConfig).toHaveBeenCalledOnce();
+    } finally {
       vi.useRealTimers();
     }
   });
