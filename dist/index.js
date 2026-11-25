@@ -37594,7 +37594,7 @@ function flushPendingSkillMdReads(sessionKey) {
 // index.ts
 init_conversation_manager();
 init_logger();
-var A2A_OUT_LOG_ENABLED = true;
+var A2A_OUT_LOG_ENABLED = false;
 setA2AOutLogEnabled(A2A_OUT_LOG_ENABLED);
 function extractSkillNameFromPathText2(text) {
   const normalized = text.replace(/\\/g, "/");
