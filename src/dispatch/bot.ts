@@ -30,6 +30,7 @@ import { getCurrentStatusCardSeq } from "../utils/status-card-seq.js";
 import {
   registerTask,
   getOrCreateSession,
+  getSession,
   completeTask,
   hasActiveTask,
   bindSessionKey,

@@ -21830,6 +21830,7 @@ async function handleXYMessage(params) {
     }
     const strictFullTurn = requiresNewTurn || modelCapabilities.source === "request" && Boolean(modelName);
     let steerFailReason;
+    let steerWaitKeepAliveTimer;
     if (isUpdate && route.sessionKey) {
       const previousTaskId = getCurrentTaskId(parsed.sessionId);
       const previousMessageId = getCurrentMessageId(parsed.sessionId);
@@ -21840,6 +21841,11 @@ async function handleXYMessage(params) {
         source: "user"
       });
       if (steerResult.ok) {
+        const steerSession = getSession(parsed.sessionId);
+        if (previousTaskId) {
+          steerSession?.outboundQueue.purge(previousTaskId);
+        }
+        steerSession?.assembler?.cutSegment();
         if (previousTaskId && previousMessageId) {
           try {
             await sendA2AResponse({
@@ -21861,6 +21867,37 @@ async function handleXYMessage(params) {
       }
       steerFailReason = steerResult.reason;
       log.log(`[BOT-STEER] Direct steer failed (${steerFailReason}), waiting for previous turn before re-dispatch`);
+      const sendSteerWaitKeepAlive = async () => {
+        try {
+          if (isLegacyAppVersion(parsed.taskId)) {
+            await sendStatusUpdate2({
+              config,
+              sessionId: parsed.sessionId,
+              taskId: parsed.taskId,
+              messageId: parsed.messageId,
+              text: "\u4EFB\u52A1\u6B63\u5728\u5904\u7406\u4E2D\uFF0C\u8BF7\u7A0D\u5019~",
+              state: "working"
+            });
+          } else {
+            await sendDisplayTaskCardData({
+              config,
+              sessionId: parsed.sessionId,
+              taskId: parsed.taskId,
+              messageId: parsed.messageId,
+              index: getCurrentStatusCardSeq(parsed.taskId),
+              stepName: "\u4EFB\u52A1\u6B63\u5728\u5904\u7406\u4E2D\uFF0C\u8BF7\u7A0D\u5019",
+              isFinal: false
+            });
+          }
+        } catch (err) {
+          log.error(`[BOT-STEER] Wait keep-alive send failed:`, err);
+        }
+      };
+      void sendSteerWaitKeepAlive();
+      steerWaitKeepAliveTimer = setInterval(() => {
+        void sendSteerWaitKeepAlive();
+      }, STEER_WAIT_KEEPALIVE_INTERVAL_MS);
+      steerWaitKeepAliveTimer.unref?.();
       await waitForPreviousTurnWithTimeoutWarning(params.waitForPreviousTurn, () => {
         log.error(`[BOT-STEER] Previous turn did not settle within ${PREVIOUS_TURN_SETTLE_TIMEOUT_MS}ms; proceeding with fallback dispatch`);
       });
@@ -21868,6 +21905,7 @@ async function handleXYMessage(params) {
     if (strictFullTurn) {
       const readiness = await waitForSdkTurnIdle(route.sessionKey, log);
       if (readiness !== "idle") {
+        clearInterval(steerWaitKeepAliveTimer);
         const text2 = readiness === "timeout" ? "\u4E0A\u4E00\u6761\u4EFB\u52A1\u4ECD\u5728\u5904\u7406\u4E2D\uFF0C\u672C\u6B21\u8BF7\u6C42\u6682\u672A\u6267\u884C\uFF0C\u8BF7\u7A0D\u540E\u91CD\u8BD5\u3002" : "\u6682\u65F6\u65E0\u6CD5\u786E\u8BA4\u4F1A\u8BDD\u72B6\u6001\uFF0C\u672C\u6B21\u8BF7\u6C42\u6682\u672A\u6267\u884C\uFF0C\u8BF7\u7A0D\u540E\u91CD\u8BD5\u3002";
         log.warn(`[BOT-DISPATCH] Full turn rejected: SDK readiness=${readiness}`);
         await failBeforeDispatch({
@@ -21881,6 +21919,7 @@ async function handleXYMessage(params) {
         return;
       }
     }
+    clearInterval(steerWaitKeepAliveTimer);
     registerTask(parsed.sessionId, parsed.taskId, parsed.messageId);
     if (!isUpdate || (steerFailReason === "no-active-run" || strictFullTurn) && !hasWaitState(parsed.sessionId)) {
       bindSessionKey(route.sessionKey, parsed.sessionId, parsed.taskId, parsed.messageId);
@@ -22209,7 +22248,7 @@ function buildXYMediaPayload(mediaList) {
     MediaTypes: mediaTypes.length > 0 ? mediaTypes : void 0
   };
 }
-var CHANNEL_READY_POLL_MS, SDK_TURN_IDLE_TIMEOUT_MS, PREVIOUS_TURN_SETTLE_TIMEOUT_MS;
+var CHANNEL_READY_POLL_MS, SDK_TURN_IDLE_TIMEOUT_MS, PREVIOUS_TURN_SETTLE_TIMEOUT_MS, STEER_WAIT_KEEPALIVE_INTERVAL_MS;
 var init_bot = __esm({
   "src/dispatch/bot.ts"() {
     init_runtime();
@@ -22232,12 +22271,14 @@ var init_bot = __esm({
     init_tool_call_nudge_manager();
     init_steer_service();
     init_app_version();
+    init_status_card_seq();
     init_conversation_manager();
     init_approval_bridge();
     init_logger();
     CHANNEL_READY_POLL_MS = 100;
     SDK_TURN_IDLE_TIMEOUT_MS = 3e4;
     PREVIOUS_TURN_SETTLE_TIMEOUT_MS = 7e4;
+    STEER_WAIT_KEEPALIVE_INTERVAL_MS = 1e4;
   }
 });
 
