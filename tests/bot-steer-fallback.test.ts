@@ -144,6 +144,7 @@ import {
   bindSessionKey,
   deleteSession,
   getCurrentTaskId,
+  getOrCreateSession,
   listSessions,
   markTurnCanceled,
   registerTask,
@@ -279,6 +280,36 @@ describe("bot steer fallback sequencing", () => {
     expect(mocks.dispatchReplyFromConfig).not.toHaveBeenCalled();
     expect(onTurnAdmitted).not.toHaveBeenCalled();
     expect(getCurrentTaskId("session-steer")).toBe("task-new");
+  });
+
+  it("direct success sends the working task card as the first frame for the steered turn", async () => {
+    mocks.tryDirectSteer.mockReturnValue({ ok: true, mode: "direct" });
+
+    await handleXYMessage({
+      cfg: {},
+      runtime: { error: mocks.error },
+      message,
+      accountId: "default",
+    });
+    await getOrCreateSession("session-steer").outboundQueue.whenIdle();
+
+    // 起始卡（任务正在处理中）以第 N+1 轮身份下发
+    expect(mocks.sendDisplayTaskCardData).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: "session-steer",
+      taskId: "task-new",
+      messageId: "message-new",
+      index: 1,
+      stepName: "任务正在处理中",
+      isFinal: false,
+    }));
+    // 顺序：第 N 轮 final 帧 → N+1 起始卡；且起始卡之前没有任何
+    // 挂 N+1 taskId 的 A2A 文本消息
+    const finalCallOrder = mocks.sendA2AResponse.mock.invocationCallOrder[0];
+    const cardCallOrder = mocks.sendDisplayTaskCardData.mock.invocationCallOrder[0];
+    expect(finalCallOrder).toBeLessThan(cardCallOrder);
+    expect(
+      mocks.sendA2AResponse.mock.calls.filter(([params]) => params.taskId === "task-new"),
+    ).toHaveLength(0);
   });
 
   it("native image steer keeps real images and source metadata in a complete new turn", async () => {

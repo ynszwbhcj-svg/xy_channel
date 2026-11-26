@@ -22216,9 +22216,35 @@ async function handleXYMessage(params) {
         }
         registerTask(parsed.sessionId, parsed.taskId, parsed.messageId);
         log.log(`[BOT-STEER] Direct steer succeeded \u2014 message injected into active run`);
+        if (isLegacyAppVersion(parsed.taskId)) {
+          void sendStatusUpdate2({
+            config,
+            sessionId: parsed.sessionId,
+            taskId: parsed.taskId,
+            messageId: parsed.messageId,
+            text: "\u4EFB\u52A1\u6B63\u5728\u5904\u7406\u4E2D\uFF0C\u8BF7\u7A0D\u5019~",
+            state: "working"
+          }).catch((err) => {
+            log.error(`Failed to send steer start status update (legacy):`, err);
+          });
+        } else {
+          getOrCreateSession(parsed.sessionId).outboundQueue.enqueue({
+            taskId: parsed.taskId,
+            label: "task-card-start",
+            send: () => sendDisplayTaskCardData({
+              config,
+              sessionId: parsed.sessionId,
+              taskId: parsed.taskId,
+              messageId: parsed.messageId,
+              index: 1,
+              stepName: "\u4EFB\u52A1\u6B63\u5728\u5904\u7406\u4E2D",
+              isFinal: false
+            })
+          });
+        }
         if (hasStreamActivity(parsed.sessionId)) {
           markSteerSuppression(parsed.sessionId);
-          log.log(`[BOT-STEER] Suppression window armed \u2014 in-flight stream output dropped until next message_end`);
+          log.log(`[BOT-STEER] Suppression window armed \u2014 in-flight stream output dropped until next assistant message_start`);
         }
         return;
       }
