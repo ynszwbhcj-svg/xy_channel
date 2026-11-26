@@ -8,7 +8,7 @@ import { clearRunCrossTaskSentFiles, getCurrentSessionContext } from "../tools/s
 import fs from "fs/promises";
 import path from "path";
 import { logger } from "../utils/logger.js";
-import { rewriteEntitlementFailureText } from "../utils/entitlement-failure.js";
+import { getSelectedEntitlementFailureReply, selectEntitlementFailureReply } from "../utils/entitlement-failure.js";
 import {
   getWaitState,
   clearWaitState,
@@ -322,9 +322,10 @@ export function createLegacyReplyDispatcher(params: CreateXYReplyDispatcherParam
 
         // ⚠️ 将 openclaw 技术性英文失败文案替换为中文兜底提示（见 rewriteOpenclawFailureText）
         text = rewriteOpenclawFailureText(text);
-        if (info?.kind === "final" && payload.isError) {
-          text = rewriteEntitlementFailureText(text, getCurrentTask(sessionId));
-        }
+        const entitlementReply = info?.kind === "final" && payload.isError
+          ? selectEntitlementFailureReply(text, getCurrentTask(sessionId))
+          : undefined;
+        text = entitlementReply ?? text;
 
         scopedLog().log(`[DELIVER] kind=${info?.kind}, text.length=${text.length}`);
 
@@ -337,7 +338,7 @@ export function createLegacyReplyDispatcher(params: CreateXYReplyDispatcherParam
           // 捕获权威最终文本（canonical，来自最后一条 assistant 消息，
           // 非流式累计），供 onIdle 拼接最终帧。compaction 通知和 ⚙️ 系统
           // 通知（如 ACP "Session ids resolved"）不是答案文本，不能污染。
-          if (info?.kind === "final" && !payload.isCompactionNotice && !isSystemNoticeText(text)) {
+          if (info?.kind === "final" && !entitlementReply && !payload.isCompactionNotice && !isSystemNoticeText(text)) {
             assembler.onFinalText(text);
             scopedLog().log(`[DELIVER] Captured final reply text, length=${text.length}`);
           }
@@ -510,6 +511,9 @@ export function createLegacyReplyDispatcher(params: CreateXYReplyDispatcherParam
             // （openclaw 从最后一条 assistant 消息直接提取）非空时替换流式
             // 累计的末轮 —— message_end 的最终清洗文本不走 onPartialReply，
             // 流式累计天然可能缺尾，以 canonical 为准。
+            // A later final can repeat streamed body text. Prefer the current model call's matched error at close.
+            const entitlementReply = getSelectedEntitlementFailureReply(getCurrentTask(sessionId));
+            if (entitlementReply) assembler.onFinalText(entitlementReply);
             const { fullText: fullFinalText, resolvedLastText, diagnostic } = assembler.finalize();
             if (diagnostic === "patched-tail") {
               scopedLog().log(`[ON-IDLE] Streamed text missing tail, patched from final payload, canonical.length=${resolvedLastText.length}`);
