@@ -423,10 +423,15 @@ var require_pino_std_serializers = __commonJS({
 var require_caller = __commonJS({
   "node_modules/pino/lib/caller.js"(exports, module) {
     "use strict";
+    var util = __require("node:util");
+    var getCallSites = util.getCallSites ?? util.getCallSite;
     function noOpPrepareStackTrace(_, stack) {
       return stack;
     }
     module.exports = function getCallers() {
+      if (getCallSites) {
+        return getCallSites().slice(2).map((callSite) => callSite.scriptName);
+      }
       const originalPrepare = Error.prepareStackTrace;
       Error.prepareStackTrace = noOpPrepareStackTrace;
       const stack = new Error().stack;
@@ -915,6 +920,7 @@ var require_symbols = __commonJS({
     var formattersSym = /* @__PURE__ */ Symbol.for("pino.formatters");
     var hooksSym = /* @__PURE__ */ Symbol.for("pino.hooks");
     var needsMetadataGsym = /* @__PURE__ */ Symbol.for("pino.metadata");
+    var transportUsesMultistreamSym = /* @__PURE__ */ Symbol.for("pino.transport.usesMultistream");
     module.exports = {
       setLevelSym,
       getLevelSym,
@@ -946,7 +952,8 @@ var require_symbols = __commonJS({
       hooksSym,
       nestedKeyStrSym,
       mixinMergeStrategySym,
-      msgPrefixSym
+      msgPrefixSym,
+      transportUsesMultistreamSym
     };
   }
 });
@@ -992,10 +999,10 @@ var require_redaction = __commonJS({
         }
         o[ns].push(nextPath);
         return o;
-      }, {});
-      const result = {
+      }, /* @__PURE__ */ Object.create(null));
+      const result = Object.assign(/* @__PURE__ */ Object.create(null), {
         [redactFmtSym]: Redact({ paths, censor, serialize, strict, remove })
-      };
+      });
       const topCensor = (...args) => {
         return typeof censor === "function" ? serialize(censor(...args)) : serialize(censor);
       };
@@ -1904,7 +1911,7 @@ var require_package = __commonJS({
   "node_modules/thread-stream/package.json"(exports, module) {
     module.exports = {
       name: "thread-stream",
-      version: "4.1.0",
+      version: "4.2.1",
       description: "A streaming way to send data to a Node.js Worker Thread",
       main: "index.js",
       types: "index.d.ts",
@@ -1915,25 +1922,30 @@ var require_package = __commonJS({
         "real-require": "^1.0.0"
       },
       devDependencies: {
-        "@types/node": "^25.0.2",
+        "@types/node": "^26.1.1",
         "@yao-pkg/pkg": "^6.0.0",
         borp: "^1.0.0",
         desm: "^1.3.0",
         eslint: "^9.39.1",
         fastbench: "^1.0.1",
         neostandard: "^0.13.0",
-        "pino-elasticsearch": "^8.0.0",
+        "pino-elasticsearch": "^9.0.0",
         "sonic-boom": "^5.0.0",
         "ts-node": "^10.8.0",
+        tsd: "^0.33.0",
         typescript: "~5.7.3"
       },
       scripts: {
         build: "tsc --noEmit",
         lint: "eslint",
-        test: 'npm run lint && npm run build && npm run transpile && borp --pattern "test/*.test.{js,mjs}"',
-        "test:ci": 'npm run lint && npm run transpile && borp --pattern "test/*.test.{js,mjs}"',
-        "test:yarn": 'npm run transpile && borp --pattern "test/*.test.js"',
+        test: 'npm run lint && npm run build && npm run test:types && npm run transpile && borp --expose-gc --pattern "test/*.test.{js,mjs}"',
+        "test:ci": 'npm run lint && npm run test:types && npm run transpile && borp --expose-gc --pattern "test/*.test.{js,mjs}"',
+        "test:types": "tsd",
+        "test:yarn": 'npm run transpile && borp --expose-gc --pattern "test/*.test.js"',
         transpile: "sh ./test/ts/transpile.sh"
+      },
+      tsd: {
+        directory: "test/types"
       },
       repository: {
         type: "git",
@@ -1962,10 +1974,14 @@ var require_wait = __commonJS({
     var WAIT_MS = 1e4;
     function wait(state, index, expected, timeout, done) {
       const max = timeout === Infinity ? Infinity : Date.now() + timeout;
-      const check = () => {
+      const check = (previous) => {
         const current = Atomics.load(state, index);
-        if (current === expected) {
+        if (current >= expected) {
           done(null, "ok");
+          return;
+        }
+        if (previous !== void 0 && current !== previous) {
+          done(null, "not-equal");
           return;
         }
         if (max !== Infinity && Date.now() > max) {
@@ -1975,9 +1991,16 @@ var require_wait = __commonJS({
         const remaining = max === Infinity ? WAIT_MS : Math.min(WAIT_MS, Math.max(1, max - Date.now()));
         const result = Atomics.waitAsync(state, index, current, remaining);
         if (result.async) {
-          result.value.then(check);
+          result.value.then((res) => {
+            if (res === "ok") {
+              const latest = Atomics.load(state, index);
+              done(null, latest >= expected ? "ok" : "not-equal");
+              return;
+            }
+            check(current);
+          });
         } else {
-          setImmediate(check);
+          setImmediate(done, null, "not-equal");
         }
       };
       check();
@@ -1997,7 +2020,13 @@ var require_wait = __commonJS({
         const remaining = max === Infinity ? WAIT_MS : Math.min(WAIT_MS, Math.max(1, max - Date.now()));
         const result = Atomics.waitAsync(state, index, expected, remaining);
         if (result.async) {
-          result.value.then(check);
+          result.value.then((res) => {
+            if (res === "ok") {
+              done(null, "ok");
+              return;
+            }
+            check();
+          });
         } else {
           setImmediate(check);
         }
@@ -2012,11 +2041,13 @@ var require_wait = __commonJS({
 var require_indexes = __commonJS({
   "node_modules/thread-stream/lib/indexes.js"(exports, module) {
     "use strict";
+    var SEQ_INDEX = 2;
     var WRITE_INDEX = 4;
     var READ_INDEX = 8;
     module.exports = {
       WRITE_INDEX,
-      READ_INDEX
+      READ_INDEX,
+      SEQ_INDEX
     };
   }
 });
@@ -2033,13 +2064,27 @@ var require_thread_stream = __commonJS({
     var { wait } = require_wait();
     var {
       WRITE_INDEX,
-      READ_INDEX
+      READ_INDEX,
+      SEQ_INDEX
     } = require_indexes();
     var buffer = __require("buffer");
     var assert = __require("assert");
     var kImpl = /* @__PURE__ */ Symbol("kImpl");
     var MAX_STRING = buffer.constants.MAX_STRING_LENGTH;
     function noop2() {
+    }
+    function updateState(stream, fn) {
+      Atomics.add(stream[kImpl].state, SEQ_INDEX, 1);
+      fn();
+      Atomics.add(stream[kImpl].state, SEQ_INDEX, 1);
+      Atomics.notify(stream[kImpl].state, SEQ_INDEX);
+    }
+    function resetIndexes(stream) {
+      updateState(stream, () => {
+        Atomics.store(stream[kImpl].state, READ_INDEX, 0);
+        Atomics.store(stream[kImpl].state, WRITE_INDEX, 0);
+      });
+      Atomics.notify(stream[kImpl].state, READ_INDEX);
     }
     var FakeWeakRef = class {
       constructor(value) {
@@ -2097,52 +2142,40 @@ var require_thread_stream = __commonJS({
       }
     }
     function nextFlush(stream) {
-      const writeIndex = Atomics.load(stream[kImpl].state, WRITE_INDEX);
-      let leftover = stream[kImpl].data.length - writeIndex;
-      if (leftover > 0) {
-        if (stream[kImpl].buf.length === 0) {
-          stream[kImpl].flushing = false;
-          if (stream[kImpl].ending) {
-            end(stream);
-          } else if (stream[kImpl].needDrain) {
-            process.nextTick(drain, stream);
-          }
+      while (true) {
+        const writeIndex = Atomics.load(stream[kImpl].state, WRITE_INDEX);
+        if (stream.destroyed || writeIndex < 0) {
           return;
         }
-        let toWrite = stream[kImpl].buf.slice(0, leftover);
-        let toWriteBytes = Buffer.byteLength(toWrite);
-        if (toWriteBytes <= leftover) {
-          stream[kImpl].buf = stream[kImpl].buf.slice(leftover);
-          write(stream, toWrite, nextFlush.bind(null, stream));
-        } else {
+        const leftover = stream[kImpl].data.length - writeIndex;
+        if (leftover > 0) {
+          if (stream[kImpl].bufLen === 0) {
+            stream[kImpl].flushing = false;
+            if (stream[kImpl].ending) {
+              end(stream);
+            } else if (stream[kImpl].needDrain) {
+              process.nextTick(drain, stream);
+            }
+            return;
+          }
+          write(stream, leftover, noop2);
+          continue;
+        }
+        if (leftover === 0) {
+          if (writeIndex === 0 && stream[kImpl].bufLen === 0) {
+            return;
+          }
           waitForRead(stream, () => {
             if (stream.destroyed) {
               return;
             }
-            Atomics.store(stream[kImpl].state, READ_INDEX, 0);
-            Atomics.store(stream[kImpl].state, WRITE_INDEX, 0);
-            Atomics.notify(stream[kImpl].state, READ_INDEX);
-            while (toWriteBytes > stream[kImpl].data.length) {
-              leftover = leftover / 2;
-              toWrite = stream[kImpl].buf.slice(0, leftover);
-              toWriteBytes = Buffer.byteLength(toWrite);
-            }
-            stream[kImpl].buf = stream[kImpl].buf.slice(leftover);
-            write(stream, toWrite, nextFlush.bind(null, stream));
+            resetIndexes(stream);
+            nextFlush(stream);
           });
-        }
-      } else if (leftover === 0) {
-        if (writeIndex === 0 && stream[kImpl].buf.length === 0) {
           return;
         }
-        waitForRead(stream, () => {
-          Atomics.store(stream[kImpl].state, READ_INDEX, 0);
-          Atomics.store(stream[kImpl].state, WRITE_INDEX, 0);
-          Atomics.notify(stream[kImpl].state, READ_INDEX);
-          nextFlush(stream);
-        });
-      } else {
         destroy(stream, new Error("overwritten"));
+        return;
       }
     }
     function onWorkerMessage(msg) {
@@ -2157,7 +2190,9 @@ var require_thread_stream = __commonJS({
       }
       switch (msg.code) {
         case "READY":
-          this.stream = new WeakRef2(stream);
+          if (!stream[kImpl].ending) {
+            this.stream = new WeakRef2(stream);
+          }
           waitForRead(stream, () => {
             stream[kImpl].ready = true;
             stream.emit("ready");
@@ -2223,15 +2258,20 @@ var require_thread_stream = __commonJS({
         this[kImpl].finished = false;
         this[kImpl].errored = null;
         this[kImpl].closed = false;
-        this[kImpl].buf = "";
+        this[kImpl].buf = [];
+        this[kImpl].bufHead = 0;
+        this[kImpl].bufLen = 0;
         this[kImpl].flushCallbacks = /* @__PURE__ */ new Map();
         this[kImpl].nextFlushId = 0;
+        this[kImpl].flushRetainCount = 0;
+        this[kImpl].userRef = true;
         this.worker = createWorker(this, opts);
         this.on("message", (message, transferList) => {
           this.worker.postMessage(message, transferList);
         });
       }
       write(data) {
+        const dataBuf = Buffer.isBuffer(data) ? data : Buffer.from(data);
         if (this[kImpl].destroyed) {
           error(this, new Error("the worker has exited"));
           return false;
@@ -2240,7 +2280,7 @@ var require_thread_stream = __commonJS({
           error(this, new Error("the worker is ending"));
           return false;
         }
-        if (this[kImpl].flushing && this[kImpl].buf.length + data.length >= MAX_STRING) {
+        if (this[kImpl].flushing && this[kImpl].bufLen + dataBuf.length >= MAX_STRING) {
           try {
             writeSync(this);
             this[kImpl].flushing = true;
@@ -2249,7 +2289,8 @@ var require_thread_stream = __commonJS({
             return false;
           }
         }
-        this[kImpl].buf += data;
+        this[kImpl].buf.push(dataBuf);
+        this[kImpl].bufLen += dataBuf.length;
         if (this[kImpl].sync) {
           try {
             writeSync(this);
@@ -2263,7 +2304,7 @@ var require_thread_stream = __commonJS({
           this[kImpl].flushing = true;
           setImmediate(nextFlush, this);
         }
-        this[kImpl].needDrain = this[kImpl].data.length - this[kImpl].buf.length - Atomics.load(this[kImpl].state, WRITE_INDEX) <= 0;
+        this[kImpl].needDrain = this[kImpl].data.length - this[kImpl].bufLen - Atomics.load(this[kImpl].state, WRITE_INDEX) <= 0;
         return !this[kImpl].needDrain;
       }
       end() {
@@ -2271,16 +2312,32 @@ var require_thread_stream = __commonJS({
           return;
         }
         this[kImpl].ending = true;
+        this.worker.stream = new FakeWeakRef(this);
         end(this);
       }
       flush(cb) {
-        cb = typeof cb === "function" ? cb : noop2;
-        flushBuffer(this, (err) => {
-          if (err) {
-            process.nextTick(cb, err);
+        const userCb = typeof cb === "function" ? cb : null;
+        cb = userCb || noop2;
+        if (userCb) {
+          retainWorkerForPendingFlush(this);
+        }
+        let finished = false;
+        const done = (err) => {
+          if (finished) {
             return;
           }
-          requestWorkerFlush(this, cb);
+          finished = true;
+          if (userCb) {
+            releaseWorkerForPendingFlush(this);
+          }
+          cb(err);
+        };
+        flushBuffer(this, (err) => {
+          if (err) {
+            process.nextTick(done, err);
+            return;
+          }
+          requestWorkerFlush(this, done);
         });
       }
       flushSync() {
@@ -2291,9 +2348,13 @@ var require_thread_stream = __commonJS({
         flushSync(this);
       }
       unref() {
-        this.worker.unref();
+        this[kImpl].userRef = false;
+        if (this[kImpl].flushRetainCount === 0) {
+          this.worker.unref();
+        }
       }
       ref() {
+        this[kImpl].userRef = true;
         this.worker.ref();
       }
       get ready() {
@@ -2329,7 +2390,7 @@ var require_thread_stream = __commonJS({
         process.nextTick(cb, new Error("the worker has exited"));
         return;
       }
-      if (!stream[kImpl].sync && (stream[kImpl].flushing || stream[kImpl].buf.length > 0)) {
+      if (!stream[kImpl].sync && (stream[kImpl].flushing || stream[kImpl].bufLen > 0)) {
         setImmediate(flushBuffer, stream, cb);
         return;
       }
@@ -2349,6 +2410,21 @@ var require_thread_stream = __commonJS({
         }
         cb();
       });
+    }
+    function retainWorkerForPendingFlush(stream) {
+      if (stream[kImpl].flushRetainCount === 0) {
+        stream.worker.ref();
+      }
+      stream[kImpl].flushRetainCount++;
+    }
+    function releaseWorkerForPendingFlush(stream) {
+      if (stream[kImpl].flushRetainCount === 0) {
+        return;
+      }
+      stream[kImpl].flushRetainCount--;
+      if (stream[kImpl].flushRetainCount === 0 && !stream[kImpl].userRef) {
+        stream.worker.unref();
+      }
     }
     function requestWorkerFlush(stream, cb) {
       if (stream[kImpl].destroyed) {
@@ -2425,12 +2501,37 @@ var require_thread_stream = __commonJS({
         });
       }
     }
-    function write(stream, data, cb) {
+    function write(stream, maxBytes, cb) {
       const current = Atomics.load(stream[kImpl].state, WRITE_INDEX);
-      const length = Buffer.byteLength(data);
-      stream[kImpl].data.write(data, current);
-      Atomics.store(stream[kImpl].state, WRITE_INDEX, current + length);
-      Atomics.notify(stream[kImpl].state, WRITE_INDEX);
+      let offset = current;
+      let remaining = maxBytes;
+      while (remaining > 0 && stream[kImpl].bufLen !== 0) {
+        const head = stream[kImpl].bufHead;
+        const buf = stream[kImpl].buf[head];
+        if (buf.length <= remaining) {
+          buf.copy(stream[kImpl].data, offset);
+          offset += buf.length;
+          remaining -= buf.length;
+          stream[kImpl].bufLen -= buf.length;
+          stream[kImpl].bufHead = head + 1;
+          if (stream[kImpl].bufHead === stream[kImpl].buf.length) {
+            stream[kImpl].buf.length = 0;
+            stream[kImpl].bufHead = 0;
+          } else if (stream[kImpl].bufHead >= 1024 && stream[kImpl].bufHead * 2 >= stream[kImpl].buf.length) {
+            stream[kImpl].buf.splice(0, stream[kImpl].bufHead);
+            stream[kImpl].bufHead = 0;
+          }
+          continue;
+        }
+        buf.copy(stream[kImpl].data, offset, 0, remaining);
+        stream[kImpl].buf[head] = buf.subarray(remaining);
+        stream[kImpl].bufLen -= remaining;
+        offset += remaining;
+        remaining = 0;
+      }
+      updateState(stream, () => {
+        Atomics.store(stream[kImpl].state, WRITE_INDEX, offset);
+      });
       cb();
       return true;
     }
@@ -2442,8 +2543,9 @@ var require_thread_stream = __commonJS({
       try {
         stream.flushSync();
         let readIndex = Atomics.load(stream[kImpl].state, READ_INDEX);
-        Atomics.store(stream[kImpl].state, WRITE_INDEX, -1);
-        Atomics.notify(stream[kImpl].state, WRITE_INDEX);
+        updateState(stream, () => {
+          Atomics.store(stream[kImpl].state, WRITE_INDEX, -1);
+        });
         let spins = 0;
         while (readIndex !== -1) {
           Atomics.wait(stream[kImpl].state, READ_INDEX, readIndex, 1e3);
@@ -2474,36 +2576,20 @@ var require_thread_stream = __commonJS({
         }
       };
       stream[kImpl].flushing = false;
-      while (stream[kImpl].buf.length !== 0) {
+      while (stream[kImpl].bufLen !== 0) {
         const writeIndex = Atomics.load(stream[kImpl].state, WRITE_INDEX);
-        let leftover = stream[kImpl].data.length - writeIndex;
+        if (writeIndex < 0) {
+          throw new Error("_writeSync failed");
+        }
+        const leftover = stream[kImpl].data.length - writeIndex;
         if (leftover === 0) {
           flushSync(stream);
-          Atomics.store(stream[kImpl].state, READ_INDEX, 0);
-          Atomics.store(stream[kImpl].state, WRITE_INDEX, 0);
-          Atomics.notify(stream[kImpl].state, READ_INDEX);
+          resetIndexes(stream);
           continue;
         } else if (leftover < 0) {
           throw new Error("overwritten");
         }
-        let toWrite = stream[kImpl].buf.slice(0, leftover);
-        let toWriteBytes = Buffer.byteLength(toWrite);
-        if (toWriteBytes <= leftover) {
-          stream[kImpl].buf = stream[kImpl].buf.slice(leftover);
-          write(stream, toWrite, cb);
-        } else {
-          flushSync(stream);
-          Atomics.store(stream[kImpl].state, READ_INDEX, 0);
-          Atomics.store(stream[kImpl].state, WRITE_INDEX, 0);
-          Atomics.notify(stream[kImpl].state, READ_INDEX);
-          while (toWriteBytes > stream[kImpl].buf.length) {
-            leftover = leftover / 2;
-            toWrite = stream[kImpl].buf.slice(0, leftover);
-            toWriteBytes = Buffer.byteLength(toWrite);
-          }
-          stream[kImpl].buf = stream[kImpl].buf.slice(leftover);
-          write(stream, toWrite, cb);
-        }
+        write(stream, leftover, cb);
       }
     }
     function flushSync(stream) {
@@ -2543,6 +2629,7 @@ var require_transport = __commonJS({
     var sleep3 = require_atomic_sleep();
     var onExit = require_on_exit_leak_free();
     var ThreadStream = require_thread_stream();
+    var { transportUsesMultistreamSym } = require_symbols();
     function setupOnExit(stream) {
       onExit.register(stream, autoEnd);
       onExit.registerBeforeExit(stream, flush);
@@ -2684,6 +2771,7 @@ var require_transport = __commonJS({
       const options = {
         ...fullOptions.options
       };
+      let usesMultistream = false;
       const callers = typeof caller === "string" ? [caller] : caller;
       const bundlerOverrides = typeof globalThis === "object" && Object.prototype.hasOwnProperty.call(globalThis, "__bundlerPathsOverrides") && globalThis.__bundlerPathsOverrides && typeof globalThis.__bundlerPathsOverrides === "object" ? globalThis.__bundlerPathsOverrides : /* @__PURE__ */ Object.create(null);
       let target = fullOptions.target;
@@ -2708,6 +2796,9 @@ var require_transport = __commonJS({
             };
           });
         });
+        const targetsHaveLevel = options.targets.some((t2) => t2.level != null);
+        const pipelinesHaveLevel = options.pipelines.some((p) => p.some((t2) => t2.level != null));
+        usesMultistream = options.targets.length + options.pipelines.length > 1 || targetsHaveLevel || pipelinesHaveLevel;
       } else if (pipeline2) {
         target = bundlerOverrides["pino-worker"] || join2(__dirname, "worker.js");
         options.pipelines = [pipeline2.map((dest2) => {
@@ -2725,7 +2816,11 @@ var require_transport = __commonJS({
       }
       options.pinoWillSendConfig = true;
       const name = targets || pipeline2 ? "pino.transport" : target;
-      return buildStream(fixTarget(target), options, worker, sync, name);
+      const stream = buildStream(fixTarget(target), options, worker, sync, name);
+      if (usesMultistream) {
+        stream[transportUsesMultistreamSym] = true;
+      }
+      return stream;
       function fixTarget(origin) {
         origin = bundlerOverrides[origin] || origin;
         if (isAbsolute(origin) || origin.indexOf("file://") === 0) {
@@ -2952,7 +3047,7 @@ var require_tools = __commonJS({
           value = serializers[key] ? serializers[key](value) : value;
           value = (stringifiers[key] || wildcardStringifier || stringify2)(value, stringifySafe);
           if (value === void 0) continue;
-          data += ',"' + key + '":' + value;
+          data += "," + asString(key) + ":" + value;
         }
       }
       return data;
@@ -3022,7 +3117,7 @@ var require_tools = __commonJS({
           stream = transport({ caller, ...opts.transport, levels: customLevels });
         }
         opts = Object.assign({}, defaultOptions, opts);
-        opts.serializers = Object.assign({}, defaultOptions.serializers, opts.serializers);
+        opts.serializers = Object.assign(/* @__PURE__ */ Object.create(null), defaultOptions.serializers, opts.serializers);
         opts.formatters = Object.assign({}, defaultOptions.formatters, opts.formatters);
         if (opts.prettyPrint) {
           throw new Error("prettyPrint option is no longer supported, see the pino-pretty package (https://github.com/pinojs/pino-pretty)");
@@ -3302,7 +3397,7 @@ var require_levels = __commonJS({
 var require_meta = __commonJS({
   "node_modules/pino/lib/meta.js"(exports, module) {
     "use strict";
-    module.exports = { version: "10.3.1" };
+    module.exports = { version: "10.4.0" };
   }
 });
 
@@ -4172,7 +4267,7 @@ var require_multistream = __commonJS({
       return res;
       function write(data) {
         let dest2;
-        const level = this.lastLevel;
+        const level = typeof this.lastLevel === "string" ? (this.streamLevels || streamLevels)[this.lastLevel] : this.lastLevel;
         const { streams } = this;
         let recordedLevel = 0;
         let stream;
@@ -4216,7 +4311,7 @@ var require_multistream = __commonJS({
       }
       function add(dest2) {
         if (!dest2) {
-          return res;
+          return this;
         }
         const isStream = typeof dest2.write === "function" || dest2.stream;
         const stream_ = dest2.write ? dest2 : dest2.stream;
@@ -4243,7 +4338,7 @@ var require_multistream = __commonJS({
         streams.unshift(dest_);
         streams.sort(compareByLevel);
         this.minLevel = streams[0].level;
-        return res;
+        return this;
       }
       function remove(id) {
         const { streams } = this;
@@ -4253,7 +4348,7 @@ var require_multistream = __commonJS({
           streams.sort(compareByLevel);
           this.minLevel = streams.length > 0 ? streams[0].level : -1;
         }
-        return res;
+        return this;
       }
       function end() {
         for (const { stream } of this.streams) {
@@ -4275,12 +4370,14 @@ var require_multistream = __commonJS({
           write,
           add,
           remove,
+          emit,
+          flushSync,
+          end,
           minLevel: level,
           streams,
           clone: clone2,
-          emit,
-          flushSync,
-          [metadata]: true
+          [metadata]: true,
+          streamLevels
         };
       }
     }
@@ -4347,7 +4444,8 @@ var require_pino = __commonJS({
       hooksSym,
       nestedKeyStrSym,
       mixinMergeStrategySym,
-      msgPrefixSym
+      msgPrefixSym,
+      transportUsesMultistreamSym
     } = symbols;
     var { epochTime, nullTime } = time;
     var { pid } = process;
@@ -4426,7 +4524,7 @@ var require_pino = __commonJS({
       const stringifyFn = stringify.bind({
         [stringifySafeSym]: stringifySafe
       });
-      const stringifiers = redact ? redaction(redact, stringifyFn) : {};
+      const stringifiers = redact ? Object.assign(/* @__PURE__ */ Object.create(null), redaction(redact, stringifyFn)) : /* @__PURE__ */ Object.create(null);
       const formatOpts = redact ? { stringify: stringifiers[redactFmtSym] } : { stringify: stringifyFn };
       const end = "}" + (crlf ? "\r\n" : "\n");
       const coreChindings = asChindings.bind(null, {
@@ -4452,6 +4550,26 @@ var require_pino = __commonJS({
       if (msgPrefix && typeof msgPrefix !== "string") throw Error(`Unknown msgPrefix type "${typeof msgPrefix}" - expected "string"`);
       assertDefaultLevelFound(level, customLevels, useOnlyCustomLevels);
       const levels = mappings(customLevels, useOnlyCustomLevels);
+      if (stream && stream[transportUsesMultistreamSym] === true) {
+        let sampleLabel = typeof level === "string" ? level : void 0;
+        if (!sampleLabel || levels[sampleLabel] === void 0) {
+          sampleLabel = Object.keys(levels)[0];
+        }
+        const sampleNumber = levels[sampleLabel];
+        let ok = false;
+        try {
+          const formatted = formatters.level(sampleLabel, sampleNumber);
+          ok = formatted && typeof formatted === "object" && formatted.level === sampleNumber;
+        } catch {
+          ok = false;
+        }
+        if (!ok) {
+          process.emitWarning(
+            'custom formatters.level detected with multiple transport targets/pipelines; ensure logs include a numeric "level" field or they may be dropped',
+            { code: "PINO_TRANSPORT_MULTI_TARGETS_LEVEL_FORMATTER" }
+          );
+        }
+      }
       if (typeof stream.emit === "function") {
         stream.emit("message", { code: "PINO_CONFIG", config: { levels, messageKey, errorKey } });
       }
@@ -4537,6 +4655,7 @@ var require_constants2 = __commonJS({
 var require_buffer_util = __commonJS({
   "node_modules/ws/lib/buffer-util.js"(exports, module) {
     "use strict";
+    var { websocketMask, websocketUnmask } = __require("http");
     var { EMPTY_BUFFER } = require_constants2();
     var FastBuffer = Buffer[Symbol.species];
     function concat(list, totalLength) {
@@ -4591,7 +4710,16 @@ var require_buffer_util = __commonJS({
       toBuffer,
       unmask: _unmask
     };
-    if (!process.env.WS_NO_BUFFER_UTIL) {
+    if (websocketMask) {
+      module.exports.mask = function(source, mask, output, offset, length) {
+        if (length < 24) _mask(source, mask, output, offset, length);
+        else websocketMask(source, mask, output, offset, length);
+      };
+      module.exports.unmask = function(buffer, mask) {
+        if (buffer.length < 24) _unmask(buffer, mask);
+        else websocketUnmask(buffer, mask);
+      };
+    } else if (!process.env.WS_NO_BUFFER_UTIL) {
       try {
         const bufferUtil = __require("bufferutil");
         module.exports.mask = function(source, mask, output, offset, length) {
@@ -4787,7 +4915,7 @@ var require_permessage_deflate = __commonJS({
       acceptAsServer(offers) {
         const opts = this._options;
         const accepted = offers.find((params) => {
-          if (opts.serverNoContextTakeover === false && params.server_no_context_takeover || params.server_max_window_bits && (opts.serverMaxWindowBits === false || typeof opts.serverMaxWindowBits === "number" && opts.serverMaxWindowBits > params.server_max_window_bits) || typeof opts.clientMaxWindowBits === "number" && !params.client_max_window_bits) {
+          if (opts.serverNoContextTakeover === false && params.server_no_context_takeover || params.server_max_window_bits && (opts.serverMaxWindowBits === false || typeof opts.serverMaxWindowBits === "number" && opts.serverMaxWindowBits > params.server_max_window_bits) || typeof opts.clientMaxWindowBits === "number" && (typeof params.client_max_window_bits === "number" ? opts.clientMaxWindowBits > params.client_max_window_bits : !params.client_max_window_bits)) {
             return false;
           }
           return true;
@@ -5277,6 +5405,10 @@ var require_receiver = __commonJS({
        *     extensions
        * @param {Boolean} [options.isServer=false] Specifies whether to operate in
        *     client or server mode
+       * @param {Number} [options.maxBufferedChunks=0] The maximum number of
+       *     buffered data chunks
+       * @param {Number} [options.maxFragments=0] The maximum number of message
+       *     fragments
        * @param {Number} [options.maxPayload=0] The maximum allowed message length
        * @param {Boolean} [options.skipUTF8Validation=false] Specifies whether or
        *     not to skip UTF-8 validation for text and close messages
@@ -5287,6 +5419,8 @@ var require_receiver = __commonJS({
         this._binaryType = options.binaryType || BINARY_TYPES[0];
         this._extensions = options.extensions || {};
         this._isServer = !!options.isServer;
+        this._maxBufferedChunks = options.maxBufferedChunks | 0;
+        this._maxFragments = options.maxFragments | 0;
         this._maxPayload = options.maxPayload | 0;
         this._skipUTF8Validation = !!options.skipUTF8Validation;
         this[kWebSocket] = void 0;
@@ -5301,6 +5435,7 @@ var require_receiver = __commonJS({
         this._opcode = 0;
         this._totalPayloadLength = 0;
         this._messageLength = 0;
+        this._numFragments = 0;
         this._fragments = [];
         this._errored = false;
         this._loop = false;
@@ -5316,6 +5451,18 @@ var require_receiver = __commonJS({
        */
       _write(chunk, encoding, cb) {
         if (this._opcode === 8 && this._state == GET_INFO) return cb();
+        if (this._maxBufferedChunks > 0 && this._buffers.length >= this._maxBufferedChunks) {
+          cb(
+            this.createError(
+              RangeError,
+              "Too many buffered chunks",
+              false,
+              1008,
+              "WS_ERR_TOO_MANY_BUFFERED_PARTS"
+            )
+          );
+          return;
+        }
         this._bufferedBytes += chunk.length;
         this._buffers.push(chunk);
         this.startLoop(cb);
@@ -5635,8 +5782,20 @@ var require_receiver = __commonJS({
             unmask(data, this._mask);
           }
         }
+        this._mask = void 0;
         if (this._opcode > 7) {
           this.controlMessage(data, cb);
+          return;
+        }
+        if (this._maxFragments > 0 && ++this._numFragments > this._maxFragments) {
+          const error = this.createError(
+            RangeError,
+            "Too many message fragments",
+            false,
+            1008,
+            "WS_ERR_TOO_MANY_BUFFERED_PARTS"
+          );
+          cb(error);
           return;
         }
         if (this._compressed) {
@@ -5696,6 +5855,7 @@ var require_receiver = __commonJS({
         this._totalPayloadLength = 0;
         this._messageLength = 0;
         this._fragmented = 0;
+        this._numFragments = 0;
         this._fragments = [];
         if (this._opcode === 2) {
           let data;
@@ -5840,6 +6000,9 @@ var require_sender = __commonJS({
     "use strict";
     var { Duplex } = __require("stream");
     var { randomFillSync } = __require("crypto");
+    var {
+      types: { isUint8Array }
+    } = __require("util");
     var PerMessageDeflate2 = require_permessage_deflate();
     var { EMPTY_BUFFER, kWebSocket, NOOP } = require_constants2();
     var { isBlob: isBlob2, isValidStatusCode } = require_validation();
@@ -5952,12 +6115,15 @@ var require_sender = __commonJS({
           target[2] = target[3] = 0;
           target.writeUIntBE(dataLength, 4, 6);
         }
-        if (!options.mask) return [target, data];
+        if (!options.mask) {
+          return dataLength ? [target, data] : [target];
+        }
         target[1] |= 128;
         target[offset - 4] = mask[0];
         target[offset - 3] = mask[1];
         target[offset - 2] = mask[2];
         target[offset - 1] = mask[3];
+        if (!dataLength) return [target];
         if (skipMasking) return [target, data];
         if (merge) {
           applyMask(data, mask, target, offset, dataLength);
@@ -5993,8 +6159,10 @@ var require_sender = __commonJS({
           buf.writeUInt16BE(code, 0);
           if (typeof data === "string") {
             buf.write(data, 2);
-          } else {
+          } else if (isUint8Array(data)) {
             buf.set(data, 2);
+          } else {
+            throw new TypeError("Second argument must be a string or a Uint8Array");
           }
         }
         const options = {
@@ -6712,6 +6880,7 @@ var require_websocket = __commonJS({
     var https2 = __require("https");
     var http3 = __require("http");
     var net = __require("net");
+    var querystring = __require("querystring");
     var tls = __require("tls");
     var { randomBytes: randomBytes2, createHash: createHash2 } = __require("crypto");
     var { Duplex, Readable } = __require("stream");
@@ -6769,21 +6938,38 @@ var require_websocket = __commonJS({
           this._isServer = false;
           this._redirects = 0;
           if (protocols === void 0) {
-            protocols = [];
+            if (!options || options.protocols === void 0) {
+              protocols = [];
+            } else if (Array.isArray(options.protocols)) {
+              protocols = options.protocols;
+            } else {
+              protocols = [options.protocols];
+            }
           } else if (!Array.isArray(protocols)) {
             if (typeof protocols === "object" && protocols !== null) {
               options = protocols;
-              protocols = [];
+              if (options.protocols === void 0) {
+                protocols = [];
+              } else if (Array.isArray(options.protocols)) {
+                protocols = options.protocols;
+              } else {
+                protocols = [options.protocols];
+              }
             } else {
               protocols = [protocols];
             }
           }
-          initAsClient(this, address, protocols, options);
+          options = initAsClient(this, address, protocols, options);
         } else {
-          this._autoPong = options.autoPong;
-          this._closeTimeout = options.closeTimeout;
           this._isServer = true;
         }
+        if (options.autoPong) {
+          this._autoPong = true;
+          this._autoPongComplete = () => autoPongComplete(this);
+          this._pendingAutoPongs = 0;
+          this._maxPendingAutoPongs = options.maxPendingAutoPongs | 0;
+        }
+        this._closeTimeout = options.closeTimeout;
       }
       /**
        * For historical reasons, the custom "nodebuffer" type is used by the default
@@ -6875,6 +7061,10 @@ var require_websocket = __commonJS({
        *     multiple times in the same tick
        * @param {Function} [options.generateMask] The function used to generate the
        *     masking key
+       * @param {Number} [options.maxBufferedChunks=0] The maximum number of
+       *     buffered data chunks
+       * @param {Number} [options.maxFragments=0] The maximum number of message
+       *     fragments
        * @param {Number} [options.maxPayload=0] The maximum allowed message size
        * @param {Boolean} [options.skipUTF8Validation=false] Specifies whether or
        *     not to skip UTF-8 validation for text and close messages
@@ -6886,6 +7076,8 @@ var require_websocket = __commonJS({
           binaryType: this.binaryType,
           extensions: this._extensions,
           isServer: this._isServer,
+          maxBufferedChunks: options.maxBufferedChunks,
+          maxFragments: options.maxFragments,
           maxPayload: options.maxPayload,
           skipUTF8Validation: options.skipUTF8Validation
         });
@@ -6964,7 +7156,6 @@ var require_websocket = __commonJS({
           }
           return;
         }
-        this._readyState = _WebSocket.CLOSING;
         this._sender.close(code, data, !this._isServer, (err) => {
           if (err) return;
           this._closeFrameSent = true;
@@ -6972,6 +7163,7 @@ var require_websocket = __commonJS({
             this._socket.end();
           }
         });
+        this._readyState = _WebSocket.CLOSING;
         setCloseTimer(this);
       }
       /**
@@ -7185,7 +7377,10 @@ var require_websocket = __commonJS({
         autoPong: true,
         closeTimeout: CLOSE_TIMEOUT,
         protocolVersion: protocolVersions[1],
+        maxBufferedChunks: 256 * 1024,
+        maxFragments: 16 * 1024,
         maxPayload: 100 * 1024 * 1024,
+        maxPendingAutoPongs: 60,
         skipUTF8Validation: false,
         perMessageDeflate: true,
         followRedirects: false,
@@ -7194,14 +7389,13 @@ var require_websocket = __commonJS({
         socketPath: void 0,
         hostname: void 0,
         protocol: void 0,
+        protocols: void 0,
         timeout: void 0,
         method: "GET",
         host: void 0,
         path: void 0,
         port: void 0
       };
-      websocket._autoPong = opts.autoPong;
-      websocket._closeTimeout = opts.closeTimeout;
       if (!protocolVersions.includes(opts.protocolVersion)) {
         throw new RangeError(
           `Unsupported protocol version: ${opts.protocolVersion} (supported versions: ${protocolVersions.join(", ")})`
@@ -7217,10 +7411,9 @@ var require_websocket = __commonJS({
           throw new SyntaxError(`Invalid URL: ${address}`);
         }
       }
-      if (parsedUrl.protocol === "http:") {
-        parsedUrl.protocol = "ws:";
-      } else if (parsedUrl.protocol === "https:") {
-        parsedUrl.protocol = "wss:";
+      if (parsedUrl.protocol === "http:" || parsedUrl.protocol === "https:") {
+        parsedUrl = new URL2(parsedUrl);
+        parsedUrl.protocol = parsedUrl.protocol === "http:" ? "ws:" : "wss:";
       }
       websocket._url = parsedUrl.href;
       const isSecure = parsedUrl.protocol === "wss:";
@@ -7289,12 +7482,19 @@ var require_websocket = __commonJS({
         }
       }
       if (parsedUrl.username || parsedUrl.password) {
-        opts.auth = `${parsedUrl.username}:${parsedUrl.password}`;
+        const username = querystring.unescape(parsedUrl.username);
+        const password = querystring.unescape(parsedUrl.password);
+        opts.auth = `${username}:${password}`;
       }
       if (isIpcUrl) {
-        const parts = opts.path.split(":");
-        opts.socketPath = parts[0];
-        opts.path = parts[1];
+        const i2 = opts.path.indexOf(":");
+        if (i2 === -1) {
+          opts.socketPath = opts.path;
+          opts.path = "";
+        } else {
+          opts.socketPath = opts.path.slice(0, i2);
+          opts.path = opts.path.slice(i2 + 1);
+        }
       }
       let req;
       if (opts.followRedirects) {
@@ -7427,6 +7627,8 @@ var require_websocket = __commonJS({
         websocket.setSocket(socket, head, {
           allowSynchronousEvents: opts.allowSynchronousEvents,
           generateMask: opts.generateMask,
+          maxBufferedChunks: opts.maxBufferedChunks,
+          maxFragments: opts.maxFragments,
           maxPayload: opts.maxPayload,
           skipUTF8Validation: opts.skipUTF8Validation
         });
@@ -7436,6 +7638,7 @@ var require_websocket = __commonJS({
       } else {
         req.end();
       }
+      return opts;
     }
     function emitErrorAndClose(websocket, err) {
       websocket._readyState = WebSocket2.CLOSING;
@@ -7487,8 +7690,13 @@ var require_websocket = __commonJS({
     function receiverOnConclude(code, reason) {
       const websocket = this[kWebSocket];
       websocket._closeFrameReceived = true;
-      websocket._closeMessage = reason;
       websocket._closeCode = code;
+      if (reason.length === 0) {
+        websocket._closeMessage = EMPTY_BUFFER;
+      } else {
+        websocket._closeMessage = Buffer.allocUnsafeSlow(reason.length);
+        websocket._closeMessage.set(reason);
+      }
       if (websocket._socket[kWebSocket] === void 0) return;
       websocket._socket.removeListener("data", socketOnData);
       process.nextTick(resume, websocket._socket);
@@ -7519,8 +7727,18 @@ var require_websocket = __commonJS({
     }
     function receiverOnPing(data) {
       const websocket = this[kWebSocket];
-      if (websocket._autoPong) websocket.pong(data, !this._isServer, NOOP);
+      if (websocket._autoPong && websocket.readyState === WebSocket2.OPEN) {
+        if (websocket._maxPendingAutoPongs > 0 && websocket._pendingAutoPongs >= websocket._maxPendingAutoPongs) {
+          websocket.terminate();
+        } else {
+          websocket._pendingAutoPongs++;
+          websocket.pong(data, !this._isServer, websocket._autoPongComplete);
+        }
+      }
       websocket.emit("ping", data);
+    }
+    function autoPongComplete(websocket) {
+      websocket._pendingAutoPongs--;
     }
     function receiverOnPong(data) {
       this[kWebSocket].emit("pong", data);
@@ -7769,8 +7987,14 @@ var require_websocket_server = __commonJS({
        *     called
        * @param {Function} [options.handleProtocols] A hook to handle protocols
        * @param {String} [options.host] The hostname where to bind the server
+       * @param {Number} [options.maxBufferedChunks=262144] The maximum number of
+       *     buffered data chunks
+       * @param {Number} [options.maxFragments=16384] The maximum number of message
+       *     fragments
        * @param {Number} [options.maxPayload=104857600] The maximum allowed message
        *     size
+       * @param {Number} [options.maxPendingAutoPongs=60] The maximum number of
+       *     pending automatic pongs
        * @param {Boolean} [options.noServer=false] Enable no server mode
        * @param {String} [options.path] Accept only connections matching this path
        * @param {(Boolean|Object)} [options.perMessageDeflate=false] Enable/disable
@@ -7790,7 +8014,10 @@ var require_websocket_server = __commonJS({
         options = {
           allowSynchronousEvents: true,
           autoPong: true,
+          maxBufferedChunks: 256 * 1024,
+          maxFragments: 16 * 1024,
           maxPayload: 100 * 1024 * 1024,
+          maxPendingAutoPongs: 60,
           skipUTF8Validation: false,
           perMessageDeflate: false,
           handleProtocols: null,
@@ -8069,6 +8296,8 @@ var require_websocket_server = __commonJS({
         socket.removeListener("error", socketOnError);
         ws.setSocket(socket, head, {
           allowSynchronousEvents: this.options.allowSynchronousEvents,
+          maxBufferedChunks: this.options.maxBufferedChunks,
+          maxFragments: this.options.maxFragments,
           maxPayload: this.options.maxPayload,
           skipUTF8Validation: this.options.skipUTF8Validation
         });
@@ -15705,6 +15934,24 @@ import { randomUUID } from "crypto";
 var PUSH_RETRY_DELAYS_MS = [2e3, 3e3, 4e3];
 var PUSH_MAX_ATTEMPTS = PUSH_RETRY_DELAYS_MS.length + 1;
 var PUSH_RETRYABLE_STATUSES = /* @__PURE__ */ new Set([408, 425, 429, 500, 502, 503, 504]);
+var PUSH_RATE_LIMIT_STATUS = 429;
+var PUSH_MAX_RATE_LIMIT_RETRIES = 2;
+var PUSH_RATE_LIMIT_DELAY_MS = 13e3;
+var PUSH_RATE_LIMIT_JITTER_MS = 2e3;
+var MAX_TIMER_DELAY_MS = 2147483647;
+function getRateLimitRetryDelayMs(retryAfter) {
+  const value = retryAfter?.trim() ?? "";
+  if (/^\d+$/.test(value)) {
+    return Number(value) * 1e3;
+  }
+  if (/^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)/i.test(value)) {
+    const retryAt = Date.parse(value);
+    if (Number.isFinite(retryAt)) {
+      return Math.max(0, retryAt - Date.now());
+    }
+  }
+  return PUSH_RATE_LIMIT_DELAY_MS + Math.floor(Math.random() * (PUSH_RATE_LIMIT_JITTER_MS + 1));
+}
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -15791,6 +16038,8 @@ var XYPushService = class {
           ]
         }
       };
+      let rateLimitRetries = 0;
+      let transientRetries = 0;
       for (let attempt = 1; attempt <= PUSH_MAX_ATTEMPTS; attempt++) {
         const response = await fetch2(pushUrl, {
           method: "POST",
@@ -15807,12 +16056,21 @@ var XYPushService = class {
         logger.log(`[PUSH] Response received, HTTP Status: ${response.status} ${response.statusText}, attempt ${attempt}/${PUSH_MAX_ATTEMPTS}`);
         if (!response.ok) {
           const errorText = await response.text();
-          const canRetry = PUSH_RETRYABLE_STATUSES.has(response.status) && attempt < PUSH_MAX_ATTEMPTS;
-          if (!canRetry) {
+          const isRateLimited = response.status === PUSH_RATE_LIMIT_STATUS;
+          const canRetry = PUSH_RETRYABLE_STATUSES.has(response.status) && attempt < PUSH_MAX_ATTEMPTS && (!isRateLimited || rateLimitRetries < PUSH_MAX_RATE_LIMIT_RETRIES);
+          const delayMs = canRetry ? isRateLimited ? getRateLimitRetryDelayMs(response.headers.get("retry-after")) : PUSH_RETRY_DELAYS_MS[transientRetries] : void 0;
+          if (delayMs === void 0 || delayMs > MAX_TIMER_DELAY_MS) {
+            if (delayMs !== void 0) {
+              logger.log(`[PUSH] Retry-After exceeds the supported timer range, Trace ID: ${traceId}`);
+            }
             logger.error(`[PUSH] Push request failed after ${attempt} attempt(s), HTTP Status: ${response.status}`);
             throw new Error(`Push failed after ${attempt} attempt(s): HTTP ${response.status} - ${errorText}`);
           }
-          const delayMs = PUSH_RETRY_DELAYS_MS[attempt - 1];
+          if (isRateLimited) {
+            rateLimitRetries++;
+          } else {
+            transientRetries++;
+          }
           logger.log(`[PUSH] HTTP ${response.status} on attempt ${attempt}/${PUSH_MAX_ATTEMPTS}, retrying in ${delayMs}ms, Trace ID: ${traceId}`);
           await sleep(delayMs);
           continue;
@@ -17132,7 +17390,7 @@ function armSafetyTimer(key) {
 var ENTITLEMENT_FAILURE_TEXT = "\u7528\u6237\u6743\u76CA\u6821\u9A8C\u5931\u8D25";
 var latestModelResults = /* @__PURE__ */ new WeakMap();
 function trackEntitlementFailure(task) {
-  const outcome = { entitlementFailed: false };
+  const outcome = { entitlementFailed: false, replySelected: false };
   latestModelResults.set(task, outcome);
   return (result) => {
     outcome.entitlementFailed = result?.stopReason === "error" && typeof result.errorMessage === "string" && result.errorMessage.trim() === ENTITLEMENT_FAILURE_TEXT;
