@@ -21,7 +21,7 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { sendExecuteStatusCard } from "./formatter.js";
 import { TOOL_STATUS_CARD_META } from "./tools/step-info-tool.js";
 import { isLegacyAppVersion } from "./utils/app-version.js";
-import { isSteerSuppressed } from "./utils/steer-suppression.js";
+import { isSteerSuppressed, noteSteerSuppressedDrop } from "./utils/steer-suppression.js";
 import { isBodyTextProduced } from "./conversation/conversation-manager.js";
 import { resolveXYConfig } from "./config.js";
 import {
@@ -113,9 +113,10 @@ export function registerToolStatusHook(api: OpenClawPluginApi): void {
         return;
       }
 
-      // steer 抑制窗口：第 N 轮在途调用的工具状态卡不下发
+      // steer 抑制窗口：第 N 轮在途调用的工具状态卡不下发（逐卡不写日志，
+      // 计数随窗口解除时的汇总日志输出）
       if (isSteerSuppressed(binding.sessionId)) {
-        logger.log(`[TOOL-STATUS] steer suppression active, status card dropped for ${toolName}`);
+        noteSteerSuppressedDrop(binding.sessionId, "card");
         return;
       }
 

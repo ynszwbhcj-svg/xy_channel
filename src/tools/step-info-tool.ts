@@ -71,7 +71,7 @@ import {
 } from "./session-manager.js";
 import { logger } from "../utils/logger.js";
 import { isLegacyAppVersion } from "../utils/app-version.js";
-import { isSteerSuppressed } from "../utils/steer-suppression.js";
+import { isSteerSuppressed, noteSteerSuppressedDrop } from "../utils/steer-suppression.js";
 import type { XYChannelConfig } from "../types.js";
 
 const LOG_TAG = "[STEP-INFO]";
@@ -388,9 +388,8 @@ export function registerStepInfoHook(api: OpenClawPluginApi): void {
       const skillAction = detectSkillAction(event);
       if (skillAction) {
         if (steerSuppressed) {
-          logger.log(
-            `${LOG_TAG} steer suppression active, skill card dropped action=${skillAction.action} skill=${skillAction.skillName}`,
-          );
+          // 逐卡不写日志，计数随窗口解除时的汇总日志输出
+          noteSteerSuppressedDrop(sendCtx.sessionId, "card");
         } else if (bodyTextSent) {
           logger.log(
             `${LOG_TAG} body text already sent in current segment, suppressing skill card action=${skillAction.action} skill=${skillAction.skillName}`,
@@ -429,15 +428,19 @@ export function registerStepInfoHook(api: OpenClawPluginApi): void {
       //    in_progress 步骤卡（text=步骤文本，同轮多张卡片由 taskUniqIndexId
       //    序号区分，taskUniqId 同为 taskId）；正文首帧已发出时步骤卡同样抑制
       if (TASK_CARD_TOOLS.has(event.toolName)) {
-        if (event.toolName === "update_plan" && !bodyTextSent && !steerSuppressed) {
-          const planSteps = extractInProgressPlanSteps(event.params);
-          for (const stepText of planSteps) {
-            // 发卡日志由 formatter 统一打印（[STEP-INFO] cardType=... 一行格式），此处不再重复
-            await sendExecuteStatusCard({
-              ...sendCtx,
-              toolCallId: event.toolCallId,
-              text: stepText,
-            });
+        if (event.toolName === "update_plan" && !bodyTextSent) {
+          if (steerSuppressed) {
+            noteSteerSuppressedDrop(sendCtx.sessionId, "card");
+          } else {
+            const planSteps = extractInProgressPlanSteps(event.params);
+            for (const stepText of planSteps) {
+              // 发卡日志由 formatter 统一打印（[STEP-INFO] cardType=... 一行格式），此处不再重复
+              await sendExecuteStatusCard({
+                ...sendCtx,
+                toolCallId: event.toolCallId,
+                text: stepText,
+              });
+            }
           }
         }
         return;

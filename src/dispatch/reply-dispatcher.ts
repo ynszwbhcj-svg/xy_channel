@@ -34,6 +34,7 @@ import {
   clearStreamActivity,
   isSteerSuppressed,
   liftSteerSuppression,
+  noteSteerSuppressedDrop,
 } from "../utils/steer-suppression.js";
 import {
   noteReasoningSnapshot,
@@ -358,11 +359,12 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
         scopedLog().log(`[DELIVER] kind=${info?.kind}, text.length=${text.length}`);
 
         try {
-          // steer 抑制窗口内首个 message_end：该消息属第 N 轮在途调用 —— 帧
-          // 不下发；canonical 仍捕获（合并终帧保守不动），思考段遗留状态复位
-          // （防止解除后首帧正文触发思考→正文切换时把被压段文本补发出去），
-          // 随后解除窗口：其后的调用已能看到 steer 消息，产出归属第 N+1 轮。
-          // 空文本 deliver（纯工具调用消息）同样解除窗口。
+          // steer 抑制窗口的兜底解除（主解除点是 onAssistantMessageStart ——
+          // deliver 只在 run 收尾为最终消息触发，等它会把 N+1 轮整个压住）。
+          // 走到这里说明 steer 后没有新 assistant 消息产生（run 直接收尾），
+          // 本消息属第 N 轮在途调用 —— 帧不下发；canonical 仍捕获（合并终帧
+          // 保守不动），思考段遗留状态复位（防止解除后首帧正文触发思考→正文
+          // 切换时把被压段文本补发出去），随后解除窗口。
           if (steerSuppressed) {
             if (text.trim() && info?.kind === "final" && !payload.isCompactionNotice && !isSystemNoticeText(text)) {
               assembler.onFinalText(text);
@@ -372,7 +374,7 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
             closeReasoningSegment(activeTaskId);
             cutReasoningSegment(activeTaskId);
             liftSteerSuppression(sessionId);
-            scopedLog().log(`[STEER-SUPPRESS] in-flight message_end reached — frame dropped, window lifted`);
+            scopedLog().log(`[STEER-SUPPRESS] window lifted at deliver (no new message after steer)`);
             return;
           }
           if (!text.trim()) {
@@ -836,6 +838,23 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
         scopedLog().log(`[TOOL-RESULT] Tool result, text.length: ${text.length}`);
       },
 
+      onAssistantMessageStart: () => {
+        // 🔑 steer 抑制窗口的精确解除点：新 assistant 消息开始 = 发起本消息
+        // 的模型调用已能看到 steer 注入的内容，产出归属第 N+1 轮，恢复下发。
+        // （deliver 只在 run 收尾触发、onIdle 仅兜底，都不能作解除点；窗口
+        // 内各流式回调只丢帧不记账，此处无需清理装配器/快照。）
+        if (!isSteerSuppressed(sessionId)) return;
+        // 思考段遗留状态复位（与 deliver 兜底路径同理），并复位流式活动标记：
+        // 此刻起至新消息首帧之间到来的 steer 不应误判"有在途产出"而再置窗口
+        // —— 新调用已能看到 steer，其产出本应直接放行。
+        const activeTaskId = getActiveTaskId();
+        closeReasoningSegment(activeTaskId);
+        cutReasoningSegment(activeTaskId);
+        clearStreamActivity(sessionId);
+        liftSteerSuppression(sessionId);
+        scopedLog().log(`[STEER-SUPPRESS] window lifted at assistant message_start`);
+      },
+
       onReasoningStream: async (payload: ReplyPayload) => {
         if (isOutputStale()) return;
         noteStreamActivity(sessionId);
@@ -851,9 +870,10 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
           if (text.length > 0) {
             // steer 抑制窗口：第 N 轮在途调用的思考帧直接丢弃，且不更新快照
             // 记账（快照状态停在 steer 前，窗口解除时由 cutReasoningSegment
-            // 复位基线，防止解除后把被压内容全量补发）
+            // 复位基线，防止解除后把被压内容全量补发）。逐帧不写日志，计数
+            // 随窗口解除时的汇总日志输出。
             if (isSteerSuppressed(sessionId)) {
-              scopedLog().log(`[STEER-SUPPRESS] reasoning frame dropped, len=${text.length}`);
+              noteSteerSuppressedDrop(sessionId, "reasoning");
               return;
             }
             const reasoningTaskId = getActiveTaskId();
@@ -910,7 +930,7 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
         // 记账（端侧没有该思考块在第 N+1 轮的在役帧，不应引用其槽位）
         if (isSteerSuppressed(sessionId)) {
           closeReasoningSegment(endTaskId);
-          scopedLog().log(`[STEER-SUPPRESS] reasoning-end frames dropped (window active)`);
+          noteSteerSuppressedDrop(sessionId, "reasoning");
           return;
         }
 
@@ -987,9 +1007,10 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
 
         // steer 抑制窗口：第 N 轮在途调用的正文帧直接丢弃，且不喂装配器——
         // 装配器在 steer 时已切段，保持为空直到窗口解除，之后只累积第 N+1
-        // 轮内容（否则下一帧全量快照会把第 N 轮文本重新带出）
+        // 轮内容（否则下一帧全量快照会把第 N 轮文本重新带出）。逐帧不写日志，
+        // 计数随窗口解除时的汇总日志输出。
         if (isSteerSuppressed(sessionId)) {
-          scopedLog().log(`[STEER-SUPPRESS] partial frame dropped, len=${text.length}`);
+          noteSteerSuppressedDrop(sessionId, "text");
           return;
         }
 

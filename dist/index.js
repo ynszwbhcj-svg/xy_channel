@@ -5079,26 +5079,37 @@ function hasStreamActivity(sessionId) {
 }
 function markSteerSuppression(sessionId) {
   suppressedSessions.add(sessionId);
+  dropCountsBySession.set(sessionId, { reasoning: 0, text: 0, card: 0 });
   logger.withContext(sessionId, "").log(`[STEER-SUPPRESS] window armed`);
 }
 function isSteerSuppressed(sessionId) {
   return suppressedSessions.has(sessionId);
 }
+function noteSteerSuppressedDrop(sessionId, kind) {
+  const counts = dropCountsBySession.get(sessionId);
+  if (counts) counts[kind] += 1;
+}
 function liftSteerSuppression(sessionId) {
   if (suppressedSessions.delete(sessionId)) {
-    logger.withContext(sessionId, "").log(`[STEER-SUPPRESS] window lifted`);
+    const counts = dropCountsBySession.get(sessionId);
+    dropCountsBySession.delete(sessionId);
+    const dropped = counts ? counts.reasoning + counts.text + counts.card : 0;
+    const summary = dropped > 0 && counts ? ` \u2014 dropped reasoning\xD7${counts.reasoning}, text\xD7${counts.text}, card\xD7${counts.card}` : "";
+    logger.withContext(sessionId, "").log(`[STEER-SUPPRESS] window lifted${summary}`);
   }
 }
 function releaseSteerSuppression(sessionId) {
   streamActiveSessions.delete(sessionId);
   suppressedSessions.delete(sessionId);
+  dropCountsBySession.delete(sessionId);
 }
-var streamActiveSessions, suppressedSessions;
+var streamActiveSessions, suppressedSessions, dropCountsBySession;
 var init_steer_suppression = __esm({
   "src/utils/steer-suppression.ts"() {
     init_logger();
     streamActiveSessions = /* @__PURE__ */ new Set();
     suppressedSessions = /* @__PURE__ */ new Set();
+    dropCountsBySession = /* @__PURE__ */ new Map();
   }
 });
 
@@ -19844,7 +19855,7 @@ function createXYReplyDispatcher(params) {
           closeReasoningSegment(activeTaskId);
           cutReasoningSegment(activeTaskId);
           liftSteerSuppression(sessionId);
-          scopedLog().log(`[STEER-SUPPRESS] in-flight message_end reached \u2014 frame dropped, window lifted`);
+          scopedLog().log(`[STEER-SUPPRESS] window lifted at deliver (no new message after steer)`);
           return;
         }
         if (!text.trim()) {
@@ -20175,6 +20186,15 @@ function createXYReplyDispatcher(params) {
         const text = payload.text ?? "";
         scopedLog().log(`[TOOL-RESULT] Tool result, text.length: ${text.length}`);
       },
+      onAssistantMessageStart: () => {
+        if (!isSteerSuppressed(sessionId)) return;
+        const activeTaskId = getActiveTaskId();
+        closeReasoningSegment(activeTaskId);
+        cutReasoningSegment(activeTaskId);
+        clearStreamActivity(sessionId);
+        liftSteerSuppression(sessionId);
+        scopedLog().log(`[STEER-SUPPRESS] window lifted at assistant message_start`);
+      },
       onReasoningStream: async (payload) => {
         if (isOutputStale()) return;
         noteStreamActivity(sessionId);
@@ -20186,7 +20206,7 @@ function createXYReplyDispatcher(params) {
         try {
           if (text.length > 0) {
             if (isSteerSuppressed(sessionId)) {
-              scopedLog().log(`[STEER-SUPPRESS] reasoning frame dropped, len=${text.length}`);
+              noteSteerSuppressedDrop(sessionId, "reasoning");
               return;
             }
             const reasoningTaskId = getActiveTaskId();
@@ -20219,7 +20239,7 @@ function createXYReplyDispatcher(params) {
         scopedLog().log(`[REASONING-END] Reasoning finished, taskId=${endTaskId}`);
         if (isSteerSuppressed(sessionId)) {
           closeReasoningSegment(endTaskId);
-          scopedLog().log(`[STEER-SUPPRESS] reasoning-end frames dropped (window active)`);
+          noteSteerSuppressedDrop(sessionId, "reasoning");
           return;
         }
         try {
@@ -20271,7 +20291,7 @@ function createXYReplyDispatcher(params) {
         noteStreamActivity(sessionId);
         hasSentResponse = true;
         if (isSteerSuppressed(sessionId)) {
-          scopedLog().log(`[STEER-SUPPRESS] partial frame dropped, len=${text.length}`);
+          noteSteerSuppressedDrop(sessionId, "text");
           return;
         }
         const prevChain = streamChain;
@@ -37039,9 +37059,7 @@ function registerStepInfoHook(api) {
       const skillAction = detectSkillAction(event);
       if (skillAction) {
         if (steerSuppressed) {
-          logger.log(
-            `${LOG_TAG3} steer suppression active, skill card dropped action=${skillAction.action} skill=${skillAction.skillName}`
-          );
+          noteSteerSuppressedDrop(sendCtx.sessionId, "card");
         } else if (bodyTextSent) {
           logger.log(
             `${LOG_TAG3} body text already sent in current segment, suppressing skill card action=${skillAction.action} skill=${skillAction.skillName}`
@@ -37068,14 +37086,18 @@ function registerStepInfoHook(api) {
         );
       }
       if (TASK_CARD_TOOLS.has(event.toolName)) {
-        if (event.toolName === "update_plan" && !bodyTextSent && !steerSuppressed) {
-          const planSteps = extractInProgressPlanSteps(event.params);
-          for (const stepText of planSteps) {
-            await sendExecuteStatusCard({
-              ...sendCtx,
-              toolCallId: event.toolCallId,
-              text: stepText
-            });
+        if (event.toolName === "update_plan" && !bodyTextSent) {
+          if (steerSuppressed) {
+            noteSteerSuppressedDrop(sendCtx.sessionId, "card");
+          } else {
+            const planSteps = extractInProgressPlanSteps(event.params);
+            for (const stepText of planSteps) {
+              await sendExecuteStatusCard({
+                ...sendCtx,
+                toolCallId: event.toolCallId,
+                text: stepText
+              });
+            }
           }
         }
         return;
@@ -37167,7 +37189,7 @@ function registerToolStatusHook(api) {
         return;
       }
       if (isSteerSuppressed(binding.sessionId)) {
-        logger.log(`[TOOL-STATUS] steer suppression active, status card dropped for ${toolName}`);
+        noteSteerSuppressedDrop(binding.sessionId, "card");
         return;
       }
       await sendExecuteStatusCard({
