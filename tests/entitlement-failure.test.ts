@@ -47,11 +47,18 @@ const genericError = "LLM request failed.";
 const entitlementError = "用户权益校验失败";
 const entitlementReply = "本次任务未能通过权益校验。请查看小艺 Work 积分和会员权益后再试。";
 
-async function receiveProviderFailure(errorMessage: string, partial = false) {
+async function receiveProviderResult(errorMessage?: string, partial = false) {
+  const result = errorMessage === undefined
+    ? { stopReason: "stop" }
+    : { stopReason: "error", errorMessage };
   const wrapped = xiaoyiProvider.wrapStreamFn!({
     streamFn: async function* () {
       if (partial) yield { type: "text_delta", delta: "正在处理" };
-      yield { type: "error", error: { stopReason: "error", errorMessage } };
+      if (errorMessage === undefined) {
+        yield { type: "done", message: result };
+      } else {
+        yield { type: "error", error: result };
+      }
     },
   } as never)!;
   const model = { id: "Auto-Model", input: ["text"], headers: {} };
@@ -70,7 +77,7 @@ async function receiveProviderFailure(errorMessage: string, partial = false) {
     for await (const event of stream) {
       if (event.type === "error") expect(event.error.errorMessage).toBe(errorMessage);
     }
-    await expect(stream.result()).resolves.toMatchObject({ stopReason: "error", errorMessage });
+    await expect(stream.result()).resolves.toMatchObject(result);
   });
 }
 
@@ -82,7 +89,7 @@ describe.each([
 
   function startTurn(currentTaskId = taskId) {
     registerTask(sessionId, currentTaskId, currentTaskId);
-    const { dispatcher } = createDispatcher({
+    const turn = createDispatcher({
       cfg: {},
       runtime: { error: vi.fn() },
       sessionId,
@@ -91,7 +98,7 @@ describe.each([
       accountId: "default",
     });
     markTurnInflight(sessionId, currentTaskId);
-    return dispatcher;
+    return turn;
   }
 
   async function expectReply(dispatcher: any, text: string, isError: boolean, expected: string) {
@@ -107,41 +114,79 @@ describe.each([
   }
 
   it.each([false, true])("rewrites the final error after the provider reports an entitlement failure (streamed content %s)", async (partial) => {
-    const dispatcher = startTurn();
-    await receiveProviderFailure(entitlementError, partial);
+    const { dispatcher } = startTurn();
+    await receiveProviderResult(entitlementError, partial);
     await expectReply(dispatcher, genericError, true, entitlementReply);
   });
 
+  it("sends the entitlement notice when final assistant text arrives after the error", async () => {
+    const { dispatcher, replyOptions } = startTurn();
+    const partialText = "我来为你生成图片";
+    await replyOptions.onPartialReply({ text: partialText });
+    await getOrCreateSession(sessionId).outboundQueue.whenIdle();
+    await receiveProviderResult(entitlementError);
+    await dispatcher.deliver({ text: genericError, isError: true }, { kind: "final" });
+    await dispatcher.deliver({ text: partialText + "。" }, { kind: "final" });
+    await dispatcher.onIdle();
+    await getOrCreateSession(sessionId).outboundQueue.whenIdle();
+
+    const frames = mocks.sendA2AResponse.mock.calls.map(([frame]) => frame);
+    expect(frames.map((frame) => ({ text: frame.text, append: frame.append, final: !!frame.final }))).toEqual([
+      { text: partialText, append, final: false },
+      { text: entitlementReply, append, final: true },
+    ]);
+  });
+
+  it("uses text from a later successful model call even without another final callback", async () => {
+    const { dispatcher, replyOptions } = startTurn();
+    await replyOptions.onPartialReply({ text: "开始处理" });
+    await receiveProviderResult(entitlementError);
+    await dispatcher.deliver({ text: genericError, isError: true }, { kind: "final" });
+    await receiveProviderResult();
+    const recoveredText = "已成功完成";
+    await replyOptions.onPartialReply({ text: recoveredText });
+    await dispatcher.onIdle();
+    await getOrCreateSession(sessionId).outboundQueue.whenIdle();
+
+    const frames = mocks.sendA2AResponse.mock.calls.map(([frame]) => frame);
+    expect(frames.some((frame) => frame.text.includes(entitlementReply))).toBe(false);
+    expect(frames.filter((frame) => frame.final)).toHaveLength(1);
+    expect(frames.some((frame) => frame.text.includes(recoveredText))).toBe(true);
+  });
+
   it("keeps generic errors from other provider failures", async () => {
-    const dispatcher = startTurn();
-    await receiveProviderFailure("invalid api key");
+    const { dispatcher } = startTurn();
+    await receiveProviderResult("invalid api key");
     await expectReply(dispatcher, genericError, true, genericError);
   });
 
   it("leaves regular assistant text alone even if it quotes the generic error", async () => {
-    const dispatcher = startTurn();
-    await receiveProviderFailure(entitlementError);
+    const { dispatcher } = startTurn();
+    await receiveProviderResult(entitlementError);
     await expectReply(dispatcher, genericError, false, genericError);
   });
 
   it("keeps a different error from a later model call in the same turn", async () => {
-    const dispatcher = startTurn();
-    await receiveProviderFailure(entitlementError);
-    await receiveProviderFailure("Request was aborted.");
+    const { dispatcher } = startTurn();
+    await receiveProviderResult(entitlementError);
+    await receiveProviderResult("Request was aborted.");
     await expectReply(dispatcher, genericError, true, genericError);
   });
 
   it("does not carry the entitlement failure into a replacement turn", async () => {
-    startTurn();
-    await receiveProviderFailure(entitlementError);
-    const dispatcher = startTurn("conversation&2&replacement");
+    const first = startTurn();
+    await first.replyOptions.onPartialReply({ text: "开始处理" });
+    await receiveProviderResult(entitlementError);
+    await first.dispatcher.deliver({ text: genericError, isError: true }, { kind: "final" });
+    mocks.sendA2AResponse.mockClear();
+    const { dispatcher } = startTurn("conversation&2&replacement");
     await expectReply(dispatcher, genericError, true, genericError);
   });
 
   it("does not attribute an old model request to the task that replaced it", async () => {
     startTurn();
-    const dispatcher = startTurn("conversation&2&replacement");
-    await receiveProviderFailure(entitlementError);
+    const { dispatcher } = startTurn("conversation&2&replacement");
+    await receiveProviderResult(entitlementError);
     await expectReply(dispatcher, genericError, true, genericError);
   });
 });
