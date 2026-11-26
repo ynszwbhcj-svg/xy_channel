@@ -52,6 +52,7 @@ describe("XYPushService.sendPush retries", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    vi.restoreAllMocks();
   });
 
   it("retries a 500 response after 2 seconds and reuses request IDs and trace ID", async () => {
@@ -101,6 +102,93 @@ describe("XYPushService.sendPush retries", () => {
 
     await expect(sendPush()).rejects.toThrow("Push failed after 1 attempt(s): HTTP 400 - bad request");
 
+    expect(mocks.fetch).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each([
+    ["delay-seconds", "6"],
+    ["HTTP-date", "Tue, 24 Nov 2026 00:00:06 GMT"],
+  ])("honors Retry-After %s on a 429 response", async (_format, retryAfter) => {
+    vi.setSystemTime(new Date("2026-11-24T00:00:00Z"));
+    mocks.fetch
+      .mockResolvedValueOnce(new Response("rate limited", {
+        status: 429,
+        headers: { "Retry-After": retryAfter },
+      }))
+      .mockResolvedValueOnce(new Response("{}", { status: 200 }));
+
+    const pending = sendPush();
+    await vi.advanceTimersByTimeAsync(5_999);
+    expect(mocks.fetch).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    await pending;
+    expect(mocks.fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    { retryAfter: null, random: 0, delayMs: 13_000 },
+    { retryAfter: "-1", random: 0.9999, delayMs: 15_000 },
+  ])("waits $delayMs ms on a 429 when Retry-After is $retryAfter", async ({ retryAfter, random, delayMs }) => {
+    vi.spyOn(Math, "random").mockReturnValue(random);
+    mocks.fetch
+      .mockResolvedValueOnce(new Response("rate limited", {
+        status: 429,
+        headers: retryAfter === null ? undefined : { "Retry-After": retryAfter },
+      }))
+      .mockResolvedValueOnce(new Response("{}", { status: 200 }));
+
+    const pending = sendPush();
+    await vi.advanceTimersByTimeAsync(delayMs - 1);
+    expect(mocks.fetch).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    await pending;
+    expect(mocks.fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries a rate limit at most twice, including with a transient failure", async () => {
+    vi.spyOn(Math, "random").mockReturnValue(0);
+    mocks.fetch
+      .mockResolvedValueOnce(new Response("rate limited", { status: 429 }))
+      .mockResolvedValueOnce(new Response("temporary failure", { status: 500 }))
+      .mockResolvedValueOnce(new Response("rate limited", { status: 429 }))
+      .mockResolvedValueOnce(new Response("rate limited", { status: 429 }));
+
+    const pending = sendPush();
+    const rejection = expect(pending).rejects.toThrow("Push failed after 4 attempt(s): HTTP 429");
+    await vi.advanceTimersByTimeAsync(13_000);
+    expect(mocks.fetch).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(1_999);
+    expect(mocks.fetch).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(mocks.fetch).toHaveBeenCalledTimes(3);
+    await vi.advanceTimersByTimeAsync(13_000);
+    await rejection;
+    expect(mocks.fetch).toHaveBeenCalledTimes(4);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("stops after three attempts when every response is a rate limit", async () => {
+    mocks.fetch.mockImplementation(async () => new Response("rate limited", {
+      status: 429,
+      headers: { "Retry-After": "12" },
+    }));
+
+    const pending = sendPush();
+    const rejection = expect(pending).rejects.toThrow("Push failed after 3 attempt(s): HTTP 429");
+    await vi.runAllTimersAsync();
+    await rejection;
+    expect(mocks.fetch).toHaveBeenCalledTimes(3);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("does not schedule an early retry when Retry-After exceeds the timer range", async () => {
+    mocks.fetch.mockResolvedValueOnce(new Response("rate limited", {
+      status: 429,
+      headers: { "Retry-After": "2147484" },
+    }));
+
+    await expect(sendPush()).rejects.toThrow("Push failed after 1 attempt(s): HTTP 429");
     expect(mocks.fetch).toHaveBeenCalledTimes(1);
     expect(vi.getTimerCount()).toBe(0);
   });
