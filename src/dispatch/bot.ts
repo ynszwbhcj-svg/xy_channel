@@ -29,6 +29,7 @@ import { selfEvolutionManager } from "../utils/self-evolution-manager.js";
 import { saveRuntimeInfo } from "../utils/runtime-manager.js";
 import { toolCallNudgeManager } from "../utils/tool-call-nudge-manager.js";
 import { tryDirectSteer } from "../conversation/steer-service.js";
+import { hasStreamActivity, markSteerSuppression } from "../utils/steer-suppression.js";
 import { markAppVersion, isLegacyAppVersion } from "../utils/app-version.js";
 import { getCurrentStatusCardSeq } from "../utils/status-card-seq.js";
 import {
@@ -611,6 +612,14 @@ export async function handleXYMessage(params: HandleXYMessageParams): Promise<vo
         }
         registerTask(parsed.sessionId, parsed.taskId, parsed.messageId);
         log.log(`[BOT-STEER] Direct steer succeeded — message injected into active run`);
+        // 在途调用正在流式产出（思考/正文流活跃）：置抑制窗口——窗口内第 N 轮
+        // 剩余流式内容只丢帧不记账，在途调用的首个 message_end 处解除（见
+        // utils/steer-suppression）。无在途产出（调用间隙）不置窗口，下一个
+        // 调用即归属第 N+1 轮，直接放行。
+        if (hasStreamActivity(parsed.sessionId)) {
+          markSteerSuppression(parsed.sessionId);
+          log.log(`[BOT-STEER] Suppression window armed — in-flight stream output dropped until next message_end`);
+        }
         // Steer message taskId stays in the binding so getActiveTaskId()
         // resolves to the latest taskId for onPartialReply replies.
         // Cleanup happens via the original dispatcher's onIdleComplete →

@@ -31,11 +31,18 @@ import { StreamAssembler } from "../conversation/stream-assembler.js";
 import { markReasoningFinished, markReasoningStreaming } from "../utils/reasoning-state.js";
 import { isBodyTextSent } from "../utils/body-text-state.js";
 import {
+  noteStreamActivity,
+  clearStreamActivity,
+  isSteerSuppressed,
+  liftSteerSuppression,
+} from "../utils/steer-suppression.js";
+import {
   noteReasoningSnapshot,
   peekReasoningSegmentText,
   peekReasoningSegmentSeq,
   isReasoningSegmentOpen,
   closeReasoningSegment,
+  cutReasoningSegment,
 } from "../utils/reasoning-segment.js";
 import { getOrCreateStreamingTextId } from "../utils/streaming-text-id.js";
 import { drainPendingReferences } from "../utils/pending-references.js";
@@ -412,6 +419,9 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
           scopedLog().log(`[DELIVER SKIP] Canceled/superseded turn`);
           return;
         }
+        // deliver = 一条 assistant 消息完结（message_end）：在途流式活动复位
+        clearStreamActivity(sessionId);
+        const steerSuppressed = isSteerSuppressed(sessionId);
         let text = payload.text ?? "";
 
         // 将 compaction 通知替换为中文提示
@@ -437,6 +447,23 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
         scopedLog().log(`[DELIVER] kind=${info?.kind}, text.length=${text.length}`);
 
         try {
+          // steer 抑制窗口内首个 message_end：该消息属第 N 轮在途调用 —— 帧
+          // 不下发；canonical 仍捕获（合并终帧保守不动），思考段遗留状态复位
+          // （防止解除后首帧正文触发思考→正文切换时把被压段文本补发出去），
+          // 随后解除窗口：其后的调用已能看到 steer 消息，产出归属第 N+1 轮。
+          // 空文本 deliver（纯工具调用消息）同样解除窗口。
+          if (steerSuppressed) {
+            if (text.trim() && info?.kind === "final" && !payload.isCompactionNotice && !isSystemNoticeText(text)) {
+              assembler.onFinalText(text);
+            }
+            hasSentResponse = true; // 视为已响应，避免 onIdle 误判失败路径
+            const activeTaskId = getActiveTaskId();
+            closeReasoningSegment(activeTaskId);
+            cutReasoningSegment(activeTaskId);
+            liftSteerSuppression(sessionId);
+            scopedLog().log(`[STEER-SUPPRESS] in-flight message_end reached — frame dropped, window lifted`);
+            return;
+          }
           if (!text.trim()) {
             scopedLog().log(`[DELIVER SKIP] Empty text, skipping`);
             return;
@@ -541,6 +568,10 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
         // 🔑 本 turn 不再产生流式帧：清除在途标记，放行 subagent 终态帧的
         // 时机门控（见 conversation-manager.deliverSubagentFinalResult）。
         clearTurnInflight(sessionId, taskId);
+
+        // steer 抑制窗口兜底解除：turn 进入收尾，终态序列（合并终帧）必须
+        // 正常下发（正常路径窗口已在首个 deliver 处解除，此处仅兜底）
+        liftSteerSuppression(sessionId);
 
         // 取消的 turn 已由 tasks/cancel 回复 canceled；被新 dispatcher 接替的
         // 旧 turn 也不得发送失败/成功终帧，尤其不能动态挂到新 taskId。
@@ -952,6 +983,7 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
 
       onReasoningStream: async (payload: ReplyPayload) => {
         if (isOutputStale()) return;
+        noteStreamActivity(sessionId);
         let text = payload.text ?? "";
 
         // Strip "Reasoning:" prefix that some reasoning models add to their thinking output
@@ -962,6 +994,13 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
 
         try {
           if (text.length > 0) {
+            // steer 抑制窗口：第 N 轮在途调用的思考帧直接丢弃，且不更新快照
+            // 记账（快照状态停在 steer 前，窗口解除时由 cutReasoningSegment
+            // 复位基线，防止解除后把被压内容全量补发）
+            if (isSteerSuppressed(sessionId)) {
+              scopedLog().log(`[STEER-SUPPRESS] reasoning frame dropped, len=${text.length}`);
+              return;
+            }
             const reasoningTaskId = getActiveTaskId();
             // 分段剥离：SDK 快照为思考块级全量（append:false 语义），跨分段
             // 边界续流时含边界前文本；端侧按 streamingTextId 聚合渲染，新 id
@@ -1011,6 +1050,14 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
         const endTaskId = getActiveTaskId();
         markReasoningFinished(endTaskId);
         scopedLog().log(`[REASONING-END] Reasoning finished, taskId=${endTaskId}`);
+
+        // steer 抑制窗口：只闭合分段状态；收尾帧/状态帧不下发，thinkIndex 不
+        // 记账（端侧没有该思考块在第 N+1 轮的在役帧，不应引用其槽位）
+        if (isSteerSuppressed(sessionId)) {
+          closeReasoningSegment(endTaskId);
+          scopedLog().log(`[STEER-SUPPRESS] reasoning-end frames dropped (window active)`);
+          return;
+        }
 
         try {
           // 思考内容发完、lastChunk=true 标记帧之前补一帧 status-update
@@ -1080,8 +1127,17 @@ export function createXYReplyDispatcher(params: CreateXYReplyDispatcherParams): 
         const text = payload.text ?? "";
         if (text.length === 0) return;
 
+        noteStreamActivity(sessionId);
         hasSentResponse = true;
         resumeIdleAfterDefer();
+
+        // steer 抑制窗口：第 N 轮在途调用的正文帧直接丢弃，且不喂装配器——
+        // 装配器在 steer 时已切段，保持为空直到窗口解除，之后只累积第 N+1
+        // 轮内容（否则下一帧全量快照会把第 N 轮文本重新带出）
+        if (isSteerSuppressed(sessionId)) {
+          scopedLog().log(`[STEER-SUPPRESS] partial frame dropped, len=${text.length}`);
+          return;
+        }
 
         // 串行化回调体：SDK fire-and-forget 模式下多个 onPartialReply 可能
         // 并发进入，streamChain 保证 assembler 读写互斥；发送本身由会话

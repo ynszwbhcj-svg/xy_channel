@@ -71,6 +71,7 @@ import {
 } from "./session-manager.js";
 import { logger } from "../utils/logger.js";
 import { isLegacyAppVersion } from "../utils/app-version.js";
+import { isSteerSuppressed } from "../utils/steer-suppression.js";
 import type { XYChannelConfig } from "../types.js";
 
 const LOG_TAG = "[STEP-INFO]";
@@ -379,10 +380,18 @@ export function registerStepInfoHook(api: OpenClawPluginApi): void {
       // 影响（它只发正文帧，不是 command）。
       const bodyTextSent = isBodyTextProduced(sendCtx.sessionId, sendCtx.taskId);
 
+      // steer 抑制窗口：第 N 轮在途调用的技能卡/步骤卡不下发；文本分段边界
+      // 不受影响（轮换记账必须继续，收尾帧由 conversation-manager 内部抑制）
+      const steerSuppressed = isSteerSuppressed(sendCtx.sessionId);
+
       // 1. 技能任务卡片（cd 进技能目录 / 读 SKILL.md）
       const skillAction = detectSkillAction(event);
       if (skillAction) {
-        if (bodyTextSent) {
+        if (steerSuppressed) {
+          logger.log(
+            `${LOG_TAG} steer suppression active, skill card dropped action=${skillAction.action} skill=${skillAction.skillName}`,
+          );
+        } else if (bodyTextSent) {
           logger.log(
             `${LOG_TAG} body text already sent in current segment, suppressing skill card action=${skillAction.action} skill=${skillAction.skillName}`,
           );
@@ -420,7 +429,7 @@ export function registerStepInfoHook(api: OpenClawPluginApi): void {
       //    in_progress 步骤卡（text=步骤文本，同轮多张卡片由 taskUniqIndexId
       //    序号区分，taskUniqId 同为 taskId）；正文首帧已发出时步骤卡同样抑制
       if (TASK_CARD_TOOLS.has(event.toolName)) {
-        if (event.toolName === "update_plan" && !bodyTextSent) {
+        if (event.toolName === "update_plan" && !bodyTextSent && !steerSuppressed) {
           const planSteps = extractInProgressPlanSteps(event.params);
           for (const stepText of planSteps) {
             // 发卡日志由 formatter 统一打印（[STEP-INFO] cardType=... 一行格式），此处不再重复

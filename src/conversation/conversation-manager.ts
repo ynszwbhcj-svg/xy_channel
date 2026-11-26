@@ -15,6 +15,7 @@ import { logger } from "../utils/logger.js";
 import { releaseStreamingTextId, releaseLastSentStreamingTextId, rotateStreamingTextId, peekStreamingTextId, getOrCreateStreamingTextId } from "../utils/streaming-text-id.js";
 import { releaseStatusCardSeq, getCurrentStatusCardSeq, nextStatusCardSeq, advanceStatusCardSeqForSegment, claimStatusCardSeqForBodyRound } from "../utils/status-card-seq.js";
 import { markReasoningBlockClosed, peekClosedReasoningSlots, openBodyRound, takeOpenBodyRoundCardIndex, releaseBodyRoundCards, noteReasoningBlockClosedForToolCarry } from "../utils/body-round-cards.js";
+import { isSteerSuppressed, releaseSteerSuppression } from "../utils/steer-suppression.js";
 import { releaseAppVersion, isLegacyAppVersion } from "../utils/app-version.js";
 import { clearBodyTextState, isBodyTextSent } from "../utils/body-text-state.js";
 import {
@@ -138,6 +139,9 @@ export function completeTask(sessionId: string, expectedTaskId?: string): void {
   const session = sessions.get(sessionId);
   if (!session) return;
 
+  // steer 抑制窗口与流式活动标记随任务链一并释放（幂等）
+  releaseSteerSuppression(sessionId);
+
   if (!expectedTaskId) {
     logger.log(`[TASK_MANAGER] Removing taskId`);
     for (const entry of session.tasks) {
@@ -242,7 +246,7 @@ export async function rotateStreamingTextSegment(params: {
   // 显式 pin false —— 思考未结束、仅是分段边界（端侧按 lastChunk 闭合段，
   // 该字段无实际作用）。闭环依赖 whenIdle：收尾帧与在途思考帧的 drain 先
   // 于轮换，drain 时 lazy 读 id 的帧也仍以旧 id 发出。
-  if (session && isReasoningSegmentOpen(taskId)) {
+  if (session && isReasoningSegmentOpen(taskId) && !isSteerSuppressed(sessionId)) {
     // 攒入已闭合思考块的 taskUniqIndexId（与 onReasoningEnd 同理）——下一轮
     // 正文 open 卡（text=生成回复）的 thinkIndex 携带，端侧据此折叠思考块。
     // 同步标记（而非等收尾帧 drain），保证不受出站队列时序影响。
@@ -290,6 +294,10 @@ export async function rotateStreamingTextSegment(params: {
         }),
     });
     await session.outboundQueue.whenIdle();
+  } else if (session && isReasoningSegmentOpen(taskId)) {
+    // steer 抑制窗口：只闭合分段状态，收尾帧与 thinkIndex 记账跳过（端侧没有
+    // 该思考块在第 N+1 轮的在役帧，不应引用其槽位）
+    closeReasoningSegment(taskId);
   }
 
   // 思考段基线切分：无论本次是否发出思考收尾帧，id 即将轮换 —— 新 id 的
