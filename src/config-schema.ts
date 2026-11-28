@@ -8,6 +8,13 @@ export const xyConfigSchema = {
       description: "Enable/disable the XY channel",
       default: false,
     },
+    memory: {
+      type: "object",
+      additionalProperties: false,
+      properties: { backend: { type: "string", enum: ["mcp-http"] } },
+      required: ["backend"],
+      description: "Use shared memory MCP; requires CELIA_MEMORY_HTTP_URL and CELIA_MEMORY_HTTP_TOKEN_FILE in the channel process environment",
+    },
     wsUrl1: {
       type: "string",
       description: "Primary WebSocket URL",

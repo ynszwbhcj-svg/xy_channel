@@ -17,6 +17,8 @@ import { randomUUID } from "crypto";
 import { sendCommand } from "./formatter.js";
 import { resolveXYConfig } from "./config.js";
 import { logger } from "./utils/logger.js";
+import { MCP_MEMORY_ACTIONS, NEW_MEMORY_ACTIONS, memoryServiceFor } from "./memory/service.js";
+import { memoryAnswerSummary } from "./memory/command.js";
 
 const XIAOYIRUNTIME_PATH_PRIMARY = "/home/sandbox/.openclaw/.xiaoyiruntime";
 const XIAOYIRUNTIME_PATH_FALLBACK = `${os.homedir()}/.openclaw/.xiaoyiruntime`;
@@ -165,12 +167,20 @@ function paginateFileReadAns(ans: any, params: any): any {
 export async function handleMemoryQueryEvent(context: any, cfg: any): Promise<any> {
   const { action, params, sessionId, taskId, messageId } = context;
   const log = logger.withContext(sessionId ?? "", taskId ?? "");
-  log.log(`[MEMORY-QUERY] Received event: action=${action}`);
+  log.log(`[MEMORY-QUERY] Received ${memoryAnswerSummary(action, undefined)}`);
 
   let result: any;
+  let config: ReturnType<typeof resolveXYConfig> | undefined;
 
   try {
-    switch (action) {
+    config = cfg ? resolveXYConfig(cfg) : undefined;
+    if (config?.memory && MCP_MEMORY_ACTIONS.has(action)) {
+      result = await memoryServiceFor(cfg, config.memory, config.uid).handle(context);
+    } else if (NEW_MEMORY_ACTIONS.has(action)) {
+      result = { ok: false, code: -1, outcome: "configuration", errorCode: "MCP_NOT_CONFIGURED" };
+    } else if (config?.memory && action === "MemoryHistory") {
+      result = { ok: false, code: -1, outcome: "rejected", errorCode: "MEMORY_HISTORY_UNSUPPORTED" };
+    } else switch (action) {
       case "MemoryStateSet":
         result = handleMemoryStateSet(params);
         break;
@@ -193,27 +203,21 @@ export async function handleMemoryQueryEvent(context: any, cfg: any): Promise<an
         result = handleMemoryFileRead(params);
         break;
       default:
-        log.error(`[MEMORY-QUERY] Unknown action: ${action}`);
+        log.error(`[MEMORY-QUERY] Unknown memory action`);
         result = { error: `Unknown action: ${action}` };
     }
   } catch (err) {
-    const errorMsg = err instanceof Error ? err.message : String(err);
-    log.error(`[MEMORY-QUERY] Handler failed for action=${action}:`, err);
-    result = { error: errorMsg };
+    // Configuration and IO errors can contain private paths. Never log raw errors.
+    log.error(`[MEMORY-QUERY] Handler failed`);
+    result = { ok: false, code: -1, outcome: "configuration", errorCode: "MEMORY_CONFIGURATION_INVALID" };
   }
 
-  if (action === "MemoryFileWrite" || action === "MemoryFileRead") {
-    log.log(
-      `[MEMORY-QUERY] Result for action=${action}: ok=${result?.ok === true}, errorCode=${result?.errorCode ?? "none"}`,
-    );
-  } else {
-    log.log(`[MEMORY-QUERY] Result for action=${action}: ${JSON.stringify(result)}`);
-  }
+  log.log(`[MEMORY-QUERY] ${memoryAnswerSummary(action, result)}`);
 
   // Send result back via sendCommand
   if (cfg && sessionId && taskId && messageId) {
     try {
-      const config = resolveXYConfig(cfg);
+      config ??= resolveXYConfig(cfg);
       const ans = paginateFileReadAns(result, params);
       const command = {
         header: {
@@ -233,9 +237,9 @@ export async function handleMemoryQueryEvent(context: any, cfg: any): Promise<an
         command,
         final: true,
       });
-      log.log(`[MEMORY-QUERY] Sent response via sendCommand, action=${action}, frameBytes=${frameAnsBytes(ans) + FRAME_ENVELOPE_BYTES}`);
+      log.log(`[MEMORY-QUERY] Sent response, ${memoryAnswerSummary(action, ans)}, frameBytes=${frameAnsBytes(ans) + FRAME_ENVELOPE_BYTES}`);
     } catch (sendErr) {
-      log.error(`[MEMORY-QUERY] Failed to send response via sendCommand:`, sendErr);
+      log.error(`[MEMORY-QUERY] Failed to send memory response`);
     }
   } else {
     log.warn(`[MEMORY-QUERY] Missing cfg/sessionId/taskId/messageId, skipping sendCommand`);

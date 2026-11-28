@@ -68,6 +68,27 @@ describe("sendCommand memory file responses", () => {
     expect(command.payload.content).toBe("[redacted:ordinary-secret]");
   });
 
+  it.each(["UserMdQuery", "MemoryMdQuery"])("preserves %s display text while redacting other fields", async action => {
+    await sendCommand({
+      config: {} as never, sessionId: "s", taskId: "t", messageId: "m",
+      command: { header: { namespace: "AgentEvent", name: "MemoryQuery" },
+        payload: { action, ans: { ok: true, fileDetail: "private profile", message: "private diagnostic" } } },
+    });
+    const ans = mocks.sendWsFrame.mock.calls[0][0].payload.result.artifact.parts[0].data.commands[0].payload.ans;
+    expect(ans.fileDetail).toBe("private profile");
+    expect(ans.message).toBe("[redacted:private diagnostic]");
+  });
+
+  it("continues to redact error messages on failed profile responses", async () => {
+    await sendCommand({
+      config: {} as never, sessionId: "s", taskId: "t", messageId: "m",
+      command: { header: { namespace: "AgentEvent", name: "MemoryQuery" },
+        payload: { action: "UserMdQuery", ans: { ok: false, message: "private error" } } },
+    });
+    const ans = mocks.sendWsFrame.mock.calls[0][0].payload.result.artifact.parts[0].data.commands[0].payload.ans;
+    expect(ans.message).toBe("[redacted:private error]");
+  });
+
   it("preserves MemoryFileRead content in a mixed command batch", async () => {
     await sendCommand({
       config: {} as never,
